@@ -112,7 +112,7 @@ def test_total_cleaning_time_hours():
 
 def test_total_area_sq_metres():
     desc = next(d for d in STATISTICS_SENSORS if d.key == "total_area_cleaned")
-    assert _sensor(desc).native_value == 500.0  # 500000 ÷ 1000
+    assert _sensor(desc).native_value == 50.0  # 500000 cm² ÷ 10000
 
 
 def test_total_cleaning_runs():
