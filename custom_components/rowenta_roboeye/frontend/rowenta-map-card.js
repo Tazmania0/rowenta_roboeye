@@ -246,11 +246,41 @@ class RowentaMapCard extends HTMLElement {
       </div>`;
     }
 
+    // ── Debug: 10× movement amplification ───────────────────────────
+    // Amplifies robot displacement from the dock (or map centre) by 10×
+    // so sub-millimetre movements are clearly visible during scaling diagnosis.
+    // Computed here (before bounds) so the viewBox can be expanded to contain
+    // the amplified position — otherwise the robot disappears off-screen.
+    let displayRobot = robot;
+    let displayPath  = robotPath;
+    if (ampX10 && robot) {
+      // Reference point: dock position, or fall back to map centre
+      const refX = dock ? dock.x : (bounds.min_x + bounds.max_x) / 2;
+      const refY = dock ? dock.y : (bounds.min_y + bounds.max_y) / 2;
+      const AMP  = 10;
+      displayRobot = {
+        ...robot,
+        x: refX + (robot.x - refX) * AMP,
+        y: refY + (robot.y - refY) * AMP,
+      };
+      displayPath = robotPath.map(([px, py]) => [
+        refX + (px - refX) * AMP,
+        refY + (py - refY) * AMP,
+      ]);
+    }
+
+    // Expand effective bounds to keep the (possibly amplified) robot visible.
+    // When docked, displacement is ~0 so amplification is ~0 and bounds don't change.
+    const effMinX = displayRobot ? Math.min(bounds.min_x, displayRobot.x) : bounds.min_x;
+    const effMaxX = displayRobot ? Math.max(bounds.max_x, displayRobot.x) : bounds.max_x;
+    const effMinY = displayRobot ? Math.min(bounds.min_y, displayRobot.y) : bounds.min_y;
+    const effMaxY = displayRobot ? Math.max(bounds.max_y, displayRobot.y) : bounds.max_y;
+
     const PAD  = 100;
-    const minX = bounds.min_x - PAD;
-    const maxX = bounds.max_x + PAD;
-    const minY = bounds.min_y - PAD;
-    const maxY = bounds.max_y + PAD;
+    const minX = effMinX - PAD;
+    const maxX = effMaxX + PAD;
+    const minY = effMinY - PAD;
+    const maxY = effMaxY + PAD;
     const W    = maxX - minX || 1;
     const H    = maxY - minY || 1;
 
@@ -359,28 +389,6 @@ class RowentaMapCard extends HTMLElement {
         stroke-dasharray="${(sw * 4).toFixed(1)},${(sw * 2).toFixed(1)}"/>`;
     }
 
-       // ── Debug: 10× movement amplification ───────────────────────────
-    // Amplifies robot displacement from the dock (or map centre) by 10×
-    // so sub-millimetre movements are clearly visible during scaling diagnosis.
-    let displayRobot = robot;
-    let displayPath  = robotPath;
-    if (ampX10 && robot) {
-      // Reference point: dock position, or fall back to map centre
-      const refX = dock ? dock.x : (bounds.min_x + bounds.max_x) / 2;
-      const refY = dock ? dock.y : (bounds.min_y + bounds.max_y) / 2;
-      const AMP  = 10;
-      displayRobot = {
-        ...robot,
-        x: refX + (robot.x - refX) * AMP,
-        y: refY + (robot.y - refY) * AMP,
-      };
-      displayPath = robotPath.map(([px, py]) => [
-        refX + (px - refX) * AMP,
-        refY + (py - refY) * AMP,
-      ]);
-    }
-
-    
     // ── Layer 4c: robot path trail ───────────────────────────────────
     let trailLayer = "";
     if (displayPath?.length >= 2) {
