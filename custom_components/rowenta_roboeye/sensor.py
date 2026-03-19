@@ -51,6 +51,8 @@ from .const import DOMAIN, FAN_SPEED_MAP, LOGGER, SIGNAL_AREAS_UPDATED
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
 
+_DEVICE_SLUG = "rowenta_xplorer_120"
+
 
 # ── Extended descriptor ───────────────────────────────────────────────
 
@@ -369,6 +371,7 @@ class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
         value_fn: Callable[[RobEyeCoordinator], Any],
         native_unit: str | None = None,
         icon: str | None = None,
+        forced_entity_id: str | None = None,
     ) -> None:
         super().__init__(coordinator)
         self._value_fn = value_fn
@@ -378,6 +381,8 @@ class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
         # Use the human-readable room name directly — this is what HA displays.
         # unique_id is stable (area_id-based) so entity_id doesn't change.
         self._attr_name = display_name
+        if forced_entity_id is not None:
+            self.entity_id = forced_entity_id
         self._attr_native_unit_of_measurement = native_unit
         self._attr_icon = icon
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -448,6 +453,7 @@ def _build_room_sensors(
             display_name=f"{room_name} Cleanings",
             icon="mdi:counter",
             value_fn=lambda c: _stats(c).get("cleaning_counter"),
+            forced_entity_id=f"sensor.{_DEVICE_SLUG}_room_{area_id}_cleanings",
         ),
         RobEyeRoomSensor(
             coordinator=coordinator,
@@ -458,6 +464,7 @@ def _build_room_sensors(
             native_unit=UnitOfArea.SQUARE_METERS,
             icon="mdi:texture-box",
             value_fn=lambda c: round(_stats(c).get("area_size", 0) / 1_000_000, 2),  # API = mm²
+            forced_entity_id=f"sensor.{_DEVICE_SLUG}_room_{area_id}_area",
         ),
         RobEyeRoomSensor(
             coordinator=coordinator,
@@ -470,6 +477,7 @@ def _build_room_sensors(
             value_fn=lambda c: round(
                 _stats(c).get("average_cleaning_time", 0) / 60_000, 1
             ),
+            forced_entity_id=f"sensor.{_DEVICE_SLUG}_room_{area_id}_avg_time",
         ),
         RobEyeRoomSensor(
             coordinator=coordinator,
@@ -479,6 +487,7 @@ def _build_room_sensors(
             display_name=f"{room_name} Last Cleaned",
             icon="mdi:calendar-clock",
             value_fn=lambda c: _format_date(_stats(c).get("last_cleaned", {})),
+            forced_entity_id=f"sensor.{_DEVICE_SLUG}_room_{area_id}_last_cleaned",
         ),
     ]
 

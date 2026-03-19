@@ -164,6 +164,7 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
         self._attr_unique_id = f"clean_room_{area_id}_{coordinator.device_id}"
         self._attr_name = f"Clean {room_name}"
         self._attr_icon = "mdi:broom"
+        self.entity_id = f"button.rowenta_xplorer_120_room_{area_id}_clean"
         self._fan_speed_select_id = (
             f"select.rowenta_xplorer_120_room_{area_id}_fan_speed"
         )
