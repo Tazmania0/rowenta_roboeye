@@ -1,8 +1,8 @@
-// Rowenta Xplorer 120 — Live Map Card  v2.4.2
+// Rowenta Xplorer 120 — Live Map Card  v2.4.3
 // Renders rooms, walls, dock, robot, live outline and post-run session
 // replay (cleaning grid + robot trail) from _build_live_map_payload() schema.
 
-const VERSION = "2.4.2";
+const VERSION = "2.4.3";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -76,6 +76,7 @@ class RowentaMapCard extends HTMLElement {
     this._config  = {};
     this._frozen  = false;
     this._lastAttrs = null;
+    this._ampX10  = false;  // debug: amplify robot displacement × 10
   }
 
   setConfig(config) {
@@ -142,12 +143,13 @@ class RowentaMapCard extends HTMLElement {
                      : mapState === "session_complete" ? "#4CAF50"
                      : "var(--secondary-text-color)";
 
+    const frozen = this._frozen;
+    const ampX10 = this._ampX10;
+
     const svgHtml = this._buildSvg(
       rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
-      cleaningGrid, robotPath, sessionComplete
+      cleaningGrid, robotPath, sessionComplete, ampX10
     );
-
-    const frozen = this._frozen;
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -170,6 +172,13 @@ class RowentaMapCard extends HTMLElement {
           background: ${frozen ? "#ff572222" : "var(--secondary-background-color)"};
           color: ${frozen ? "#ff5722" : "var(--primary-text-color)"};
           font-weight: ${frozen ? "bold" : "normal"};
+        }
+        .ampbtn {
+          padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
+          border: 1px solid var(--divider-color); white-space: nowrap;
+          background: ${ampX10 ? "#ff980022" : "var(--secondary-background-color)"};
+          color: ${ampX10 ? "#ff9800" : "var(--secondary-text-color)"};
+          font-weight: ${ampX10 ? "bold" : "normal"};
         }
         .frozen-bar {
           background: #ff572218; border-bottom: 2px solid #ff5722;
@@ -197,11 +206,20 @@ class RowentaMapCard extends HTMLElement {
         <div class="hdr">
           <span class="title">${cfg.title}</span>
           <span class="badge">${mapState.toUpperCase()}</span>
+          <button class="ampbtn" id="ampbtn" title="Debug: amplify robot displacement × 10 from dock/center">${ampX10 ? "10× ON" : "10×"}</button>
           <button class="fbtn" id="fbtn">${frozen ? "▶ Live" : "⏸ Freeze"}</button>
         </div>
         ${frozen ? `<div class="frozen-bar">⏸ Frozen — click Live to resume</div>` : ""}
         <div class="svg-wrap">${svgHtml}</div>
       </ha-card>`;
+
+    this.shadowRoot.getElementById("ampbtn")?.addEventListener("click", () => {
+      this._ampX10 = !this._ampX10;
+      this._renderFull(
+        this._hass?.states[this._config.entity]?.state || "idle",
+        this._lastAttrs || {}
+      );
+    });
 
     this.shadowRoot.getElementById("fbtn")?.addEventListener("click", () => {
       if (this._frozen) {
@@ -220,7 +238,7 @@ class RowentaMapCard extends HTMLElement {
   // ── SVG renderer ──────────────────────────────────────────────────────
 
   _buildSvg(rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
-            cleaningGrid, robotPath, sessionComplete) {
+            cleaningGrid, robotPath, sessionComplete, ampX10 = false) {
     if (!bounds) {
       return `<div class="empty">
         <div style="font-size:40px;opacity:.25">🏠</div>
@@ -343,11 +361,11 @@ class RowentaMapCard extends HTMLElement {
 
     // ── Layer 4c: robot path trail ───────────────────────────────────
     let trailLayer = "";
-    if (robotPath?.length >= 2) {
+    if (displayPath?.length >= 2) {
       const dimOp    = sessionComplete ? 0.55 : 0.20;
       const brightOp = sessionComplete ? 0.85 : 0.70;
-      const allPts   = robotPath.map(([x, y]) => `${x - minX},${flipY(y) - minY}`).join(" ");
-      const recentPts = robotPath.slice(-30)
+      const allPts   = displayPath.map(([x, y]) => `${x - minX},${flipY(y) - minY}`).join(" ");
+      const recentPts = displayPath.slice(-30)
                           .map(([x, y]) => `${x - minX},${flipY(y) - minY}`).join(" ");
       trailLayer = `
         <polyline points="${allPts}"
@@ -390,6 +408,27 @@ class RowentaMapCard extends HTMLElement {
       }
     }
 
+    // ── Debug: 10× movement amplification ───────────────────────────
+    // Amplifies robot displacement from the dock (or map centre) by 10×
+    // so sub-millimetre movements are clearly visible during scaling diagnosis.
+    let displayRobot = robot;
+    let displayPath  = robotPath;
+    if (ampX10 && robot) {
+      // Reference point: dock position, or fall back to map centre
+      const refX = dock ? dock.x : (bounds.min_x + bounds.max_x) / 2;
+      const refY = dock ? dock.y : (bounds.min_y + bounds.max_y) / 2;
+      const AMP  = 10;
+      displayRobot = {
+        ...robot,
+        x: refX + (robot.x - refX) * AMP,
+        y: refY + (robot.y - refY) * AMP,
+      };
+      displayPath = robotPath.map(([px, py]) => [
+        refX + (px - refX) * AMP,
+        refY + (py - refY) * AMP,
+      ]);
+    }
+
     // ── Layer 6: dock icon (home) — draws on top of labels ──────────
     let dockIcon = "";
     if (cfg.show_dock && dock) {
@@ -417,27 +456,32 @@ class RowentaMapCard extends HTMLElement {
     // All dimensions scale with rf (= robotBodyR / 16) so the robot icon
     // remains proportional to the map on any screen size.
     let robotIcon = "";
-    if (robot != null) {
-      const rx = robot.x - minX;
-      const ry = flipY(robot.y) - minY;
+    if (displayRobot != null) {
+      const rx = displayRobot.x - minX;
+      const ry = flipY(displayRobot.y) - minY;
       // heading_deg: 0 = north (SVG -Y), 90 = east (+X) — matches SVG rotate()
-      const headingDeg = robot.heading_deg ?? 0;
+      const headingDeg = displayRobot.heading_deg ?? 0;
       const activeClass = isActive ? ' class="robot-active"' : "";
+      const robotColor  = ampX10 ? "#ff9800" : "#00d4ff";  // orange tint when amplified
       robotIcon = `<g${activeClass}>
-        ${isActive ? `<circle cx="${rx}" cy="${ry}" r="${robotGlowR.toFixed(1)}" fill="#00d4ff" opacity="0.15"/>` : ""}
+        ${isActive ? `<circle cx="${rx}" cy="${ry}" r="${robotGlowR.toFixed(1)}" fill="${robotColor}" opacity="0.15"/>` : ""}
         <!-- Robot body -->
         <circle cx="${rx}" cy="${ry}" r="${robotBodyR.toFixed(1)}"
-          fill="#1a2a3a" stroke="#00d4ff" stroke-width="${(3*rf).toFixed(1)}"/>
+          fill="#1a2a3a" stroke="${robotColor}" stroke-width="${(3*rf).toFixed(1)}"/>
         <!-- Direction indicators (rotated to heading) -->
         <g transform="translate(${rx},${ry}) rotate(${headingDeg})">
           <!-- Front bumper arc -->
           <path d="M ${(-13*rf).toFixed(1)},${(-9*rf).toFixed(1)} A ${robotBodyR.toFixed(1)},${robotBodyR.toFixed(1)} 0 0,1 ${(13*rf).toFixed(1)},${(-9*rf).toFixed(1)}"
-            fill="none" stroke="#00d4ff" stroke-width="${(3.5*rf).toFixed(1)}" stroke-linecap="round"/>
+            fill="none" stroke="${robotColor}" stroke-width="${(3.5*rf).toFixed(1)}" stroke-linecap="round"/>
           <!-- Arrow head pointing forward -->
-          <polygon points="0,${(-26*rf).toFixed(1)} ${(7*rf).toFixed(1)},${(-16*rf).toFixed(1)} ${(-7*rf).toFixed(1)},${(-16*rf).toFixed(1)}" fill="#00d4ff"/>
+          <polygon points="0,${(-26*rf).toFixed(1)} ${(7*rf).toFixed(1)},${(-16*rf).toFixed(1)} ${(-7*rf).toFixed(1)},${(-16*rf).toFixed(1)}" fill="${robotColor}"/>
         </g>
         <!-- Centre sensor dot -->
         <circle cx="${rx}" cy="${ry}" r="${(4*rf).toFixed(1)}" fill="white" opacity="0.8"/>
+        ${ampX10 ? `<!-- 10× debug label -->
+        <text x="${rx}" y="${ry - robotBodyR - (4*rf)}" text-anchor="middle"
+          font-size="${(labelFontSize * 0.6).toFixed(0)}" fill="#ff9800" font-family="monospace"
+          font-weight="bold">10×</text>` : ""}
       </g>`;
     }
 
