@@ -22,22 +22,27 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import CannotConnect, RobEyeApiClient
 from .const import (
     DATA_AREAS,
+    DATA_AREAS_MAP3,
+    DATA_CLEANING_GRID,
+    DATA_FEATURE_MAP,
     DATA_LIVE_MAP,
     DATA_LIVE_PARAMETERS,
     DATA_PERMANENT_STATISTICS,
     DATA_ROBOT_FLAGS,
     DATA_ROBOT_INFO,
-    DATA_CLEANING_GRID,
     DATA_SEEN_POLYGON,
+    DATA_SEEN_POLY_MAP3,
     DATA_SENSOR_STATUS,
     DATA_STATISTICS,
     DATA_STATUS,
+    DATA_TILE_MAP,
     DOMAIN,
     LOGGER,
     MAX_POLL_FAILURES,
     MODE_CLEANING,
     MODE_GO_HOME,
     SCAN_INTERVAL_AREAS,
+    SCAN_INTERVAL_MAP_GEOMETRY,
     SCAN_INTERVAL_ROBOT_INFO,
     SCAN_INTERVAL_STATISTICS,
     SIGNAL_AREAS_UPDATED,
@@ -71,6 +76,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_areas: datetime | None = None
         self._last_robot_info: datetime | None = None
         self._last_live_map: datetime | None = None
+        self._last_map_geometry: datetime | None = None
         self._consecutive_failures: int = 0
 
         # Track known area IDs so we can detect additions/removals without reload
@@ -148,12 +154,16 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     localization=localization,
                     seen_polygon_raw=seen_polygon_raw,
                     cleaning_grid=cleaning_grid,
+                    feature_map=data.get(DATA_FEATURE_MAP, {}),
+                    tile_map=data.get(DATA_TILE_MAP, {}),
+                    areas_data=data.get(DATA_AREAS_MAP3, {}),
+                    seen_poly_map3=data.get(DATA_SEEN_POLY_MAP3, {}),
                     is_active=is_active,
                     map_id=self.map_id,
                 )
                 self._last_live_map = now
 
-            # ── Every 300 s: areas + sensor status + floor plan ──────
+            # ── Every 300 s: areas + sensor status ───────────────────
             if self._last_areas is None or (
                 now - self._last_areas
             ) >= timedelta(seconds=SCAN_INTERVAL_AREAS):
@@ -169,30 +179,30 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except CannotConnect:
                     LOGGER.debug("get_robot_flags unavailable, skipping")
 
-                # Floor-plan polygons — fetched from static map, available any time
-                try:
-                    polygons = await self.client.get_n_n_polygons()
-                    LOGGER.debug(
-                        "n_n_polygons raw response: type=%s keys=%s snippet=%s",
-                        type(polygons).__name__,
-                        list(polygons.keys()) if isinstance(polygons, dict) else "list",
-                        str(polygons)[:300],
-                    )
-                    floor_plan = _extract_floor_plan(polygons, new_areas_blob)
-                    LOGGER.debug("n_n_polygons parsed: %d room(s)", len(floor_plan))
-                    if DATA_LIVE_MAP not in data:
-                        data[DATA_LIVE_MAP] = {}
-                    data[DATA_LIVE_MAP] = dict(data[DATA_LIVE_MAP])
-                    data[DATA_LIVE_MAP]["floor_plan"] = floor_plan
-                    data[DATA_LIVE_MAP]["raw_n_n_polygons"] = polygons
-                    bounds = _compute_bounds(floor_plan)
-                    if bounds:
-                        data[DATA_LIVE_MAP]["coordinate_bounds"] = bounds
-                except CannotConnect:
-                    LOGGER.debug("get_n_n_polygons unavailable, skipping")
-
                 self._last_areas = now
                 self._check_for_new_areas(new_areas_blob)
+
+            # ── Every 600 s: saved-map geometry (walls, rooms, outline) ──
+            if self._last_map_geometry is None or (
+                now - self._last_map_geometry
+            ) >= timedelta(seconds=SCAN_INTERVAL_MAP_GEOMETRY):
+                try:
+                    data[DATA_FEATURE_MAP] = await self.client.get_feature_map(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_feature_map unavailable, skipping")
+                try:
+                    data[DATA_TILE_MAP] = await self.client.get_tile_map(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_tile_map unavailable, skipping")
+                try:
+                    data[DATA_AREAS_MAP3] = await self.client.get_areas(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_areas (map geometry) unavailable, skipping")
+                try:
+                    data[DATA_SEEN_POLY_MAP3] = await self.client.get_seen_polygon(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_seen_polygon (map geometry) unavailable, skipping")
+                self._last_map_geometry = now
 
             # ── Every 600 s: lifetime statistics ─────────────────────
             if self._last_statistics is None or (
@@ -323,27 +333,100 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
 # ── Live-map helpers ──────────────────────────────────────────────────
 
+_ROOM_COLORS = [
+    "#4A90D9", "#E67E22", "#2ECC71", "#9B59B6", "#E74C3C",
+    "#1ABC9C", "#F39C12", "#3498DB", "#D35400", "#27AE60",
+    "#8E44AD", "#C0392B", "#16A085", "#F1C40F", "#2980B9",
+    "#E91E63", "#00BCD4",
+]
+
+_HEADING_SCALE = 65536 / 360  # raw heading units per degree
+
+
 def _build_live_map_payload(
     existing: dict[str, Any],
     live_params: dict[str, Any],
     localization: dict[str, Any],
     seen_polygon_raw: dict[str, Any],
     cleaning_grid: dict[str, Any],
+    feature_map: dict[str, Any],
+    tile_map: dict[str, Any],
+    areas_data: dict[str, Any],
+    seen_poly_map3: dict[str, Any],
     is_active: bool,
     map_id: str,
 ) -> dict[str, Any]:
     """Compose the live_map attribute dict for the SVG card sensor.
 
-    Confirmed data sources from real API responses:
-      - debug/localization: { localization_algo_input: [{ rob_pose: [x_mm, y_mm, heading_mrad] }] }
-      - seen_polygon:        { map_id, polygons: [{ segments: [{x1,y1,x2,y2}] }] }
-      - cleaning_grid_map:   RLE occupancy grid { lower_left_x/y, size_x/y, resolution, cleaned:[] }
-      - live_parameters:     behaviour config only — no position data
+    Schema (used by rowenta-map-card.js):
+      map_id, is_active, rooms, outline, walls, dock, robot,
+      live_outline, bounds, scale
     """
-    # ── Robot position ────────────────────────────────────────────────
-    # localization_algo_input[0].rob_pose = [x_mm, y_mm, heading_milliradians]
-    robot_position = None
-    if localization:
+    import math as _math
+
+    # ── Rooms (from /get/areas?map_id) ───────────────────────────────
+    rooms: list[dict[str, Any]] = []
+    for idx, area in enumerate(areas_data.get("areas", [])):
+        try:
+            meta = json.loads(area.get("area_meta_data", "{}") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+        name = meta.get("name") or f"Room {area.get('id', idx)}"
+        pts = [[p["x"], p["y"]] for p in area.get("points", [])]
+        rooms.append({
+            "id": area.get("id"),
+            "name": name,
+            "room_type": area.get("room_type", "none"),
+            "area_state": area.get("area_state", "inactive"),
+            "polygon": pts,
+            "color": _ROOM_COLORS[idx % len(_ROOM_COLORS)],
+        })
+
+    # ── Outline (saved-map boundary from /get/seen_polygon?map_id) ───
+    outline: list[list[int]] = []
+    sp_polygons = (
+        seen_poly_map3.get("seen_polygon", {}).get("polygons")
+        or seen_poly_map3.get("polygons")
+        or []
+    )
+    for poly in sp_polygons:
+        segs = poly.get("segments", [])
+        if segs:
+            outline = [[s["x1"], s["y1"]] for s in segs]
+            outline.append([segs[-1]["x2"], segs[-1]["y2"]])
+            break
+
+    # Fallback: tile_map outline polygon
+    if not outline:
+        outline = [[p["x"], p["y"]] for p in tile_map.get("outline", [])]
+
+    # ── Walls (from /get/feature_map?map_id) ─────────────────────────
+    walls = [
+        [ln["x1"], ln["y1"], ln["x2"], ln["y2"]]
+        for ln in feature_map.get("map", {}).get("lines", [])
+    ]
+
+    # ── Dock ─────────────────────────────────────────────────────────
+    dock_raw = (
+        feature_map.get("map", {}).get("docking_pose")
+        or tile_map.get("map", {}).get("docking_pose")
+        or {}
+    )
+    dock: dict[str, Any] | None = None
+    if dock_raw and str(dock_raw.get("valid", "")).lower() in ("true", "1", True):
+        dock = {
+            "x": dock_raw["x"],
+            "y": dock_raw["y"],
+            "heading_deg": round(dock_raw.get("heading", 0) / _HEADING_SCALE, 1),
+        }
+
+    # ── Robot live position ───────────────────────────────────────────
+    # Supports two localization response formats:
+    #   1. /debug/localization: { localization_algo_input: [{ rob_pose: [x, y, heading_mrad] }] }
+    #   2. Generic: { position: { x, y, heading } } or { pose: { x, y, angle } }
+    robot: dict[str, Any] | None = None
+    if is_active and localization:
+        # Format 1: /debug/localization
         entries = localization.get("localization_algo_input", [])
         rob_pose = None
         for entry in entries:
@@ -352,210 +435,65 @@ def _build_live_map_payload(
                 rob_pose = rp
                 break
         if rob_pose is not None:
-            import math as _math
-            x_mm         = rob_pose[0]
-            y_mm         = rob_pose[1]
             heading_mrad = rob_pose[2] if len(rob_pose) > 2 else 0
-            heading_deg  = _math.degrees(heading_mrad / 1000.0)
-            robot_position = {"x": x_mm, "y": y_mm, "heading_deg": heading_deg}
-            LOGGER.debug("Robot position: x=%s y=%s heading=%.1f°", x_mm, y_mm, heading_deg)
-        else:
-            LOGGER.debug(
-                "localization received but rob_pose not found. Keys: %s",
-                list(localization.keys()),
-            )
-
-    # ── Cleaned area polygon ──────────────────────────────────────────
-    # seen_polygon format: { polygons: [{ segments: [{x1,y1,x2,y2}] }] }
-    cleaned_polygon: list[list[float]] = []
-    if seen_polygon_raw and is_active:
-        for poly in seen_polygon_raw.get("polygons", []):
-            segments = poly.get("segments", [])
-            if segments:
-                pts = [[s["x1"], s["y1"]] for s in segments if "x1" in s and "y1" in s]
-                if pts:
-                    last = segments[-1]
-                    pts.append([last.get("x2", pts[0][0]), last.get("y2", pts[0][1])])
-                    # Snap to axis-aligned bounding rectangle for square outline
-                    xs = [p[0] for p in pts]
-                    ys = [p[1] for p in pts]
-                    cleaned_polygon = [
-                        [min(xs), min(ys)],
-                        [max(xs), min(ys)],
-                        [max(xs), max(ys)],
-                        [min(xs), max(ys)],
-                    ]
-                    break
-
-    # Preserve last known cleaned_area and cleaning_grid when idle so the
-    # map outline persists between cleaning runs.
-    if not cleaned_polygon:
-        cleaned_polygon = existing.get("cleaned_area", [])
-
-    effective_grid = cleaning_grid if is_active else existing.get("cleaning_grid", {})
-
-    # ── Coordinate bounds ─────────────────────────────────────────────
-    # Priority: floor_plan bounds → seen_polygon extent → cleaning_grid extent
-    coord_bounds = existing.get("coordinate_bounds")
-    if not coord_bounds and cleaned_polygon:
-        xs = [p[0] for p in cleaned_polygon]
-        ys = [p[1] for p in cleaned_polygon]
-        pad = max(max(xs) - min(xs), max(ys) - min(ys)) * 0.1 or 200
-        coord_bounds = {
-            "min_x": min(xs) - pad, "max_x": max(xs) + pad,
-            "min_y": min(ys) - pad, "max_y": max(ys) + pad,
-        }
-    if not coord_bounds and effective_grid:
-        res = effective_grid.get("resolution", 1) or 1
-        llx = effective_grid.get("lower_left_x", 0)
-        lly = effective_grid.get("lower_left_y", 0)
-        w = effective_grid.get("size_x", 0) * res
-        h = effective_grid.get("size_y", 0) * res
-        if w > 0 and h > 0:
-            coord_bounds = {
-                "min_x": llx, "max_x": llx + w,
-                "min_y": lly, "max_y": lly + h,
+            heading_deg = _math.degrees(heading_mrad / 1000.0)
+            robot = {
+                "x": rob_pose[0],
+                "y": rob_pose[1],
+                "heading_deg": round(heading_deg, 1),
             }
+        else:
+            # Format 2: generic position/pose dict
+            loc = localization.get("position", {}) or localization.get("pose", {})
+            if loc:
+                h = loc.get("heading", loc.get("angle", 0))
+                robot = {
+                    "x": loc.get("x", 0),
+                    "y": loc.get("y", 0),
+                    "heading_deg": round(h / _HEADING_SCALE, 1),
+                }
 
-    return {
-        "floor_plan":        existing.get("floor_plan", []),
-        "coordinate_bounds": coord_bounds,
-        "cleaned_area":      cleaned_polygon,
-        "cleaning_grid":     effective_grid,
-        "robot_position":    robot_position,
-        "map_id":            map_id,
-        # Raw API responses for diagnostic card
-        "raw_live_parameters": live_params,
-        "raw_localization":    localization,
-        "raw_seen_polygon":    seen_polygon_raw,
-        "raw_n_n_polygons":    existing.get("raw_n_n_polygons"),
-    }
-
-
-def _extract_floor_plan(
-    polygons_response: Any,
-    areas_blob: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Convert /get/n_n_polygons + areas into room polygon objects for SVG card.
-
-    Tries two formats:
-      1. { polygons: [{ id?, segments: [{x1,y1,x2,y2}] }] }  — same as seen_polygon
-      2. List of { id?, polygon: [[x,y],...] }
-
-    Returns: [{ id, name, polygon: [[x,y],...], center: {x,y} }]
-    """
-    if not polygons_response or not isinstance(polygons_response, (dict, list)):
-        return []
-
-    # Build area_id → room name lookup
-    areas = areas_blob.get("areas", []) if isinstance(areas_blob, dict) else []
-    name_by_id: dict = {}
-    for a in areas:
-        meta_raw = a.get("area_meta_data", "")
-        if meta_raw:
-            try:
-                meta = json.loads(meta_raw)
-                name_by_id[a["id"]] = meta.get("name", f"Room {a['id']}")
-            except Exception:
-                pass
-
-    def _axis_aligned_rect(pts: list) -> list:
-        """Return the 4 corners of the axis-aligned bounding box (rectangle)."""
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        min_x, max_x = min(xs), max(xs)
-        min_y, max_y = min(ys), max(ys)
-        return [
-            [min_x, min_y],
-            [max_x, min_y],
-            [max_x, max_y],
-            [min_x, max_y],
-        ]
-
-    def _make_room(
-        area_id: Any,
-        pts: list,
-        segments: list | None = None,
-    ) -> dict[str, Any]:
-        # Use bounding-box rectangle for center and bounds computation
-        rect = _axis_aligned_rect(pts) or pts
-        xs = [p[0] for p in rect]
-        ys = [p[1] for p in rect]
-        room: dict[str, Any] = {
-            "id":      area_id,
-            "name":    name_by_id.get(area_id, f"Room {area_id}"),
-            "polygon": rect,
-            "center":  {"x": sum(xs) / len(xs), "y": sum(ys) / len(ys)},
-        }
-        # Attach raw segments so the frontend can draw the actual room outline
-        if segments:
-            room["segments"] = segments
-        return room
-
-    result: list[dict[str, Any]] = []
-
-    # Format 1: dict with "polygons" key (top-level or nested under "map")
-    raw_polys = None
-    if isinstance(polygons_response, dict):
-        raw_polys = (
-            polygons_response.get("polygons")
-            or (polygons_response.get("map") or {}).get("polygons")
+    # ── Live outline (during cleaning — /get/seen_polygon without map_id) ──
+    live_outline: list[list[int]] = []
+    if is_active:
+        lp_polygons = (
+            seen_polygon_raw.get("seen_polygon", {}).get("polygons")
+            or seen_polygon_raw.get("polygons")
+            or []
         )
-    if raw_polys:
-        for i, poly in enumerate(raw_polys):
-            if not isinstance(poly, dict):
-                continue
-            area_id  = poly.get("id") or poly.get("area_id") or i
-            raw_segs = poly.get("segments", [])
-            if raw_segs:
-                pts = []
-                for s in raw_segs:
-                    if "x1" in s:
-                        pts.append([s["x1"], s["y1"]])
-                    if "x2" in s:
-                        pts.append([s["x2"], s["y2"]])
-            else:
-                raw_pts = poly.get("polygon") or poly.get("points") or []
-                pts = [
-                    [p[0], p[1]] if isinstance(p, (list, tuple))
-                    else [p.get("x", 0), p.get("y", 0)]
-                    for p in raw_pts
-                ]
-                raw_segs = None
-            if pts:
-                result.append(_make_room(area_id, pts, raw_segs or None))
-        if result:
-            return result
+        for poly in lp_polygons:
+            segs = poly.get("segments", [])
+            if segs:
+                live_outline = [[s["x1"], s["y1"]] for s in segs]
+                live_outline.append([segs[-1]["x2"], segs[-1]["y2"]])
+                break
 
-    # Format 2: bare list
-    raw_list = polygons_response if isinstance(polygons_response, list) else []
-    for i, poly in enumerate(raw_list):
-        if not isinstance(poly, dict):
-            continue
-        area_id = poly.get("id") or poly.get("area_id") or i
-        raw_pts = poly.get("polygon") or poly.get("points") or []
-        pts = [
-            [p[0], p[1]] if isinstance(p, (list, tuple))
-            else [p.get("x", 0), p.get("y", 0)]
-            for p in raw_pts
-        ]
-        if pts:
-            result.append(_make_room(area_id, pts))
+    # ── Bounding box ─────────────────────────────────────────────────
+    all_pts: list[list[int]] = (
+        [pt for r in rooms for pt in r["polygon"]]
+        + outline
+        + live_outline
+        + ([[dock["x"], dock["y"]]] if dock else [])
+    )
+    if all_pts:
+        xs = [p[0] for p in all_pts]
+        ys = [p[1] for p in all_pts]
+        bounds: dict[str, int] = {
+            "min_x": min(xs), "max_x": max(xs),
+            "min_y": min(ys), "max_y": max(ys),
+        }
+    else:
+        bounds = existing.get("bounds", {"min_x": -800, "max_x": 2400, "min_y": -1300, "max_y": 1400})
 
-    return result
-
-
-def _compute_bounds(floor_plan: list[dict[str, Any]]) -> dict[str, float] | None:
-    """Compute bounding box of all polygon points."""
-    all_x: list[float] = []
-    all_y: list[float] = []
-    for room in floor_plan:
-        for pt in room.get("polygon", []):
-            all_x.append(pt[0])
-            all_y.append(pt[1])
-    if not all_x:
-        return None
     return {
-        "min_x": min(all_x), "max_x": max(all_x),
-        "min_y": min(all_y), "max_y": max(all_y),
+        "map_id": map_id,
+        "is_active": is_active,
+        "rooms": rooms,
+        "outline": outline,
+        "walls": walls,
+        "dock": dock,
+        "robot": robot,
+        "live_outline": live_outline,
+        "bounds": bounds,
+        "scale": "cm",
     }
