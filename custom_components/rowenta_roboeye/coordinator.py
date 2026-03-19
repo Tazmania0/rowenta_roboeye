@@ -343,6 +343,42 @@ _ROOM_COLORS = [
 _HEADING_SCALE = 65536 / 360  # raw heading units per degree
 
 
+def _is_real_room(area: dict) -> bool:
+    """Return True if this area is a real named room, not a redundant auto-segment.
+
+    All three conditions must hold:
+      1. area_state == "clean"       — user has confirmed/named this area
+      2. room_type  != "none"        — robot classified it as a real room type
+      3. area_meta_data is non-empty — user has given it a name
+    Redundant areas (auto-segmented sub-partitions) always have area_state
+    "inactive", room_type "none", and empty area_meta_data.
+    """
+    return (
+        area.get("area_state", "inactive") == "clean"
+        and area.get("room_type", "none") != "none"
+        and bool(area.get("area_meta_data", ""))
+    )
+
+
+def _calc_area_m2(points: list[dict]) -> float:
+    """Shoelace formula for polygon area in m².
+
+    Converts from cm² (coordinate units) to m².
+    NOTE: The API's area_size field is always 2× the real value — ignore it.
+    """
+    pts = [(p["x"], p["y"]) for p in points]
+    n = len(pts)
+    if n < 3:
+        return 0.0
+    a = abs(
+        sum(
+            pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1]
+            for i in range(n)
+        )
+    ) / 2
+    return round(a / 10000, 1)  # cm² → m²
+
+
 def _build_live_map_payload(
     existing: dict[str, Any],
     live_params: dict[str, Any],
@@ -372,7 +408,9 @@ def _build_live_map_payload(
         except (json.JSONDecodeError, TypeError):
             meta = {}
         name = meta.get("name") or f"Room {area.get('id', idx)}"
-        pts = [[p["x"], p["y"]] for p in area.get("points", [])]
+        raw_pts = area.get("points", [])
+        pts = [[p["x"], p["y"]] for p in raw_pts]
+        redundant = not _is_real_room(area)
         rooms.append({
             "id": area.get("id"),
             "name": name,
@@ -380,6 +418,8 @@ def _build_live_map_payload(
             "area_state": area.get("area_state", "inactive"),
             "polygon": pts,
             "color": _ROOM_COLORS[idx % len(_ROOM_COLORS)],
+            "redundant": redundant,
+            "area_m2": _calc_area_m2(raw_pts),
         })
 
     # ── Outline (saved-map boundary from /get/seen_polygon?map_id) ───

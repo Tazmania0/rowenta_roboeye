@@ -41,14 +41,15 @@ class RowentaMapCard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error("No configuration provided");
     this._config = {
-      entity:           "sensor.rowenta_xplorer_120_live_map",
-      rotate:           0,
-      show_dock:        true,
-      show_walls:       true,
-      show_room_labels: true,
-      show_room_areas:  true,
-      room_opacity:     0.25,
-      title:            "Live Map",
+      entity:                "sensor.rowenta_xplorer_120_live_map",
+      rotate:                0,
+      show_dock:             true,
+      show_walls:            true,
+      show_room_labels:      true,
+      show_room_areas:       true,
+      room_opacity:          0.25,
+      title:                 "Live Map",
+      show_redundant_rooms:  false,
       ...config,
     };
     if (this._hass) this._render();
@@ -208,11 +209,22 @@ class RowentaMapCard extends HTMLElement {
     for (const room of rooms) {
       const p = room.polygon || [];
       if (p.length < 3) continue;
-      roomFills += `<polygon points="${pts2str(p)}"
-        fill="${room.color}" fill-opacity="${roomOpacity}"
-        stroke="${room.color}" stroke-width="2" stroke-linejoin="round"
-        data-room="${this._esc(room.name)}"
-        style="cursor:pointer"/>`;
+      if (room.redundant && !cfg.show_redundant_rooms) continue;
+      if (room.redundant) {
+        // Redundant auto-segment: very faint, dashed border, no fill
+        roomFills += `<polygon points="${pts2str(p)}"
+          fill="none"
+          stroke="${room.color}" stroke-width="1.5" stroke-linejoin="round"
+          stroke-dasharray="6,4" stroke-opacity="0.35"
+          data-room="${this._esc(room.name)}"
+          style="cursor:pointer"/>`;
+      } else {
+        roomFills += `<polygon points="${pts2str(p)}"
+          fill="${room.color}" fill-opacity="${roomOpacity}"
+          stroke="${room.color}" stroke-width="2" stroke-linejoin="round"
+          data-room="${this._esc(room.name)}"
+          style="cursor:pointer"/>`;
+      }
     }
 
     // ── Layer 3: walls ──────────────────────────────────────────────
@@ -275,21 +287,26 @@ class RowentaMapCard extends HTMLElement {
       for (const room of rooms) {
         const p = room.polygon || [];
         if (p.length < 3) continue;
+        if (room.redundant && !cfg.show_redundant_rooms) continue;
         const c = centroid(p);
         const cx = c.x - minX;
         const cy = flipY(c.y) - minY;
+        const labelOpacity = room.redundant ? 0.3 : 1.0;
         let areaText = "";
         if (cfg.show_room_areas) {
-          const areaCm2 = polyArea(p);
-          const areaM2 = (areaCm2 / 10000).toFixed(1);
+          // Use pre-computed shoelace area from backend; fall back to JS calculation
+          const areaM2 = room.area_m2 != null
+            ? room.area_m2.toFixed(1)
+            : (polyArea(p) / 10000).toFixed(1);
           areaText = `<text x="${cx}" y="${cy + 36}"
-            text-anchor="middle" fill="${room.color}" font-size="20" opacity="0.75"
+            text-anchor="middle" fill="${room.color}" font-size="20"
+            opacity="${room.redundant ? 0.25 : 0.75}"
             font-family="sans-serif">${areaM2} m²</text>`;
         }
         labels += `<text x="${cx}" y="${cy}"
           text-anchor="middle" dominant-baseline="middle"
           fill="${room.color}" font-size="28" font-weight="bold"
-          font-family="sans-serif"
+          opacity="${labelOpacity}" font-family="sans-serif"
           style="text-shadow:0 1px 3px rgba(0,0,0,.8)">${this._esc(room.name)}</text>
           ${areaText}`;
       }
@@ -320,14 +337,15 @@ class RowentaMapCard extends HTMLElement {
 
   static getStubConfig() {
     return {
-      type:             "custom:rowenta-map-card",
-      entity:           "sensor.rowenta_xplorer_120_live_map",
-      show_dock:        true,
-      show_walls:       true,
-      show_room_labels: true,
-      show_room_areas:  true,
-      room_opacity:     0.25,
-      title:            "Live Map",
+      type:                  "custom:rowenta-map-card",
+      entity:                "sensor.rowenta_xplorer_120_live_map",
+      show_dock:             true,
+      show_walls:            true,
+      show_room_labels:      true,
+      show_room_areas:       true,
+      room_opacity:          0.25,
+      title:                 "Live Map",
+      show_redundant_rooms:  false,
     };
   }
 }
