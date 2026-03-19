@@ -56,6 +56,7 @@ from .const import (
     API_GET_MAPS,
     API_GET_N_N_POLYGONS,
     API_DEBUG_LOCALIZATION,
+    API_DEBUG_RELOCALIZATION,
     API_GET_PERMANENT_STATISTICS,
     API_GET_POINTS_OF_INTEREST,
     API_GET_PROTOCOL_VERSION,
@@ -246,8 +247,22 @@ class RobEyeApiClient:
         return await self._get(API_GET_N_N_POLYGONS)
 
     async def get_localization(self) -> dict[str, Any]:
-        """GET /debug/localization — real-time robot x/y position and heading."""
+        """GET /debug/localization — snapshot localization (startpoint/global entries).
+
+        Use when the robot is idle/docked. Returns entries with localization_type
+        "startpoint" and "global" — these are computed at session start, not live.
+        """
         return await self._get(API_DEBUG_LOCALIZATION)
+
+    async def get_relocalization(self) -> dict[str, Any]:
+        """GET /debug/relocalization — continuous position tracking during cleaning.
+
+        Use when the robot is actively cleaning. Returns multiple entries with
+        localization_type "continuous" that update every few seconds.
+        The LAST entry (highest rtc_time) has the most recent rob_pose [x, y, heading_raw].
+        heading_raw is in units where 65536 == 360°.
+        """
+        return await self._get(API_DEBUG_RELOCALIZATION)
 
     async def get_points_of_interest(self) -> dict[str, Any]:
         """GET /get/points_of_interest — saved POI and charging-dock locations."""

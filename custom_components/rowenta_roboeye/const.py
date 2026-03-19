@@ -60,6 +60,7 @@ API_GET_SEEN_POLYGON = "/get/seen_polygon"
 API_GET_N_N_POLYGONS = "/get/n_n_polygons"
 API_GET_POINTS_OF_INTEREST = "/get/points_of_interest"
 API_DEBUG_LOCALIZATION = "/debug/localization"
+API_DEBUG_RELOCALIZATION = "/debug/relocalization"
 
 # ── SET / command endpoints ───────────────────────────────────────────
 API_SET_CLEAN_ALL = "/set/clean_all"
