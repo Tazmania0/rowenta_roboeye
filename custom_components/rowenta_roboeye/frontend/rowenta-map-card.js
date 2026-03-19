@@ -1,8 +1,8 @@
-// Rowenta Xplorer 120 — Live Map Card  v2.4.1
+// Rowenta Xplorer 120 — Live Map Card  v2.4.2
 // Renders rooms, walls, dock, robot, live outline and post-run session
 // replay (cleaning grid + robot trail) from _build_live_map_payload() schema.
 
-const VERSION = "2.4.1";
+const VERSION = "2.4.2";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -175,9 +175,9 @@ class RowentaMapCard extends HTMLElement {
           background: #ff572218; border-bottom: 2px solid #ff5722;
           padding: 3px 14px; font-size: 11px; color: #ff5722;
         }
-        .svg-wrap { background: #0d1a2a; overflow: hidden; }
+        .svg-wrap { display: block; width: 100%; background: #0d1a2a; overflow: hidden; }
         .svg-wrap svg {
-          display: block; width: 100%; height: auto;
+          display: block; width: 100%; height: auto; max-width: 100%;
           transform: rotate(${cfg.rotate ?? 0}deg);
           transform-origin: center center;
         }
@@ -472,8 +472,10 @@ class RowentaMapCard extends HTMLElement {
     }
 
     return `<svg viewBox="0 0 ${W} ${H}"
+      width="100%"
+      preserveAspectRatio="xMidYMid meet"
       xmlns="http://www.w3.org/2000/svg"
-      style="width:100%;height:auto">
+      style="display:block;height:auto">
       ${floorFill}
       ${roomFills}
       ${wallLines}
