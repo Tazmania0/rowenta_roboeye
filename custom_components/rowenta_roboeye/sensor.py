@@ -61,6 +61,22 @@ class RobEyeSensorDescription(SensorEntityDescription):
     value_fn: Callable[[RobEyeCoordinator], Any] = field(default=lambda _c: None)
 
 
+# Translation key → entity_id suffix (only overrides where key ≠ slugified name)
+_SENSOR_ENTITY_ID_SUFFIX: dict[str, str] = {
+    "charging":                       "charging_status",
+    "fan_speed_label":                "fan_speed",
+    "total_area_cleaned":             "total_cleaned_area",
+    "total_number_of_cleaning_runs":  "total_cleaning_runs",
+    "wifi_rssi":                      "wi_fi_signal_strength",
+    "wifi_ssid":                      "wi_fi_network",
+    "protocol_version":               "firmware_version",
+    "robot_serial":                   "serial_number",
+    "sensor_cliff_status":            "cliff_sensor",
+    "sensor_bump_status":             "bump_sensor",
+    "sensor_wheel_drop_status":       "wheel_drop_sensor",
+}
+
+
 # ── Sensor catalogues ─────────────────────────────────────────────────
 
 STATUS_SENSORS: tuple[RobEyeSensorDescription, ...] = (
@@ -315,6 +331,8 @@ class RobEyeStaticSensor(RobEyeEntity, SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{description.key}_{coordinator.device_id}"
+        suffix = _SENSOR_ENTITY_ID_SUFFIX.get(description.key, description.key)
+        self.entity_id = f"sensor.{coordinator.device_id}_{suffix}"
 
     @property
     def native_value(self) -> Any:
@@ -340,6 +358,7 @@ class RobEyeLiveMapSensor(RobEyeEntity, SensorEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"live_map_{coordinator.device_id}"
         self._attr_name = "Live Map"
+        self.entity_id = f"sensor.{coordinator.device_id}_live_map"
 
     @property
     def native_value(self) -> str:

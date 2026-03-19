@@ -105,6 +105,7 @@ class RobEyeCleaningModeSelect(RobEyeEntity, SelectEntity, RestoreEntity):
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"cleaning_mode_{coordinator.device_id}"
+        self.entity_id = f"select.{coordinator.device_id}_cleaning_mode"
         self._last_known: str | None = None
 
     @property

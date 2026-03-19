@@ -86,6 +86,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = coordinator.device_id
+        self.entity_id = f"vacuum.{coordinator.device_id}"
 
     # ── Coordinator update handler ────────────────────────────────────
 
