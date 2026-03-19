@@ -1,8 +1,8 @@
-// Rowenta Xplorer 120 — Live Map Card  v2.4.0
+// Rowenta Xplorer 120 — Live Map Card  v2.4.1
 // Renders rooms, walls, dock, robot, live outline and post-run session
 // replay (cleaning grid + robot trail) from _build_live_map_payload() schema.
 
-const VERSION = "2.4.0";
+const VERSION = "2.4.1";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -278,7 +278,7 @@ class RowentaMapCard extends HTMLElement {
     // ── Layer 2: room fills ─────────────────────────────────────────
     let roomFills = "";
     // In session_complete mode, rooms are faint background reference only
-    const roomOpacity = sessionComplete ? 0.10 : (cfg.room_opacity ?? 0.25);
+    const roomOpacity = sessionComplete ? 0.15 : (cfg.room_opacity ?? 0.25);
     for (const room of rooms) {
       const p = room.polygon || [];
       if (p.length < 3) continue;
@@ -319,8 +319,8 @@ class RowentaMapCard extends HTMLElement {
     const gridData = decodeCleaningGrid(cleaningGrid);
     let gridLayer = "";
     if (gridData?.rects?.length) {
-      const gridFill   = sessionComplete ? "rgba(76,175,80,0.32)" : "rgba(76,175,80,0.45)";
-      const gridStroke = sessionComplete ? "rgba(45,122,45,0.2)"  : "rgba(45,122,45,0.3)";
+      const gridFill   = sessionComplete ? "rgba(76,175,80,0.72)" : "rgba(76,175,80,0.45)";
+      const gridStroke = sessionComplete ? "rgba(45,122,45,0.55)" : "rgba(45,122,45,0.3)";
       gridLayer = gridData.rects.map(r => {
         const gx1 = r.x - minX;
         const gy1 = flipY(r.y + r.h) - minY;   // top-left in SVG (flip bottom edge up)
