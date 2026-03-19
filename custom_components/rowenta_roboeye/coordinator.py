@@ -376,7 +376,15 @@ def _build_live_map_payload(
                 if pts:
                     last = segments[-1]
                     pts.append([last.get("x2", pts[0][0]), last.get("y2", pts[0][1])])
-                    cleaned_polygon = pts
+                    # Snap to axis-aligned bounding rectangle for square outline
+                    xs = [p[0] for p in pts]
+                    ys = [p[1] for p in pts]
+                    cleaned_polygon = [
+                        [min(xs), min(ys)],
+                        [max(xs), min(ys)],
+                        [max(xs), max(ys)],
+                        [min(xs), max(ys)],
+                    ]
                     break
 
     # Preserve last known cleaned_area and cleaning_grid when idle so the
@@ -451,38 +459,29 @@ def _extract_floor_plan(
             except Exception:
                 pass
 
-    def _convex_hull(pts: list) -> list:
-        """Andrew's monotone chain — returns convex hull in CCW order."""
-        pts = sorted({(p[0], p[1]) for p in pts})
-        if len(pts) <= 2:
-            return [list(p) for p in pts]
-
-        def cross(O, A, B):
-            return (A[0] - O[0]) * (B[1] - O[1]) - (A[1] - O[1]) * (B[0] - O[0])
-
-        lower: list = []
-        for p in pts:
-            while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
-                lower.pop()
-            lower.append(p)
-        upper: list = []
-        for p in reversed(pts):
-            while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
-                upper.pop()
-            upper.append(p)
-        hull = lower[:-1] + upper[:-1]
-        return [list(p) for p in hull]
+    def _axis_aligned_rect(pts: list) -> list:
+        """Return the 4 corners of the axis-aligned bounding box (rectangle)."""
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        return [
+            [min_x, min_y],
+            [max_x, min_y],
+            [max_x, max_y],
+            [min_x, max_y],
+        ]
 
     def _make_room(area_id: Any, pts: list) -> dict[str, Any]:
-        hull = _convex_hull(pts)
-        if not hull:
-            hull = pts
-        xs = [p[0] for p in hull]
-        ys = [p[1] for p in hull]
+        rect = _axis_aligned_rect(pts)
+        if not rect:
+            rect = pts
+        xs = [p[0] for p in rect]
+        ys = [p[1] for p in rect]
         return {
             "id":      area_id,
             "name":    name_by_id.get(area_id, f"Room {area_id}"),
-            "polygon": hull,
+            "polygon": rect,
             "center":  {"x": sum(xs) / len(xs), "y": sum(ys) / len(ys)},
         }
 
