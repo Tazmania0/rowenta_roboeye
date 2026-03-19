@@ -120,7 +120,7 @@ def _available(hass: HomeAssistant, entity_id: str) -> bool:
 
 # ── Config builder ────────────────────────────────────────────────────
 
-def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: str = _DEV) -> dict[str, Any]:
 
     live_entities = [
         {"entity": e, "name": label}
@@ -228,38 +228,38 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]]) -> dict[str,
             "icon": "mdi:door",
             "entities": [
                 {
-                    "entity": f"select.{_DEV}_room_{rid}_fan_speed",
+                    "entity": f"select.{device_id}_room_{rid}_fan_speed",
                     "name": "Fan Speed",
                     "icon": "mdi:speedometer",
                 },
                 {
-                    "entity": f"button.{_DEV}_clean_room_{rid}",
+                    "entity": f"button.{device_id}_clean_room_{rid}",
                     "name": "▶  Start Cleaning",
                     "icon": "mdi:broom",
                 },
                 {
-                    "entity": f"switch.{_DEV}_room_{rid}_deep_clean",
+                    "entity": f"switch.{device_id}_room_{rid}_deep_clean",
                     "name": "Deep clean this room",
                     "icon": "mdi:robot-vacuum-variant",
                 },
                 {"type": "divider"},
                 {
-                    "entity": f"sensor.{_DEV}_room_{rid}_last_cleaned",
+                    "entity": f"sensor.{device_id}_room_{rid}_last_cleaned",
                     "name": "Last Cleaned",
                     "icon": "mdi:calendar-clock",
                 },
                 {
-                    "entity": f"sensor.{_DEV}_room_{rid}_cleanings",
+                    "entity": f"sensor.{device_id}_room_{rid}_cleanings",
                     "name": "Times Cleaned",
                     "icon": "mdi:counter",
                 },
                 {
-                    "entity": f"sensor.{_DEV}_room_{rid}_area",
+                    "entity": f"sensor.{device_id}_room_{rid}_area",
                     "name": "Room Area",
                     "icon": "mdi:texture-box",
                 },
                 {
-                    "entity": f"sensor.{_DEV}_room_{rid}_avg_clean_time",
+                    "entity": f"sensor.{device_id}_room_{rid}_avg_clean_time",
                     "name": "Avg Duration",
                     "icon": "mdi:timer-outline",
                 },
@@ -360,10 +360,11 @@ class RobEyeDashboardManager:
         self,
         hass: HomeAssistant,
         areas: list[dict[str, Any]],
+        device_id: str = _DEV,
     ) -> None:
         """Create or update the dashboard only when config has changed."""
         rooms = _extract_rooms(areas)
-        config = _build_config(hass, rooms)
+        config = _build_config(hass, rooms, device_id)
         new_hash = _config_hash(config)
 
         _LOGGER.debug(
@@ -541,7 +542,8 @@ async def async_create_dashboard(
     areas: list[dict[str, Any]],
     robot_info: dict[str, Any] | None = None,
     manager: "RobEyeDashboardManager | None" = None,
+    device_id: str = _DEV,
 ) -> None:
     """Create or update the dashboard. Idempotent — safe to call repeatedly."""
     _mgr = manager or RobEyeDashboardManager()
-    await _mgr.async_update(hass, areas)
+    await _mgr.async_update(hass, areas, device_id)

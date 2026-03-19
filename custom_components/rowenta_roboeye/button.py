@@ -164,14 +164,11 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
         self._attr_unique_id = f"clean_room_{area_id}_{coordinator.device_id}"
         self._attr_name = f"Clean {room_name}"
         self._attr_icon = "mdi:broom"
-        self.entity_id = f"button.rowenta_xplorer_120_clean_room_{area_id}"
-        self._fan_speed_select_id = (
-            f"select.rowenta_xplorer_120_room_{area_id}_fan_speed"
-        )
+        _dev = coordinator.device_id
+        self.entity_id = f"button.{_dev}_clean_room_{area_id}"
+        self._fan_speed_select_id = f"select.{_dev}_room_{area_id}_fan_speed"
         # Per-room deep clean switch entity id
-        self._deep_clean_switch_id = (
-            f"switch.rowenta_xplorer_120_room_{area_id}_deep_clean"
-        )
+        self._deep_clean_switch_id = f"switch.{_dev}_room_{area_id}_deep_clean"
 
     async def async_press(self) -> None:
         LOGGER.debug("button: clean room %s", self._area_id)
