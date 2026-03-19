@@ -445,11 +445,13 @@ def _extract_floor_plan(
 
     result: list[dict[str, Any]] = []
 
-    # Format 1: dict with "polygons" key
-    raw_polys = (
-        polygons_response.get("polygons")
-        if isinstance(polygons_response, dict) else None
-    )
+    # Format 1: dict with "polygons" key (top-level or nested under "map")
+    raw_polys = None
+    if isinstance(polygons_response, dict):
+        raw_polys = (
+            polygons_response.get("polygons")
+            or (polygons_response.get("map") or {}).get("polygons")
+        )
     if raw_polys:
         for i, poly in enumerate(raw_polys):
             if not isinstance(poly, dict):
