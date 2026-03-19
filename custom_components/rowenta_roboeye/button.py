@@ -114,6 +114,7 @@ class RobEyeGoHomeButton(RobEyeBaseButton):
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"go_home_{coordinator.device_id}"
+        self.entity_id = f"button.{coordinator.device_id}_return_to_base"
 
     async def async_press(self) -> None:
         await self.coordinator.async_send_command(self.coordinator.client.go_home)
@@ -126,6 +127,7 @@ class RobEyeStopButton(RobEyeBaseButton):
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"stop_{coordinator.device_id}"
+        self.entity_id = f"button.{coordinator.device_id}_stop"
 
     async def async_press(self) -> None:
         await self.coordinator.async_send_command(self.coordinator.client.stop)
@@ -138,6 +140,7 @@ class RobEyeCleanAllButton(RobEyeBaseButton):
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"clean_all_{coordinator.device_id}"
+        self.entity_id = f"button.{coordinator.device_id}_clean_entire_home"
 
     async def async_press(self) -> None:
         raw = str(self.coordinator.status.get("cleaning_parameter_set", "2"))

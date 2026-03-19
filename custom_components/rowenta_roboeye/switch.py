@@ -93,6 +93,7 @@ class RobEyeDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = "deep_clean_mode_" + coordinator.device_id
+        self.entity_id = f"switch.{coordinator.device_id}_deep_clean_mode"
         self._is_on: bool = False
 
     @property

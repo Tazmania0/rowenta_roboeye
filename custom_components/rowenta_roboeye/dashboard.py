@@ -58,53 +58,6 @@ _CONF_SHOW_IN_SIDEBAR  = "show_in_sidebar"
 _CONF_ALLOW_SINGLE_WORD = "allow_single_word"
 
 
-# ── Entity ID constants ───────────────────────────────────────────────
-# Hardcoded from translation_key / _attr_name values in each platform file.
-# With has_entity_name=True, HA forms: {platform}.{device_slug}_{translation_key}
-# Using constants avoids the _eid()/_slug() mismatch that caused missing entities.
-
-# Vacuum
-E_VACUUM          = f"vacuum.{_DEV}"
-
-# Sensors — slugified from translated name in en.json
-# "Battery level"          → battery_level
-# "Charging status"        → charging_status  (key=charging, name="Charging status")
-# "Current area cleaned"   → current_area_cleaned
-# "Current cleaning time"  → current_cleaning_time
-# "Total cleaning runs"    → total_cleaning_runs      (key=total_number_of_cleaning_runs)
-# "Total cleaned area"     → total_cleaned_area       (key=total_area_cleaned)
-# "Total distance driven"  → total_distance_driven
-# "Total cleaning time"    → total_cleaning_time
-# "Wi-Fi signal strength"  → wi_fi_signal_strength
-# "Wi-Fi network"          → wi_fi_network
-# "Firmware version"       → firmware_version
-# "Serial number"          → serial_number
-E_BATTERY         = f"sensor.{_DEV}_battery_level"
-E_MODE            = f"sensor.{_DEV}_mode"
-E_CHARGING        = f"sensor.{_DEV}_charging_status"
-E_AREA_CLEANED    = f"sensor.{_DEV}_current_area_cleaned"
-E_CLEANING_TIME   = f"sensor.{_DEV}_current_cleaning_time"
-E_TOTAL_RUNS      = f"sensor.{_DEV}_total_cleaning_runs"
-E_TOTAL_AREA      = f"sensor.{_DEV}_total_cleaned_area"
-E_TOTAL_DISTANCE  = f"sensor.{_DEV}_total_distance_driven"
-E_TOTAL_TIME      = f"sensor.{_DEV}_total_cleaning_time"
-E_WIFI_RSSI       = f"sensor.{_DEV}_wi_fi_signal_strength"
-E_WIFI_SSID       = f"sensor.{_DEV}_wi_fi_network"
-E_FIRMWARE        = f"sensor.{_DEV}_firmware_version"
-E_SERIAL          = f"sensor.{_DEV}_serial_number"
-E_LIVE_MAP        = f"sensor.{_DEV}_live_map"
-
-# Select — "Cleaning mode" → cleaning_mode
-E_CLEANING_MODE      = f"select.{_DEV}_cleaning_mode"
-E_DEEP_CLEAN_SWITCH  = f"switch.{_DEV}_deep_clean_mode"
-
-# Buttons — slugified from translated name in en.json
-# "Return to base"   → return_to_base   (key=go_home)
-# "Stop"             → stop
-# "Clean entire home"→ clean_entire_home (key=clean_all)
-E_BTN_CLEAN_ALL   = f"button.{_DEV}_clean_entire_home"
-E_BTN_STOP        = f"button.{_DEV}_stop"
-E_BTN_GO_HOME     = f"button.{_DEV}_return_to_base"
 
 
 def _config_hash(config: dict[str, Any]) -> str:
@@ -121,27 +74,49 @@ def _available(hass: HomeAssistant, entity_id: str) -> bool:
 # ── Config builder ────────────────────────────────────────────────────
 
 def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: str = _DEV) -> dict[str, Any]:
+    _d = device_id
+    # Entity IDs — all use device_id prefix, suffixes match slugified translation names
+    e_vacuum            = f"vacuum.{_d}"
+    e_battery           = f"sensor.{_d}_battery_level"
+    e_mode              = f"sensor.{_d}_mode"
+    e_charging          = f"sensor.{_d}_charging_status"
+    e_area_cleaned      = f"sensor.{_d}_current_area_cleaned"
+    e_cleaning_time     = f"sensor.{_d}_current_cleaning_time"
+    e_total_runs        = f"sensor.{_d}_total_cleaning_runs"
+    e_total_area        = f"sensor.{_d}_total_cleaned_area"
+    e_total_distance    = f"sensor.{_d}_total_distance_driven"
+    e_total_time        = f"sensor.{_d}_total_cleaning_time"
+    e_wifi_rssi         = f"sensor.{_d}_wi_fi_signal_strength"
+    e_wifi_ssid         = f"sensor.{_d}_wi_fi_network"
+    e_firmware          = f"sensor.{_d}_firmware_version"
+    e_serial            = f"sensor.{_d}_serial_number"
+    e_live_map          = f"sensor.{_d}_live_map"
+    e_cleaning_mode     = f"select.{_d}_cleaning_mode"
+    e_deep_clean_switch = f"switch.{_d}_deep_clean_mode"
+    e_btn_clean_all     = f"button.{_d}_clean_entire_home"
+    e_btn_stop          = f"button.{_d}_stop"
+    e_btn_go_home       = f"button.{_d}_return_to_base"
 
     live_entities = [
         {"entity": e, "name": label}
         for e, label in [
-            (E_AREA_CLEANED,  "Area Cleaned"),
-            (E_CLEANING_TIME, "Time Elapsed"),
+            (e_area_cleaned,  "Area Cleaned"),
+            (e_cleaning_time, "Time Elapsed"),
         ]
         if _available(hass, e)
     ]
 
     live_map_entities = [
-        {"entity": E_LIVE_MAP, "name": "Live Map Data"}
-    ] if _available(hass, E_LIVE_MAP) else []
+        {"entity": e_live_map, "name": "Live Map Data"}
+    ] if _available(hass, e_live_map) else []
 
     device_info_entities = [
         {"entity": e, "name": label}
         for e, label in [
-            (E_SERIAL,   "Serial Number"),
-            (E_FIRMWARE, "Firmware Version"),
-            (E_WIFI_SSID,"Wi-Fi Network"),
-            (E_WIFI_RSSI,"Wi-Fi Signal"),
+            (e_serial,   "Serial Number"),
+            (e_firmware, "Firmware Version"),
+            (e_wifi_ssid,"Wi-Fi Network"),
+            (e_wifi_rssi,"Wi-Fi Signal"),
         ]
         if _available(hass, e)
     ]
@@ -152,7 +127,7 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
         "cards": [
             {
                 "type": "tile",
-                "entity": E_VACUUM,
+                "entity": e_vacuum,
                 "name": "Rowenta Xplorer 120",
                 "icon": "mdi:robot-vacuum",
                 "features": [
@@ -167,7 +142,7 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
                 "cards": [
                     {
                         "type": "button",
-                        "entity": E_BTN_CLEAN_ALL,
+                        "entity": e_btn_clean_all,
                         "name": "Clean All",
                         "icon": "mdi:robot-vacuum",
                         "show_state": False,
@@ -175,7 +150,7 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
                     },
                     {
                         "type": "button",
-                        "entity": E_BTN_STOP,
+                        "entity": e_btn_stop,
                         "name": "Stop",
                         "icon": "mdi:stop-circle-outline",
                         "show_state": False,
@@ -183,7 +158,7 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
                     },
                     {
                         "type": "button",
-                        "entity": E_BTN_GO_HOME,
+                        "entity": e_btn_go_home,
                         "name": "Go Home",
                         "icon": "mdi:home-import-outline",
                         "show_state": False,
@@ -196,11 +171,11 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
                 "title": "Cleaning Mode",
                 "entities": [
                     {
-                        "entity": E_CLEANING_MODE,
+                        "entity": e_cleaning_mode,
                         "name": "Fan speed",
                     },
                     {
-                        "entity": E_DEEP_CLEAN_SWITCH,
+                        "entity": e_deep_clean_switch,
                         "name": "Deep clean (double pass)",
                     },
                 ],
@@ -209,9 +184,9 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
                 "type": "entities",
                 "title": "Status",
                 "entities": [
-                    {"entity": E_BATTERY,  "name": "Battery"},
-                    {"entity": E_MODE,     "name": "Mode"},
-                    {"entity": E_CHARGING, "name": "Charging"},
+                    {"entity": e_battery,  "name": "Battery"},
+                    {"entity": e_mode,     "name": "Mode"},
+                    {"entity": e_charging, "name": "Charging"},
                     *live_entities,
                     *live_map_entities,
                 ],
@@ -286,10 +261,10 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
             "type": "entities",
             "title": "Lifetime Statistics",
             "entities": [
-                {"entity": E_TOTAL_RUNS,     "name": "Total Runs"},
-                {"entity": E_TOTAL_AREA,     "name": "Total Area Cleaned"},
-                {"entity": E_TOTAL_DISTANCE, "name": "Total Distance"},
-                {"entity": E_TOTAL_TIME,     "name": "Total Cleaning Time"},
+                {"entity": e_total_runs,     "name": "Total Runs"},
+                {"entity": e_total_area,     "name": "Total Area Cleaned"},
+                {"entity": e_total_distance, "name": "Total Distance"},
+                {"entity": e_total_time,     "name": "Total Cleaning Time"},
             ],
         },
     ]
@@ -300,12 +275,12 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
             "entities": device_info_entities,
         })
 
-    if _available(hass, E_LIVE_MAP):
+    if _available(hass, e_live_map):
         stats_cards.append({
             "type": "entities",
             "title": "Live Map",
             "entities": [
-                {"entity": E_LIVE_MAP, "name": "Map State"},
+                {"entity": e_live_map, "name": "Map State"},
             ],
         })
 
@@ -322,7 +297,7 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
         "cards": [
             {
                 "type": "custom:rowenta-map-card",
-                "entity": E_LIVE_MAP,
+                "entity": e_live_map,
                 "title": "Live Map",
                 "show_debug": True,
             }
@@ -331,7 +306,7 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
 
     views = [view_control, view_rooms, view_stats]
     # Only add map view if the live map sensor is enabled
-    if _available(hass, E_LIVE_MAP):
+    if _available(hass, e_live_map):
         views.append(view_map)
 
     return {
