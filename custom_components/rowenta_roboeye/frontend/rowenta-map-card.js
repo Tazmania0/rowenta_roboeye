@@ -1,8 +1,8 @@
-// Rowenta Xplorer 120 — Live Map Card  v2.4.3
+// Rowenta Xplorer 120 — Live Map Card  v2.4.4
 // Renders rooms, walls, dock, robot, live outline and post-run session
 // replay (cleaning grid + robot trail) from _build_live_map_payload() schema.
 
-const VERSION = "2.4.3";
+const VERSION = "2.4.4";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -247,17 +247,36 @@ class RowentaMapCard extends HTMLElement {
     }
 
     // ── Debug: 10× movement amplification ───────────────────────────
-    // Amplifies robot displacement from the dock (or map centre) by 10×
+    // Amplifies robot displacement from its resting/start position by 10×
     // so sub-millimetre movements are clearly visible during scaling diagnosis.
+    //
+    // Reference-point strategy (avoids coordinate-system mismatch between
+    // docking_pose and rob_pose that would push the robot off-screen):
+    //   • Docked / idle          → robot's own current position (displacement = 0,
+    //                              robot stays in place regardless of dock offset)
+    //   • Cleaning, path exists  → robotPath[0] (where cleaning started, same
+    //                              coordinate space as current robot position)
+    //   • Cleaning, path empty   → dock position (fallback, robot just left dock)
+    //
     // Computed here (before bounds) so the viewBox can be expanded to contain
-    // the amplified position — otherwise the robot disappears off-screen.
+    // the amplified position and path — otherwise the robot disappears off-screen.
     let displayRobot = robot;
     let displayPath  = robotPath;
     if (ampX10 && robot) {
-      // Reference point: dock position, or fall back to map centre
-      const refX = dock ? dock.x : (bounds.min_x + bounds.max_x) / 2;
-      const refY = dock ? dock.y : (bounds.min_y + bounds.max_y) / 2;
-      const AMP  = 10;
+      let refX, refY;
+      if (isActive && robotPath.length > 0) {
+        // Cleaning with recorded path: amplify from session start position
+        [refX, refY] = robotPath[0];
+      } else if (isActive && dock) {
+        // Just started cleaning, no path yet: use dock as fallback
+        refX = dock.x;
+        refY = dock.y;
+      } else {
+        // Docked / idle: use robot's own position → zero displacement → stays in place
+        refX = robot.x;
+        refY = robot.y;
+      }
+      const AMP = 10;
       displayRobot = {
         ...robot,
         x: refX + (robot.x - refX) * AMP,
@@ -269,12 +288,21 @@ class RowentaMapCard extends HTMLElement {
       ]);
     }
 
-    // Expand effective bounds to keep the (possibly amplified) robot visible.
-    // When docked, displacement is ~0 so amplification is ~0 and bounds don't change.
-    const effMinX = displayRobot ? Math.min(bounds.min_x, displayRobot.x) : bounds.min_x;
-    const effMaxX = displayRobot ? Math.max(bounds.max_x, displayRobot.x) : bounds.max_x;
-    const effMinY = displayRobot ? Math.min(bounds.min_y, displayRobot.y) : bounds.min_y;
-    const effMaxY = displayRobot ? Math.max(bounds.max_y, displayRobot.y) : bounds.max_y;
+    // Expand effective bounds to keep the (possibly amplified) robot and its
+    // full path visible.  Without path expansion, amplified trail points outside
+    // the current robot position would be clipped by the viewBox.
+    let effMinX = displayRobot ? Math.min(bounds.min_x, displayRobot.x) : bounds.min_x;
+    let effMaxX = displayRobot ? Math.max(bounds.max_x, displayRobot.x) : bounds.max_x;
+    let effMinY = displayRobot ? Math.min(bounds.min_y, displayRobot.y) : bounds.min_y;
+    let effMaxY = displayRobot ? Math.max(bounds.max_y, displayRobot.y) : bounds.max_y;
+    if (ampX10 && displayPath.length > 0) {
+      for (const [px, py] of displayPath) {
+        effMinX = Math.min(effMinX, px);
+        effMaxX = Math.max(effMaxX, px);
+        effMinY = Math.min(effMinY, py);
+        effMaxY = Math.max(effMaxY, py);
+      }
+    }
 
     const PAD  = 100;
     const minX = effMinX - PAD;
