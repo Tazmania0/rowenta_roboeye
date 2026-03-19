@@ -11,6 +11,7 @@ Key improvements over v1:
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -434,13 +435,26 @@ def _extract_floor_plan(
                 pass
 
     def _make_room(area_id: Any, pts: list) -> dict[str, Any]:
+        # Deduplicate while preserving unique points
+        seen: set = set()
+        unique: list = []
+        for p in pts:
+            key = (p[0], p[1])
+            if key not in seen:
+                seen.add(key)
+                unique.append(p)
+        pts = unique or pts
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
+        cx = sum(xs) / len(xs)
+        cy = sum(ys) / len(ys)
+        # Sort by angle from centroid → proper non-self-intersecting polygon
+        pts_sorted = sorted(pts, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
         return {
             "id":      area_id,
             "name":    name_by_id.get(area_id, f"Room {area_id}"),
-            "polygon": pts,
-            "center":  {"x": sum(xs) / len(xs), "y": sum(ys) / len(ys)},
+            "polygon": pts_sorted,
+            "center":  {"x": cx, "y": cy},
         }
 
     result: list[dict[str, Any]] = []
@@ -459,7 +473,12 @@ def _extract_floor_plan(
             area_id  = poly.get("id") or poly.get("area_id") or i
             segments = poly.get("segments", [])
             if segments:
-                pts = [[s["x1"], s["y1"]] for s in segments if "x1" in s]
+                pts = []
+                for s in segments:
+                    if "x1" in s:
+                        pts.append([s["x1"], s["y1"]])
+                    if "x2" in s:
+                        pts.append([s["x2"], s["y2"]])
             else:
                 raw_pts = poly.get("polygon") or poly.get("points") or []
                 pts = [
