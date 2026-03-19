@@ -50,6 +50,10 @@ from .const import (
 )
 
 
+_MAX_PATH_POINTS = 2000
+_MIN_MOVE_UNITS  = 5   # ~1 cm threshold before appending a new path point
+
+
 class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator that merges multiple independently-timed API calls."""
 
@@ -85,6 +89,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Deep clean mode — toggled by switch entity, read by all clean operations
         self.deep_clean_enabled: bool = False
 
+        # Last-session replay state
+        self._robot_path: list[tuple[float, float]] = []
+        self._last_session_grid: dict = {}
+        self._last_session_path: list = []
+        self._last_session_outline: list = []
+        self._last_mode: str = ""
+        self._session_complete: bool = False
+
     # ── Device identifier ─────────────────────────────────────────────
 
     @property
@@ -112,6 +124,33 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             mode = data[DATA_STATUS].get("mode", "")
             is_active = mode in (MODE_CLEANING, MODE_GO_HOME)
+
+            # ── Session lifecycle tracking ────────────────────────────
+            was_cleaning = self._last_mode == MODE_CLEANING
+            now_docked   = not is_active and mode not in (MODE_CLEANING, MODE_GO_HOME)
+
+            if mode == MODE_CLEANING and self._last_mode != MODE_CLEANING:
+                self._robot_path = []
+                self._last_session_grid = {}
+                self._last_session_path = []
+                self._last_session_outline = []
+                self._session_complete = False
+                LOGGER.debug("New cleaning session — path and grid reset")
+
+            if was_cleaning and now_docked and not self._session_complete:
+                self._last_session_grid    = data.get(DATA_CLEANING_GRID, {})
+                self._last_session_path    = list(self._robot_path)
+                self._last_session_outline = _parse_live_outline(
+                    data.get(DATA_SEEN_POLYGON, {})
+                )
+                self._session_complete = True
+                LOGGER.info(
+                    "Cleaning session complete — frozen grid=%s cells, path=%d points",
+                    self._last_session_grid.get("size_x", 0),
+                    len(self._last_session_path),
+                )
+
+            self._last_mode = mode
 
             # ── Adaptive live-map polling: 5 s active / 60 s idle ────
             live_map_interval = 5 if is_active else 60
@@ -160,7 +199,28 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     seen_poly_saved_map=data.get(DATA_SEEN_POLY_SAVED_MAP, {}),
                     is_active=is_active,
                     map_id=self.map_id,
+                    robot_path=self._robot_path,
+                    last_session_grid=self._last_session_grid,
+                    last_session_path=self._last_session_path,
+                    last_session_outline=self._last_session_outline,
+                    session_complete=self._session_complete,
                 )
+
+                # ── Accumulate robot path during cleaning ─────────────
+                if mode == MODE_CLEANING:
+                    robot = data[DATA_LIVE_MAP].get("robot")
+                    if robot:
+                        pt: tuple[float, float] = (robot["x"], robot["y"])
+                        if (
+                            not self._robot_path
+                            or (pt[0] - self._robot_path[-1][0]) ** 2
+                            + (pt[1] - self._robot_path[-1][1]) ** 2
+                            >= _MIN_MOVE_UNITS ** 2
+                        ):
+                            self._robot_path.append(pt)
+                            if len(self._robot_path) > _MAX_PATH_POINTS:
+                                self._robot_path = self._robot_path[-_MAX_PATH_POINTS:]
+
                 self._last_live_map = now
 
             # ── Every 300 s: areas + sensor status ───────────────────
@@ -202,6 +262,25 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     data[DATA_SEEN_POLY_SAVED_MAP] = await self.client.get_seen_polygon(self.map_id)
                 except CannotConnect:
                     LOGGER.debug("get_seen_polygon (map geometry) unavailable, skipping")
+
+                # Load last-session grid from saved map (also runs on startup)
+                if not is_active:
+                    try:
+                        saved_grid = await self.client.get_cleaning_grid_map(
+                            map_id=self.map_id
+                        )
+                        if saved_grid.get("size_x", 0) > 0:
+                            self._last_session_grid = saved_grid
+                            if not self._session_complete:
+                                self._session_complete = True
+                                LOGGER.info(
+                                    "Loaded last session grid from saved map: %d×%d",
+                                    saved_grid["size_x"],
+                                    saved_grid["size_y"],
+                                )
+                    except CannotConnect:
+                        LOGGER.debug("get_cleaning_grid_map saved map unavailable")
+
                 self._last_map_geometry = now
 
             # ── Every 600 s: lifetime statistics ─────────────────────
@@ -324,6 +403,22 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def robot_info(self) -> dict[str, Any]:
         return (self.data or {}).get(DATA_ROBOT_INFO, {})
 
+    @property
+    def last_session_grid(self) -> dict:
+        return self._last_session_grid
+
+    @property
+    def last_session_path(self) -> list:
+        return self._last_session_path
+
+    @property
+    def last_session_outline(self) -> list:
+        return self._last_session_outline
+
+    @property
+    def session_complete(self) -> bool:
+        return self._session_complete
+
     # ── Command helper ────────────────────────────────────────────────
 
     async def async_send_command(self, coro_func, *args: Any, **kwargs: Any) -> None:
@@ -381,6 +476,22 @@ def _calc_area_m2(points: list[dict]) -> float:
     return round(a * 4e-6, 1)  # units² → m²  (1 unit = 2 mm = 0.2 cm)
 
 
+def _parse_live_outline(seen_polygon_raw: dict) -> list:
+    """Extract the outer boundary polygon from a /get/seen_polygon response."""
+    polygons = (
+        seen_polygon_raw.get("seen_polygon", {}).get("polygons")
+        or seen_polygon_raw.get("polygons")
+        or []
+    )
+    for poly in polygons:
+        segs = poly.get("segments", [])
+        if segs:
+            pts = [[s["x1"], s["y1"]] for s in segs]
+            pts.append([segs[-1]["x2"], segs[-1]["y2"]])
+            return pts
+    return []
+
+
 def _build_live_map_payload(
     existing: dict[str, Any],
     live_params: dict[str, Any],
@@ -393,6 +504,11 @@ def _build_live_map_payload(
     seen_poly_saved_map: dict[str, Any],
     is_active: bool,
     map_id: str,
+    robot_path: list,
+    last_session_grid: dict,
+    last_session_path: list,
+    last_session_outline: list,
+    session_complete: bool,
 ) -> dict[str, Any]:
     """Compose the live_map attribute dict for the SVG card sensor.
 
@@ -495,20 +611,21 @@ def _build_live_map_payload(
                     "heading_deg": round(h / _HEADING_SCALE, 1),
                 }
 
-    # ── Live outline (during cleaning — /get/seen_polygon without map_id) ──
-    live_outline: list[list[int]] = []
+    # ── Live / session outline ────────────────────────────────────────
     if is_active:
-        lp_polygons = (
-            seen_polygon_raw.get("seen_polygon", {}).get("polygons")
-            or seen_polygon_raw.get("polygons")
-            or []
-        )
-        for poly in lp_polygons:
-            segs = poly.get("segments", [])
-            if segs:
-                live_outline = [[s["x1"], s["y1"]] for s in segs]
-                live_outline.append([segs[-1]["x2"], segs[-1]["y2"]])
-                break
+        live_outline: list[list[int]] = _parse_live_outline(seen_polygon_raw)
+    elif session_complete:
+        live_outline = list(last_session_outline)
+    else:
+        live_outline = []
+
+    # ── Select display grid and path (live during cleaning, frozen after) ──
+    if is_active:
+        display_grid = cleaning_grid if isinstance(cleaning_grid, dict) and cleaning_grid.get("size_x", 0) > 0 else {}
+        display_path = list(robot_path)
+    else:
+        display_grid = last_session_grid
+        display_path = last_session_path
 
     # ── Bounding box ─────────────────────────────────────────────────
     all_pts: list[list[int]] = (
@@ -517,6 +634,15 @@ def _build_live_map_payload(
         + live_outline
         + ([[dock["x"], dock["y"]]] if dock else [])
     )
+    # Include grid extents in bounds
+    g = display_grid
+    if g.get("size_x", 0) > 0:
+        gx0 = g["lower_left_x"]
+        gy0 = g["lower_left_y"]
+        gx1 = gx0 + g["size_x"] * g["resolution"]
+        gy1 = gy0 + g["size_y"] * g["resolution"]
+        all_pts += [[gx0, gy0], [gx1, gy1]]
+
     if all_pts:
         xs = [p[0] for p in all_pts]
         ys = [p[1] for p in all_pts]
@@ -538,4 +664,7 @@ def _build_live_map_payload(
         "live_outline": live_outline,
         "bounds": bounds,
         "scale": "mm",  # 1 API unit = 2 mm
+        "cleaning_grid": display_grid,
+        "robot_path": display_path,
+        "session_complete": session_complete,
     }

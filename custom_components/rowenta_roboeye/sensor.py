@@ -375,6 +375,8 @@ class RobEyeLiveMapSensor(RobEyeEntity, SensorEntity):
             return "cleaning"
         if mode == MODE_GO_HOME:
             return "returning"
+        if self.coordinator.session_complete:
+            return "session_complete"
         return "idle"
 
     @property

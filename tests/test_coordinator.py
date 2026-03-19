@@ -19,7 +19,7 @@ from custom_components.rowenta_roboeye.const import (
 )
 from custom_components.rowenta_roboeye.coordinator import RobEyeCoordinator
 
-from .conftest import MOCK_AREAS, MOCK_STATISTICS, MOCK_STATUS
+from .conftest import MOCK_AREAS, MOCK_CLEANING_GRID, MOCK_STATISTICS, MOCK_STATUS
 
 
 @pytest.fixture
@@ -208,3 +208,64 @@ def test_live_parameters_property(coordinator):
 def test_robot_info_property(coordinator):
     coordinator.data = {DATA_ROBOT_INFO: {"wifi_status": {"rssi": -55}}}
     assert coordinator.robot_info["wifi_status"]["rssi"] == -55
+
+
+# ── Last-session / session replay ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_startup_loads_last_session_grid(coordinator, mock_client):
+    """On first update (geometry bucket runs), saved grid is loaded and
+    session_complete becomes True."""
+    coordinator.data = {}
+    await coordinator._async_update_data()
+
+    mock_client.get_cleaning_grid_map.assert_called_with(map_id="3")
+    assert coordinator.last_session_grid["size_x"] == 29
+    assert coordinator.session_complete is True
+
+
+@pytest.mark.asyncio
+async def test_new_cleaning_run_resets_session_state(coordinator, mock_client):
+    """When mode transitions to CLEANING, frozen session state is cleared."""
+    coordinator.data = {}
+    # Pre-populate session data
+    coordinator._last_session_grid = dict(MOCK_CLEANING_GRID)
+    coordinator._last_session_path = [(1.0, 2.0), (3.0, 4.0)]
+    coordinator._session_complete = True
+    coordinator._last_mode = "ready"
+
+    mock_client.get_status.return_value = {**MOCK_STATUS, "mode": "cleaning"}
+    await coordinator._async_update_data()
+
+    assert coordinator._last_session_grid == {}
+    assert coordinator._last_session_path == []
+    assert coordinator._session_complete is False
+
+
+@pytest.mark.asyncio
+async def test_session_frozen_on_dock(coordinator, mock_client):
+    """When robot docks after cleaning, session data is frozen."""
+    from custom_components.rowenta_roboeye.const import DATA_CLEANING_GRID, DATA_SEEN_POLYGON
+
+    coordinator.data = {
+        DATA_CLEANING_GRID: dict(MOCK_CLEANING_GRID),
+        DATA_SEEN_POLYGON: {},
+    }
+    coordinator._last_mode = "cleaning"
+    coordinator._robot_path = [(0.0, 0.0), (10.0, 5.0)]
+    coordinator._session_complete = False
+
+    mock_client.get_status.return_value = {**MOCK_STATUS, "mode": "ready"}
+    await coordinator._async_update_data()
+
+    assert coordinator._session_complete is True
+    assert coordinator.last_session_grid["size_x"] == 29
+    assert coordinator.last_session_path == [(0.0, 0.0), (10.0, 5.0)]
+
+
+def test_session_complete_property_default(coordinator):
+    assert coordinator.session_complete is False
+
+
+def test_last_session_grid_property_default(coordinator):
+    assert coordinator.last_session_grid == {}

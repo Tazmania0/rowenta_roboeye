@@ -62,6 +62,21 @@ MOCK_PROTOCOL_VERSION = {"version": "2.3.1"}
 MOCK_LIVE_PARAMETERS = {"area_cleaned": 50000, "cleaning_time": 720}
 MOCK_SENSOR_STATUS = {"cliff_sensor": "ok", "bump_sensor": "ok", "wheel_drop": "ok"}
 MOCK_ROBOT_FLAGS = {"has_mop": False, "has_camera": True}
+MOCK_CLEANING_GRID = {
+    "map_id": 3,
+    "lower_left_x": -823,
+    "lower_left_y": -579,
+    "size_x": 29,
+    "size_y": 29,
+    "resolution": 40,
+    "cleaned": [
+        1, 104, 5, 23, 8, 22, 8, 21, 8, 21, 8, 21, 8, 21, 8, 21,
+        8, 7, 3, 11, 8, 7, 4, 10, 8, 7, 5, 1, 3, 5, 7, 8, 10, 4,
+        4, 11, 10, 3, 5, 11, 18, 11, 21, 8, 21, 8, 22, 7, 23, 6,
+        23, 10, 19, 12, 17, 12, 17, 12, 17, 90,
+    ],
+    "timestamp": 389888076,
+}
 
 
 @pytest.fixture
@@ -80,6 +95,7 @@ def mock_client():
     client.get_live_parameters.return_value = dict(MOCK_LIVE_PARAMETERS)
     client.get_sensor_status.return_value = dict(MOCK_SENSOR_STATUS)
     client.get_robot_flags.return_value = dict(MOCK_ROBOT_FLAGS)
+    client.get_cleaning_grid_map.return_value = dict(MOCK_CLEANING_GRID)
     client.test_connection.return_value = True
     client.clean_all.return_value = None
     client.clean_map.return_value = None
