@@ -1,9 +1,8 @@
-// Rowenta Xplorer 120 — Live Map Card  v2.1.0
-// Renders rooms, walls, dock, robot and live outline from the new
-// _build_live_map_payload() schema (map_id, rooms, outline, walls,
-// dock, robot, live_outline, bounds, scale).
+// Rowenta Xplorer 120 — Live Map Card  v2.3.0
+// Renders rooms, walls, dock, robot, live outline and post-run session
+// replay (cleaning grid + robot trail) from _build_live_map_payload() schema.
 
-const VERSION = "2.2.0";
+const VERSION = "2.3.0";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -13,6 +12,47 @@ function centroid(pts) {
   const sx = pts.reduce((a, p) => a + p[0], 0);
   const sy = pts.reduce((a, p) => a + p[1], 0);
   return { x: sx / pts.length, y: sy / pts.length };
+}
+
+/**
+ * Decode a cleaning grid's RLE `cleaned` array into renderable rects.
+ *
+ * The `cleaned` array alternates [empty_run, filled_run, empty_run, …]
+ * scanning left-to-right, row-by-row from the bottom (lower_left origin).
+ *
+ * Returns { rects:[{x,y,w,h}], res, lower_left_x, lower_left_y, size_x, size_y }
+ * where x/y/w/h are in API units (1 unit = 2 mm = 0.2 cm).
+ * Returns null if the grid is missing or empty.
+ */
+function decodeCleaningGrid(grid) {
+  if (!grid || !grid.size_x || !grid.cleaned?.length) return null;
+  const { lower_left_x, lower_left_y, size_x, size_y, resolution, cleaned } = grid;
+  const rects = [];
+  let cellIdx = 0;
+  let isFilled = false;  // first run is always "empty"
+  for (let ri = 0; ri < cleaned.length; ri++) {
+    const runLen = cleaned[ri];
+    if (isFilled) {
+      let remaining = runLen;
+      while (remaining > 0) {
+        const col = cellIdx % size_x;
+        const row = Math.floor(cellIdx / size_x);
+        const runInRow = Math.min(remaining, size_x - col);
+        rects.push({
+          x: lower_left_x + col * resolution,
+          y: lower_left_y + row * resolution,
+          w: runInRow * resolution,
+          h: resolution,
+        });
+        cellIdx += runInRow;
+        remaining -= runInRow;
+      }
+    } else {
+      cellIdx += runLen;
+    }
+    isFilled = !isFilled;
+  }
+  return { rects, res: resolution, lower_left_x, lower_left_y, size_x, size_y };
 }
 
 /** Shoelace formula — polygon area in the same units² as input coords. */
@@ -84,22 +124,27 @@ class RowentaMapCard extends HTMLElement {
   _renderFull(mapState, attrs) {
     const cfg = this._config;
 
-    const rooms      = attrs.rooms       || [];
-    const outline    = attrs.outline     || [];
-    const walls      = attrs.walls       || [];
-    const dock       = attrs.dock        || null;
-    const robot      = attrs.robot       || null;
-    const liveOut    = attrs.live_outline || [];
-    const bounds     = attrs.bounds      || null;
-    const isActive   = attrs.is_active   || false;
+    const rooms           = attrs.rooms            || [];
+    const outline         = attrs.outline          || [];
+    const walls           = attrs.walls            || [];
+    const dock            = attrs.dock             || null;
+    const robot           = attrs.robot            || null;
+    const liveOut         = attrs.live_outline     || [];
+    const bounds          = attrs.bounds           || null;
+    const isActive        = attrs.is_active        || false;
+    const cleaningGrid    = attrs.cleaning_grid    || null;
+    const robotPath       = attrs.robot_path       || [];
+    const sessionComplete = attrs.session_complete || false;
 
-    const stateColor = mapState === "cleaning"  ? "#4CAF50"
-                     : mapState === "returning" ? "#FF9800"
-                     : mapState === "mapping"   ? "#2196F3"
+    const stateColor = mapState === "cleaning"         ? "#4CAF50"
+                     : mapState === "returning"        ? "#FF9800"
+                     : mapState === "mapping"          ? "#2196F3"
+                     : mapState === "session_complete" ? "#4CAF50"
                      : "var(--secondary-text-color)";
 
     const svgHtml = this._buildSvg(
-      rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg
+      rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
+      cleaningGrid, robotPath, sessionComplete
     );
 
     const frozen = this._frozen;
@@ -170,7 +215,8 @@ class RowentaMapCard extends HTMLElement {
 
   // ── SVG renderer ──────────────────────────────────────────────────────
 
-  _buildSvg(rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg) {
+  _buildSvg(rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
+            cleaningGrid, robotPath, sessionComplete) {
     if (!bounds) {
       return `<div class="empty">
         <div style="font-size:40px;opacity:.25">🏠</div>
@@ -217,7 +263,8 @@ class RowentaMapCard extends HTMLElement {
 
     // ── Layer 2: room fills ─────────────────────────────────────────
     let roomFills = "";
-    const roomOpacity = cfg.room_opacity ?? 0.25;
+    // In session_complete mode, rooms are faint background reference only
+    const roomOpacity = sessionComplete ? 0.10 : (cfg.room_opacity ?? 0.25);
     for (const room of rooms) {
       const p = room.polygon || [];
       if (p.length < 3) continue;
@@ -252,12 +299,46 @@ class RowentaMapCard extends HTMLElement {
       }
     }
 
-    // ── Layer 4: live outline (during cleaning) ─────────────────────
+    // ── Layer 4a: cleaned-area grid cells ───────────────────────────
+    const gridData = decodeCleaningGrid(cleaningGrid);
+    let gridLayer = "";
+    if (gridData?.rects?.length) {
+      const gridFill   = sessionComplete ? "rgba(76,175,80,0.32)" : "rgba(76,175,80,0.45)";
+      const gridStroke = sessionComplete ? "rgba(45,122,45,0.2)"  : "rgba(45,122,45,0.3)";
+      gridLayer = gridData.rects.map(r => {
+        const gx1 = r.x - minX;
+        const gy1 = flipY(r.y + r.h) - minY;   // top-left in SVG (flip bottom edge up)
+        const gw  = r.w;
+        const gh  = r.h;
+        return `<rect x="${gx1.toFixed(1)}" y="${gy1.toFixed(1)}"
+          width="${gw}" height="${gh}"
+          fill="${gridFill}" stroke="${gridStroke}" stroke-width="0.4"/>`;
+      }).join("");
+    }
+
+    // ── Layer 4b: live outline (during cleaning) ─────────────────────
     let liveOutline = "";
     if (liveOut.length > 2) {
       liveOutline = `<polygon points="${pts2str(liveOut)}"
         fill="#00aaff" fill-opacity="0.08"
         stroke="#00aaff" stroke-width="1.5" stroke-dasharray="6,3"/>`;
+    }
+
+    // ── Layer 4c: robot path trail ───────────────────────────────────
+    let trailLayer = "";
+    if (robotPath?.length >= 2) {
+      const dimOp    = sessionComplete ? 0.55 : 0.20;
+      const brightOp = sessionComplete ? 0.85 : 0.70;
+      const allPts   = robotPath.map(([x, y]) => `${x - minX},${flipY(y) - minY}`).join(" ");
+      const recentPts = robotPath.slice(-30)
+                          .map(([x, y]) => `${x - minX},${flipY(y) - minY}`).join(" ");
+      trailLayer = `
+        <polyline points="${allPts}"
+          fill="none" stroke="#64B5F6" stroke-width="2.5"
+          stroke-opacity="${dimOp}" stroke-linecap="round" stroke-linejoin="round"/>
+        <polyline points="${recentPts}"
+          fill="none" stroke="#64B5F6" stroke-width="5"
+          stroke-opacity="${brightOp}" stroke-linecap="round" stroke-linejoin="round"/>`;
     }
 
     // ── Layer 5: room labels ────────────────────────────────────────
@@ -343,16 +424,45 @@ class RowentaMapCard extends HTMLElement {
       </g>`;
     }
 
+    // ── Session badge (top-right, session_complete mode only) ────────
+    let sessionBadge = "";
+    if (sessionComplete) {
+      let cleanedM2 = "?";
+      if (gridData?.rects?.length) {
+        const cellSizeCm = (gridData.res ?? 40) * 0.2;   // API units × 0.2 cm/unit
+        const cellM2     = (cellSizeCm / 100) ** 2;       // cm → m
+        const cellCount  = gridData.rects.reduce(
+          (s, r) => s + (r.w / gridData.res) * (r.h / gridData.res), 0
+        );
+        cleanedM2 = (cellCount * cellM2).toFixed(2);
+      }
+      // Place badge anchored to top-right corner of SVG
+      const bx = W - 10;
+      const by = 10;
+      sessionBadge = `
+        <g transform="translate(${bx},${by})">
+          <rect x="-148" y="-14" width="148" height="28" rx="8"
+            fill="rgba(13,26,10,0.9)" stroke="#4CAF50" stroke-width="1.5"/>
+          <text x="-74" y="0" text-anchor="middle" dominant-baseline="middle"
+            fill="#4CAF50" font-size="14" font-family="sans-serif" font-weight="600">
+            ✓ Last session · ${cleanedM2} m²
+          </text>
+        </g>`;
+    }
+
     return `<svg viewBox="0 0 ${W} ${H}"
       xmlns="http://www.w3.org/2000/svg"
       style="width:100%;height:auto;transform:rotate(${cfg.rotate ?? 0}deg)">
       ${floorFill}
       ${roomFills}
       ${wallLines}
+      ${gridLayer}
       ${liveOutline}
+      ${trailLayer}
       ${labels}
       ${dockIcon}
       ${robotIcon}
+      ${sessionBadge}
     </svg>`;
   }
 

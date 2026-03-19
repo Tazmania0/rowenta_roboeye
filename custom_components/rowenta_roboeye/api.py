@@ -212,9 +212,14 @@ class RobEyeApiClient:
 
     # ── Map geometry (on-demand / low-frequency) ─────────────────────
 
-    async def get_cleaning_grid_map(self) -> dict[str, Any]:
-        """GET /get/cleaning_grid_map — binary occupancy grid map data."""
-        return await self._get(API_GET_CLEANING_GRID_MAP)
+    async def get_cleaning_grid_map(self, map_id: str | None = None) -> dict[str, Any]:
+        """GET /get/cleaning_grid_map[?map_id=X] — occupancy grid map data.
+
+        Without map_id: live session grid (only during active cleaning).
+        With map_id=3:  last completed session grid (persists after dock).
+        """
+        params = {"map_id": map_id} if map_id is not None else None
+        return await self._get(API_GET_CLEANING_GRID_MAP, params=params)
 
     async def get_topo_map(self, map_id: str | None = None) -> dict[str, Any]:
         """GET /get/topo_map[?map_id=X] — topological navigation map."""

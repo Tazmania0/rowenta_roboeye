@@ -236,3 +236,36 @@ def test_format_date_empty_returns_none():
 
 def test_format_date_none_returns_none():
     assert _format_date(None) is None
+
+
+# ── Live map sensor state ─────────────────────────────────────────────
+
+def _make_live_map_sensor(mode="ready", session_complete=False):
+    from custom_components.rowenta_roboeye.sensor import RobEyeLiveMapSensor
+    coord = _make_coordinator()
+    coord.status = {**MOCK_STATUS, "mode": mode}
+    coord.session_complete = session_complete
+    coord.live_map = {"rooms": [], "live_outline": []}
+    s = RobEyeLiveMapSensor.__new__(RobEyeLiveMapSensor)
+    s.coordinator = coord
+    return s
+
+
+def test_live_map_state_cleaning():
+    s = _make_live_map_sensor(mode="cleaning")
+    assert s.native_value == "cleaning"
+
+
+def test_live_map_state_returning():
+    s = _make_live_map_sensor(mode="go_home")
+    assert s.native_value == "returning"
+
+
+def test_live_map_state_session_complete():
+    s = _make_live_map_sensor(mode="ready", session_complete=True)
+    assert s.native_value == "session_complete"
+
+
+def test_live_map_state_idle():
+    s = _make_live_map_sensor(mode="ready", session_complete=False)
+    assert s.native_value == "idle"
