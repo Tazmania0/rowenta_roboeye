@@ -125,6 +125,12 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             mode = data[DATA_STATUS].get("mode", "")
             is_active = mode in (MODE_CLEANING, MODE_GO_HOME)
 
+            # ── Bug 3: Dynamically adjust polling rate ────────────────
+            target_interval = timedelta(seconds=5 if is_active else 15)
+            if self.update_interval != target_interval:
+                self.update_interval = target_interval
+                LOGGER.debug("Coordinator interval → %s s", target_interval.seconds)
+
             # ── Session lifecycle tracking ────────────────────────────
             was_cleaning = self._last_mode == MODE_CLEANING
             now_docked   = not is_active and mode not in (MODE_CLEANING, MODE_GO_HOME)
@@ -179,13 +185,21 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         data[DATA_CLEANING_GRID] = cleaning_grid
                     except CannotConnect:
                         LOGGER.debug("get_cleaning_grid_map unavailable, skipping")
+                    # Bug 1: /debug/relocalization returns live "continuous" entries
+                    # during cleaning; /debug/localization only has stale "global"
+                    # entries computed at session start (docked position).
+                    try:
+                        localization = await self.client.get_relocalization()
+                        LOGGER.debug("relocalization raw: %s", localization)
+                    except CannotConnect:
+                        LOGGER.debug("get_relocalization unavailable, skipping")
+                else:
+                    data[DATA_SEEN_POLYGON] = {}
+                    data[DATA_CLEANING_GRID] = {}
                     try:
                         localization = await self.client.get_localization()
                     except CannotConnect:
                         LOGGER.debug("get_localization unavailable, skipping")
-                else:
-                    data[DATA_SEEN_POLYGON] = {}
-                    data[DATA_CLEANING_GRID] = {}
 
                 data[DATA_LIVE_MAP] = _build_live_map_payload(
                     existing=data.get(DATA_LIVE_MAP, {}),
@@ -516,8 +530,6 @@ def _build_live_map_payload(
       map_id, is_active, rooms, outline, walls, dock, robot,
       live_outline, bounds, scale
     """
-    import math as _math
-
     # ── Rooms (from /get/areas?map_id) ───────────────────────────────
     rooms: list[dict[str, Any]] = []
     for idx, area in enumerate(areas_data.get("areas", [])):
@@ -579,29 +591,44 @@ def _build_live_map_payload(
         }
 
     # ── Robot live position ───────────────────────────────────────────
-    # Supports two localization response formats:
-    #   1. /debug/localization: { localization_algo_input: [{ rob_pose: [x, y, heading_mrad] }] }
-    #   2. Generic: { position: { x, y, heading } } or { pose: { x, y, angle } }
+    # Bug 2: Select the correct entry type based on which endpoint was called.
+    #   Active   → /debug/relocalization → "continuous" entries (use LAST = most recent)
+    #   Idle     → /debug/localization   → "global" or "startpoint" entries (use first match)
+    # heading_raw is in units where 65536 == 360° (not milliradians).
     robot: dict[str, Any] | None = None
-    if is_active and localization:
-        # Format 1: /debug/localization
+    if localization:
         entries = localization.get("localization_algo_input", [])
-        rob_pose = None
-        for entry in entries:
-            rp = entry.get("rob_pose")
-            if isinstance(rp, list) and len(rp) >= 2:
-                rob_pose = rp
-                break
-        if rob_pose is not None:
-            heading_mrad = rob_pose[2] if len(rob_pose) > 2 else 0
-            heading_deg = _math.degrees(heading_mrad / 1000.0)
-            robot = {
-                "x": rob_pose[0],
-                "y": rob_pose[1],
-                "heading_deg": round(heading_deg, 1),
-            }
+        entry = None
+        if is_active:
+            # /debug/relocalization: multiple "continuous" entries, last is newest
+            entry = next(
+                (e for e in reversed(entries)
+                 if e.get("localization_type") == "continuous"),
+                None,
+            )
         else:
-            # Format 2: generic position/pose dict
+            # /debug/localization: prefer "global" full-map match, fall back to "startpoint"
+            entry = next(
+                (e for e in entries if e.get("localization_type") == "global"),
+                None,
+            ) or next(
+                (e for e in entries if e.get("localization_type") == "startpoint"),
+                None,
+            )
+
+        if entry is not None:
+            rob_pose = entry.get("rob_pose")
+            if isinstance(rob_pose, list) and len(rob_pose) >= 2:
+                x, y = rob_pose[0], rob_pose[1]
+                h_raw = rob_pose[2] if len(rob_pose) > 2 else 0
+                robot = {
+                    "x": x,
+                    "y": y,
+                    "heading_deg": round(h_raw / _HEADING_SCALE, 1),
+                }
+
+        if robot is None and not entries:
+            # Fallback: generic position/pose dict
             loc = localization.get("position", {}) or localization.get("pose", {})
             if loc:
                 h = loc.get("heading", loc.get("angle", 0))
