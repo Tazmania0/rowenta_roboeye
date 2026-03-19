@@ -373,6 +373,36 @@ class RobEyeDashboardManager:
             self._last_hash = None   # retry next cycle
             _LOGGER.warning("RobEye dashboard: async_save() failed: %s", err)
 
+    async def async_delete(self, hass: HomeAssistant) -> None:
+        """Remove the dashboard from the Lovelace registry."""
+        try:
+            from homeassistant.components.lovelace.dashboard import DashboardsCollection
+        except ImportError as err:
+            _LOGGER.warning("RobEye dashboard: cannot import lovelace internals: %s", err)
+            return
+
+        dashboards_collection = DashboardsCollection(hass)
+        try:
+            await dashboards_collection.async_load()
+        except Exception as err:
+            _LOGGER.warning("RobEye dashboard: async_load() failed during delete: %s", err)
+            return
+
+        item = next(
+            (i for i in dashboards_collection.async_items()
+             if i.get(_CONF_URL_PATH) == DASHBOARD_URL_PATH),
+            None,
+        )
+        if item is None:
+            _LOGGER.debug("RobEye dashboard: '%s' not found in registry — nothing to delete", DASHBOARD_URL_PATH)
+            return
+
+        try:
+            await dashboards_collection.async_delete_item(item["id"])
+            _LOGGER.info("RobEye dashboard: deleted '%s'", DASHBOARD_URL_PATH)
+        except Exception as err:
+            _LOGGER.warning("RobEye dashboard: async_delete_item() failed: %s", err)
+
     async def _async_get_lovelace_store(self, hass: HomeAssistant) -> Any | None:
         """Return the LovelaceStorage object for our dashboard.
 
