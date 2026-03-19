@@ -17,7 +17,7 @@ function centroid(pts) {
 /**
  * Decode a cleaning grid's RLE `cleaned` array into renderable rects.
  *
- * The `cleaned` array alternates [empty_run, filled_run, empty_run, …]
+ * The `cleaned` array alternates [filled_run, empty_run, filled_run, …]
  * scanning left-to-right, row-by-row from the bottom (lower_left origin).
  *
  * Returns { rects:[{x,y,w,h}], res, lower_left_x, lower_left_y, size_x, size_y }
@@ -29,7 +29,7 @@ function decodeCleaningGrid(grid) {
   const { lower_left_x, lower_left_y, size_x, size_y, resolution, cleaned } = grid;
   const rects = [];
   let cellIdx = 0;
-  let isFilled = false;  // first run is always "empty"
+  let isFilled = true;  // first run is always "filled" (cleaned)
   for (let ri = 0; ri < cleaned.length; ri++) {
     const runLen = cleaned[ri];
     if (isFilled) {
