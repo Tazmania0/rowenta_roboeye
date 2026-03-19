@@ -1,0 +1,34 @@
+clean_room:
+  name: Clean room(s)
+  description: >
+    Start a targeted clean of one or more rooms by their RobEye area IDs.
+    The vacuum must be docked or idle.  Multiple room IDs are cleaned in sequence.
+  target:
+    entity:
+      integration: rowenta_roboeye
+      domain: vacuum
+  fields:
+    room_ids:
+      name: Room IDs
+      description: >
+        List of area IDs to clean (integers or strings).
+        Find IDs in the RobEye app map view or from the
+        sensor.xplorer120_<room>_cleanings entity names.
+      required: true
+      example: "[3, 11]"
+      selector:
+        object:
+    fan_speed:
+      name: Fan speed
+      description: >
+        Optional fan speed override for this clean.
+        Defaults to the current select.xplorer120_cleaning_mode value.
+      required: false
+      example: "high"
+      selector:
+        select:
+          options:
+            - "eco"
+            - "normal"
+            - "high"
+            - "silent"

@@ -1,0 +1,5 @@
+{
+  "name": "Rowenta Xplorer 120",
+  "iot_class": "local_polling",
+  "homeassistant": "2024.1.0"
+}

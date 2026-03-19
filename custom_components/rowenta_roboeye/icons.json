@@ -1,0 +1,77 @@
+{
+  "entity": {
+    "sensor": {
+      "total_area_cleaned": {
+        "default": "mdi:texture-box"
+      },
+      "current_area_cleaned": {
+        "default": "mdi:texture-box"
+      },
+      "total_cleaning_time": {
+        "default": "mdi:clock"
+      },
+      "current_cleaning_time": {
+        "default": "mdi:timer"
+      },
+      "total_distance_driven": {
+        "default": "mdi:map-marker-distance"
+      },
+      "total_number_of_cleaning_runs": {
+        "default": "mdi:counter"
+      },
+      "mode": {
+        "default": "mdi:robot-vacuum"
+      },
+      "charging": {
+        "default": "mdi:battery-charging"
+      },
+      "fan_speed_label": {
+        "default": "mdi:speedometer"
+      },
+      "wifi_rssi": {
+        "default": "mdi:wifi"
+      },
+      "wifi_ssid": {
+        "default": "mdi:wifi"
+      },
+      "protocol_version": {
+        "default": "mdi:tag-text"
+      },
+      "robot_serial": {
+        "default": "mdi:identifier"
+      },
+      "sensor_cliff_status": {
+        "default": "mdi:alert-circle-outline"
+      },
+      "sensor_bump_status": {
+        "default": "mdi:alert-circle-outline"
+      },
+      "sensor_wheel_drop_status": {
+        "default": "mdi:alert-circle-outline"
+      }
+    },
+    "select": {
+      "cleaning_mode": {
+        "default": "mdi:speedometer"
+      }
+    },
+    "button": {
+      "go_home": {
+        "default": "mdi:home-import-outline"
+      },
+      "stop": {
+        "default": "mdi:stop-circle-outline"
+      },
+      "clean_all": {
+        "default": "mdi:robot-vacuum"
+      }
+    }
+  },
+  "integration": {
+    "logo": "mdi:robot-vacuum",
+    "icon": "mdi:robot-vacuum"
+  },
+  "services": {
+    "clean_room": "mdi:robot-vacuum-variant"
+  }
+}

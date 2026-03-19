@@ -1,0 +1,150 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Device is already configured.",
+      "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address."
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address.",
+      "unknown": "Unexpected error occurred."
+    },
+    "flow_title": "{host}",
+    "step": {
+      "user": {
+        "title": "Set up Rowenta Xplorer 120",
+        "description": "Enter the local IP address of your vacuum and the map ID shown in the RobEye app.",
+        "data": {
+          "host": "Host",
+          "map_id": "Map ID"
+        },
+        "data_description": {
+          "host": "Local IP address of the vacuum (e.g. 192.168.1.50).",
+          "map_id": "Map ID from the RobEye app (default: 3)."
+        }
+      },
+      "zeroconf_confirm": {
+        "description": "Do you want to add Rowenta Xplorer 120 at {host} to Home Assistant?"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Update Rowenta Xplorer 120 Settings",
+        "data": {
+          "host": "Host",
+          "map_id": "Map ID"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address.",
+      "unknown": "Unexpected error occurred."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_level": {
+        "name": "Battery level"
+      },
+      "mode": {
+        "name": "Mode"
+      },
+      "charging": {
+        "name": "Charging status"
+      },
+      "fan_speed_label": {
+        "name": "Fan speed"
+      },
+      "current_area_cleaned": {
+        "name": "Current area cleaned"
+      },
+      "current_cleaning_time": {
+        "name": "Current cleaning time"
+      },
+      "total_distance_driven": {
+        "name": "Total distance driven"
+      },
+      "total_cleaning_time": {
+        "name": "Total cleaning time"
+      },
+      "total_area_cleaned": {
+        "name": "Total cleaned area"
+      },
+      "total_number_of_cleaning_runs": {
+        "name": "Total cleaning runs"
+      },
+      "wifi_rssi": {
+        "name": "Wi-Fi signal strength"
+      },
+      "wifi_ssid": {
+        "name": "Wi-Fi network"
+      },
+      "protocol_version": {
+        "name": "Firmware version"
+      },
+      "robot_serial": {
+        "name": "Serial number"
+      },
+      "sensor_cliff_status": {
+        "name": "Cliff sensor"
+      },
+      "sensor_bump_status": {
+        "name": "Bump sensor"
+      },
+      "sensor_wheel_drop_status": {
+        "name": "Wheel drop sensor"
+      },
+      "live_map": {
+        "name": "Live Map"
+      }
+    },
+    "select": {
+      "cleaning_mode": {
+        "name": "Cleaning mode",
+        "state": {
+          "eco": "Eco",
+          "normal": "Normal",
+          "high": "High",
+          "silent": "Silent"
+        }
+      }
+    },
+    "switch": {
+      "deep_clean_mode": {
+        "name": "Deep clean mode"
+      }
+    },
+    "vacuum": {
+      "rowenta_xplorer120": {
+        "state_attributes": {
+          "fan_speed": {
+            "state": {
+              "eco": "Eco",
+              "normal": "Normal",
+              "high": "High",
+              "silent": "Silent"
+            }
+          }
+        }
+      }
+    },
+    "button": {
+      "go_home": {
+        "name": "Return to base"
+      },
+      "stop": {
+        "name": "Stop"
+      },
+      "clean_all": {
+        "name": "Clean entire home"
+      }
+    }
+  },
+  "services": {
+    "clean_room": {
+      "name": "Clean room(s)",
+      "description": "Start a targeted clean of one or more rooms by area ID."
+    }
+  }
+}
