@@ -145,9 +145,10 @@ class RobEyeApiClient:
 
     # ── Area / map data (polled every 300 s) ─────────────────────────
 
-    async def get_areas(self, map_id: str) -> dict[str, Any]:
-        """GET /get/areas — room objects with statistics and area_meta_data."""
-        return await self._get(API_GET_AREAS, params={"map_id": map_id})
+    async def get_areas(self, map_id: str | None = None) -> dict[str, Any]:
+        """GET /get/areas[?map_id=X] — room objects with statistics and area_meta_data."""
+        params = {"map_id": map_id} if map_id is not None else None
+        return await self._get(API_GET_AREAS, params=params)
 
     async def get_maps(self) -> dict[str, Any]:
         """GET /get/maps — list of available floor-plan maps."""
@@ -215,21 +216,25 @@ class RobEyeApiClient:
         """GET /get/cleaning_grid_map — binary occupancy grid map data."""
         return await self._get(API_GET_CLEANING_GRID_MAP)
 
-    async def get_topo_map(self) -> dict[str, Any]:
-        """GET /get/topo_map — topological navigation map."""
-        return await self._get(API_GET_TOPO_MAP)
+    async def get_topo_map(self, map_id: str | None = None) -> dict[str, Any]:
+        """GET /get/topo_map[?map_id=X] — topological navigation map."""
+        params = {"map_id": map_id} if map_id is not None else None
+        return await self._get(API_GET_TOPO_MAP, params=params)
 
-    async def get_feature_map(self) -> dict[str, Any]:
-        """GET /get/feature_map — visual feature map for localisation."""
-        return await self._get(API_GET_FEATURE_MAP)
+    async def get_feature_map(self, map_id: str | None = None) -> dict[str, Any]:
+        """GET /get/feature_map[?map_id=X] — structural wall lines + docking pose."""
+        params = {"map_id": map_id} if map_id is not None else None
+        return await self._get(API_GET_FEATURE_MAP, params=params)
 
-    async def get_tile_map(self) -> dict[str, Any]:
-        """GET /get/tile_map — tile-based map representation."""
-        return await self._get(API_GET_TILE_MAP)
+    async def get_tile_map(self, map_id: str | None = None) -> dict[str, Any]:
+        """GET /get/tile_map[?map_id=X] — area IDs, wall lines, outline polygon, docking pose."""
+        params = {"map_id": map_id} if map_id is not None else None
+        return await self._get(API_GET_TILE_MAP, params=params)
 
-    async def get_seen_polygon(self) -> dict[str, Any]:
-        """GET /get/seen_polygon — already-explored polygon boundary."""
-        return await self._get(API_GET_SEEN_POLYGON)
+    async def get_seen_polygon(self, map_id: str | None = None) -> dict[str, Any]:
+        """GET /get/seen_polygon[?map_id=X] — outer boundary of explored area."""
+        params = {"map_id": map_id} if map_id is not None else None
+        return await self._get(API_GET_SEEN_POLYGON, params=params)
 
     async def get_n_n_polygons(self) -> dict[str, Any]:
         """GET /get/n_n_polygons — node-to-node navigation polygons."""

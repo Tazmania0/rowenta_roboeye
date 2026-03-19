@@ -107,6 +107,14 @@ DATA_ROBOT_FLAGS = "robot_flags"
 DATA_SEEN_POLYGON = "seen_polygon"
 DATA_LIVE_MAP = "live_map"
 DATA_CLEANING_GRID = "cleaning_grid_map"
+DATA_FEATURE_MAP = "feature_map"
+DATA_TILE_MAP = "tile_map"
+DATA_TOPO_MAP = "topo_map"
+DATA_AREAS_MAP3 = "areas_map3"
+DATA_SEEN_POLY_MAP3 = "seen_poly_map3"
+
+# ── Map-geometry refresh interval ─────────────────────────────────────
+SCAN_INTERVAL_MAP_GEOMETRY = 600
 
 # ── Resilience ────────────────────────────────────────────────────────
 MAX_POLL_FAILURES = 3

@@ -352,7 +352,7 @@ class RobEyeLiveMapSensor(RobEyeEntity, SensorEntity):
     """
 
     _attr_icon = "mdi:map"
-    _attr_entity_registry_enabled_default = False  # opt-in; required by SVG card
+    _attr_entity_registry_enabled_default = True
 
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
@@ -362,9 +362,16 @@ class RobEyeLiveMapSensor(RobEyeEntity, SensorEntity):
 
     @property
     def native_value(self) -> str:
-        mode = self.coordinator.status.get("mode", "")
         from .const import MODE_CLEANING, MODE_GO_HOME
+        mode = self.coordinator.status.get("mode", "")
+        charging = self.coordinator.status.get("charging", "")
         if mode == MODE_CLEANING:
+            # Distinguish mapping (no area data yet) from cleaning
+            live_map = self.coordinator.live_map
+            rooms = live_map.get("rooms", [])
+            live_outline = live_map.get("live_outline", [])
+            if not rooms and live_outline:
+                return "mapping"
             return "cleaning"
         if mode == MODE_GO_HOME:
             return "returning"
