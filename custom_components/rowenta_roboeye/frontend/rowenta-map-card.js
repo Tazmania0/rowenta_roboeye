@@ -3,7 +3,7 @@
 // _build_live_map_payload() schema (map_id, rooms, outline, walls,
 // dock, robot, live_outline, bounds, scale).
 
-const VERSION = "2.1.0";
+const VERSION = "2.2.0";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -193,6 +193,18 @@ class RowentaMapCard extends HTMLElement {
     const pts2str = (arr) =>
       arr.map((p) => `${p[0] - minX},${flipY(p[1]) - minY}`).join(" ");
 
+    // ── Adaptive sizing: scales with map extent so icons and text remain
+    //    legible on both mobile (narrow viewport) and desktop (wide viewport).
+    //    Map coordinates are in cm; minDim drives all proportional sizing.
+    const minDim       = Math.min(W, H);
+    const labelFontSize = Math.max(28,  (minDim * 0.038) | 0);  // room name
+    const areaFontSize  = Math.max(20,  (minDim * 0.026) | 0);  // area m²
+    const robotBodyR    = Math.max(20,  minDim * 0.030);         // robot body
+    const robotGlowR    = robotBodyR * 1.5;                      // glow ring
+    const rf            = robotBodyR / 16;                       // scale factor vs original r=16
+    const dockGlowR     = Math.max(24,  minDim * 0.036);         // dock glow
+    const df            = dockGlowR / 24;                        // scale factor vs original r=24
+
     // ── Layer 1: floor fill (seen_polygon outline) ──────────────────
     let floorFill = "";
     if (outline.length > 2) {
@@ -248,60 +260,8 @@ class RowentaMapCard extends HTMLElement {
         stroke="#00aaff" stroke-width="1.5" stroke-dasharray="6,3"/>`;
     }
 
-    // ── Layer 5: dock icon (home) ───────────────────────────────────
-    let dockIcon = "";
-    if (cfg.show_dock && dock) {
-      const dx = dock.x - minX;
-      const dy = flipY(dock.y) - minY;
-      // House/home icon: fixed orientation — dock position doesn't rotate
-      dockIcon = `<g transform="translate(${dx},${dy})">
-        <!-- Glow background -->
-        <circle cx="0" cy="2" r="24" fill="#FFD700" opacity="0.15"/>
-        <!-- Roof triangle -->
-        <polygon points="0,-22 20,2 -20,2"
-          fill="#FFD700" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
-        <!-- House walls -->
-        <rect x="-16" y="2" width="32" height="20"
-          fill="#FFD700" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
-        <!-- Door (dark opening) -->
-        <rect x="-7" y="9" width="14" height="13" rx="2"
-          fill="#0d1a2a"/>
-      </g>`;
-    }
-
-    // ── Layer 6: robot icon ─────────────────────────────────────────
-    let robotIcon = "";
-    if (robot != null) {
-      const rx = robot.x - minX;
-      const ry = flipY(robot.y) - minY;
-      // heading_deg: 0 = north (SVG -Y), 90 = east (+X) — matches SVG rotate()
-      const headingDeg = robot.heading_deg ?? 0;
-      const activeClass = isActive ? ' class="robot-active"' : "";
-      // Robot vacuum icon:
-      //   - Dark circle body with cyan stroke
-      //   - Cyan bumper arc at the front edge
-      //   - Cyan arrow head pointing in heading direction
-      //   - White centre dot (sensor)
-      //   - Active glow ring when cleaning
-      robotIcon = `<g${activeClass}>
-        ${isActive ? `<circle cx="${rx}" cy="${ry}" r="24" fill="#00d4ff" opacity="0.15"/>` : ""}
-        <!-- Robot body -->
-        <circle cx="${rx}" cy="${ry}" r="16"
-          fill="#1a2a3a" stroke="#00d4ff" stroke-width="3"/>
-        <!-- Direction indicators (rotated to heading) -->
-        <g transform="translate(${rx},${ry}) rotate(${headingDeg})">
-          <!-- Front bumper arc -->
-          <path d="M -13,-9 A 16,16 0 0,1 13,-9"
-            fill="none" stroke="#00d4ff" stroke-width="3.5" stroke-linecap="round"/>
-          <!-- Arrow head pointing forward -->
-          <polygon points="0,-26 7,-16 -7,-16" fill="#00d4ff"/>
-        </g>
-        <!-- Centre sensor dot -->
-        <circle cx="${rx}" cy="${ry}" r="4" fill="white" opacity="0.8"/>
-      </g>`;
-    }
-
-    // ── Layer 7: room labels ────────────────────────────────────────
+    // ── Layer 5: room labels ────────────────────────────────────────
+    // Rendered before dock/robot so the icons draw on top.
     let labels = "";
     if (cfg.show_room_labels) {
       for (const room of rooms) {
@@ -318,18 +278,69 @@ class RowentaMapCard extends HTMLElement {
           const areaM2 = room.area_m2 != null
             ? room.area_m2.toFixed(1)
             : (polyArea(p) / 10000).toFixed(1);
-          areaText = `<text x="${cx}" y="${cy + 36}"
-            text-anchor="middle" fill="${room.color}" font-size="20"
+          areaText = `<text x="${cx}" y="${cy + labelFontSize * 1.3}"
+            text-anchor="middle" fill="${room.color}" font-size="${areaFontSize}"
             opacity="${room.redundant ? 0.25 : 0.75}"
             font-family="sans-serif">${areaM2} m²</text>`;
         }
         labels += `<text x="${cx}" y="${cy}"
           text-anchor="middle" dominant-baseline="middle"
-          fill="${room.color}" font-size="28" font-weight="bold"
+          fill="${room.color}" font-size="${labelFontSize}" font-weight="bold"
           opacity="${labelOpacity}" font-family="sans-serif"
           style="text-shadow:0 1px 3px rgba(0,0,0,.8)">${this._esc(room.name)}</text>
           ${areaText}`;
       }
+    }
+
+    // ── Layer 6: dock icon (home) — draws on top of labels ──────────
+    let dockIcon = "";
+    if (cfg.show_dock && dock) {
+      const dx = dock.x - minX;
+      const dy = flipY(dock.y) - minY;
+      // House/home icon: fixed orientation — dock position doesn't rotate.
+      // All dimensions scale with df (= dockGlowR / 24) so the icon stays
+      // proportional to the map on any screen size.
+      dockIcon = `<g transform="translate(${dx},${dy})">
+        <!-- Glow background -->
+        <circle cx="0" cy="${(2*df).toFixed(1)}" r="${dockGlowR.toFixed(1)}" fill="#FFD700" opacity="0.15"/>
+        <!-- Roof triangle -->
+        <polygon points="0,${(-22*df).toFixed(1)} ${(20*df).toFixed(1)},${(2*df).toFixed(1)} ${(-20*df).toFixed(1)},${(2*df).toFixed(1)}"
+          fill="#FFD700" stroke="white" stroke-width="${(1.5*df).toFixed(1)}" stroke-linejoin="round"/>
+        <!-- House walls -->
+        <rect x="${(-16*df).toFixed(1)}" y="${(2*df).toFixed(1)}" width="${(32*df).toFixed(1)}" height="${(20*df).toFixed(1)}"
+          fill="#FFD700" stroke="white" stroke-width="${(1.5*df).toFixed(1)}" stroke-linejoin="round"/>
+        <!-- Door (dark opening) -->
+        <rect x="${(-7*df).toFixed(1)}" y="${(9*df).toFixed(1)}" width="${(14*df).toFixed(1)}" height="${(13*df).toFixed(1)}" rx="${(2*df).toFixed(1)}"
+          fill="#0d1a2a"/>
+      </g>`;
+    }
+
+    // ── Layer 7: robot icon — draws on top of everything ───────────
+    // All dimensions scale with rf (= robotBodyR / 16) so the robot icon
+    // remains proportional to the map on any screen size.
+    let robotIcon = "";
+    if (robot != null) {
+      const rx = robot.x - minX;
+      const ry = flipY(robot.y) - minY;
+      // heading_deg: 0 = north (SVG -Y), 90 = east (+X) — matches SVG rotate()
+      const headingDeg = robot.heading_deg ?? 0;
+      const activeClass = isActive ? ' class="robot-active"' : "";
+      robotIcon = `<g${activeClass}>
+        ${isActive ? `<circle cx="${rx}" cy="${ry}" r="${robotGlowR.toFixed(1)}" fill="#00d4ff" opacity="0.15"/>` : ""}
+        <!-- Robot body -->
+        <circle cx="${rx}" cy="${ry}" r="${robotBodyR.toFixed(1)}"
+          fill="#1a2a3a" stroke="#00d4ff" stroke-width="${(3*rf).toFixed(1)}"/>
+        <!-- Direction indicators (rotated to heading) -->
+        <g transform="translate(${rx},${ry}) rotate(${headingDeg})">
+          <!-- Front bumper arc -->
+          <path d="M ${(-13*rf).toFixed(1)},${(-9*rf).toFixed(1)} A ${robotBodyR.toFixed(1)},${robotBodyR.toFixed(1)} 0 0,1 ${(13*rf).toFixed(1)},${(-9*rf).toFixed(1)}"
+            fill="none" stroke="#00d4ff" stroke-width="${(3.5*rf).toFixed(1)}" stroke-linecap="round"/>
+          <!-- Arrow head pointing forward -->
+          <polygon points="0,${(-26*rf).toFixed(1)} ${(7*rf).toFixed(1)},${(-16*rf).toFixed(1)} ${(-7*rf).toFixed(1)},${(-16*rf).toFixed(1)}" fill="#00d4ff"/>
+        </g>
+        <!-- Centre sensor dot -->
+        <circle cx="${rx}" cy="${ry}" r="${(4*rf).toFixed(1)}" fill="white" opacity="0.8"/>
+      </g>`;
     }
 
     return `<svg viewBox="0 0 ${W} ${H}"
@@ -339,9 +350,9 @@ class RowentaMapCard extends HTMLElement {
       ${roomFills}
       ${wallLines}
       ${liveOutline}
+      ${labels}
       ${dockIcon}
       ${robotIcon}
-      ${labels}
     </svg>`;
   }
 
