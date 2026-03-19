@@ -1,7 +1,7 @@
 // Rowenta Xplorer 120 — Live Map Card  v1.2.0
 // cleaning_grid_map decoder: RLE occupancy grid → SVG rect cells
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 
 // ── RLE decoder ────────────────────────────────────────────────────────
 // API format: { lower_left_x, lower_left_y, size_x, size_y, resolution, cleaned:[...] }
@@ -43,15 +43,14 @@ function decodeCleaningGrid(grid) {
     }
   }
 
-  // Bounding box in world coords
-  const wx = rects.map(r => r.x);
-  const wy = rects.map(r => r.y);
-  const bounds = rects.length ? {
-    min_x: Math.min(...wx),
-    max_x: Math.max(...wx.map((x,i) => x + rects[i].w)),
-    min_y: Math.min(...wy),
-    max_y: Math.max(...wy.map((y,i) => y + rects[i].h)),
-  } : null;
+  // Bounding box: always use grid extent so the map renders even before
+  // any cells are filled (e.g. first seconds of a new cleaning run).
+  const bounds = {
+    min_x: llx,
+    max_x: llx + cols * res,
+    min_y: lly,
+    max_y: lly + rows * res,
+  };
 
   return { rects, bounds, cols, rows, res, llx, lly };
 }
@@ -299,12 +298,22 @@ class RowentaMapCard extends HTMLElement {
           height="${(r.h / vh * 400).toFixed(2)}"
           fill="rgba(76,175,80,0.35)"/>`
       ).join("");
-    } else if (Array.isArray(cleanedArea) && cleanedArea.length > 2) {
-      // Fallback: seen_polygon points
+    }
+
+    // Seen-polygon outline — always drawn as a stroke layer on top of the grid
+    // so the explored boundary is visible regardless of whether grid cells exist.
+    let outline = "";
+    if (Array.isArray(cleanedArea) && cleanedArea.length > 2) {
       const pts = cleanedArea.map(p =>
         Array.isArray(p) ? `${sx(p[0])},${sy(p[1])}` : `${sx(p.x)},${sy(p.y)}`
       ).join(" ");
-      cleaned = `<polygon points="${pts}" fill="rgba(76,175,80,0.30)" stroke="#4CAF50" stroke-width="1"/>`;
+      if (!grid || grid.rects.length === 0) {
+        // No grid: fill the polygon so the cleaned area is still visible
+        outline = `<polygon points="${pts}" fill="rgba(76,175,80,0.25)" stroke="#4CAF50" stroke-width="2" stroke-linejoin="round"/>`;
+      } else {
+        // Grid present: draw outline only (no fill) to avoid obscuring the cells
+        outline = `<polygon points="${pts}" fill="none" stroke="#4CAF50" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 3"/>`;
+      }
     }
 
     // Robot dot + heading arrow
@@ -331,7 +340,7 @@ class RowentaMapCard extends HTMLElement {
         <path d="M20 0L0 0 0 20" fill="none" stroke="var(--divider-color)" stroke-width="0.3"/>
       </pattern></defs>
       <rect width="500" height="400" fill="url(#g)"/>
-      ${rooms}${cleaned}${robot}
+      ${rooms}${cleaned}${outline}${robot}
     </svg>`;
   }
 

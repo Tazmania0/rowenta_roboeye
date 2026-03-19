@@ -379,8 +379,15 @@ def _build_live_map_payload(
                     cleaned_polygon = pts
                     break
 
+    # Preserve last known cleaned_area and cleaning_grid when idle so the
+    # map outline persists between cleaning runs.
+    if not cleaned_polygon:
+        cleaned_polygon = existing.get("cleaned_area", [])
+
+    effective_grid = cleaning_grid if is_active else existing.get("cleaning_grid", {})
+
     # ── Coordinate bounds ─────────────────────────────────────────────
-    # Use floor_plan bounds when available, fall back to seen_polygon extent
+    # Priority: floor_plan bounds → seen_polygon extent → cleaning_grid extent
     coord_bounds = existing.get("coordinate_bounds")
     if not coord_bounds and cleaned_polygon:
         xs = [p[0] for p in cleaned_polygon]
@@ -390,12 +397,23 @@ def _build_live_map_payload(
             "min_x": min(xs) - pad, "max_x": max(xs) + pad,
             "min_y": min(ys) - pad, "max_y": max(ys) + pad,
         }
+    if not coord_bounds and effective_grid:
+        res = effective_grid.get("resolution", 1) or 1
+        llx = effective_grid.get("lower_left_x", 0)
+        lly = effective_grid.get("lower_left_y", 0)
+        w = effective_grid.get("size_x", 0) * res
+        h = effective_grid.get("size_y", 0) * res
+        if w > 0 and h > 0:
+            coord_bounds = {
+                "min_x": llx, "max_x": llx + w,
+                "min_y": lly, "max_y": lly + h,
+            }
 
     return {
         "floor_plan":        existing.get("floor_plan", []),
         "coordinate_bounds": coord_bounds,
         "cleaned_area":      cleaned_polygon,
-        "cleaning_grid":     cleaning_grid if is_active else {},
+        "cleaning_grid":     effective_grid,
         "robot_position":    robot_position,
         "map_id":            map_id,
         # Raw API responses for diagnostic card
