@@ -1,9 +1,9 @@
-// Rowenta Xplorer 120 — Live Map Card  v2.0.0
+// Rowenta Xplorer 120 — Live Map Card  v2.1.0
 // Renders rooms, walls, dock, robot and live outline from the new
 // _build_live_map_payload() schema (map_id, rooms, outline, walls,
 // dock, robot, live_outline, bounds, scale).
 
-const VERSION = "2.0.0";
+const VERSION = "2.1.0";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -248,15 +248,24 @@ class RowentaMapCard extends HTMLElement {
         stroke="#00aaff" stroke-width="1.5" stroke-dasharray="6,3"/>`;
     }
 
-    // ── Layer 5: dock icon ──────────────────────────────────────────
+    // ── Layer 5: dock icon (home) ───────────────────────────────────
     let dockIcon = "";
     if (cfg.show_dock && dock) {
       const dx = dock.x - minX;
       const dy = flipY(dock.y) - minY;
+      // House/home icon: fixed orientation — dock position doesn't rotate
       dockIcon = `<g transform="translate(${dx},${dy})">
-        <polygon points="0,-14 9,9 -9,9"
-          fill="#FFD700" stroke="white" stroke-width="1.5"
-          transform="rotate(${dock.heading_deg ?? 0})"/>
+        <!-- Glow background -->
+        <circle cx="0" cy="2" r="24" fill="#FFD700" opacity="0.15"/>
+        <!-- Roof triangle -->
+        <polygon points="0,-22 20,2 -20,2"
+          fill="#FFD700" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
+        <!-- House walls -->
+        <rect x="-16" y="2" width="32" height="20"
+          fill="#FFD700" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
+        <!-- Door (dark opening) -->
+        <rect x="-7" y="9" width="14" height="13" rx="2"
+          fill="#0d1a2a"/>
       </g>`;
     }
 
@@ -265,19 +274,30 @@ class RowentaMapCard extends HTMLElement {
     if (robot != null) {
       const rx = robot.x - minX;
       const ry = flipY(robot.y) - minY;
-      const hRad = ((robot.heading_deg ?? 0) * Math.PI) / 180;
-      const arrowLen = 22;
-      // In SVG (Y-down), the direction arrow:
-      //   forward = negative Y in SVG for "up" heading, but since we've flipped,
-      //   we use: ax = rx + sin(hRad)*arrowLen, ay = ry - cos(hRad)*arrowLen
-      const ax = (rx + Math.sin(hRad) * arrowLen).toFixed(1);
-      const ay = (ry - Math.cos(hRad) * arrowLen).toFixed(1);
+      // heading_deg: 0 = north (SVG -Y), 90 = east (+X) — matches SVG rotate()
+      const headingDeg = robot.heading_deg ?? 0;
       const activeClass = isActive ? ' class="robot-active"' : "";
+      // Robot vacuum icon:
+      //   - Dark circle body with cyan stroke
+      //   - Cyan bumper arc at the front edge
+      //   - Cyan arrow head pointing in heading direction
+      //   - White centre dot (sensor)
+      //   - Active glow ring when cleaning
       robotIcon = `<g${activeClass}>
-        <circle cx="${rx}" cy="${ry}" r="14"
-          fill="#00d4ff" stroke="white" stroke-width="2.5"/>
-        <line x1="${rx}" y1="${ry}" x2="${ax}" y2="${ay}"
-          stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+        ${isActive ? `<circle cx="${rx}" cy="${ry}" r="24" fill="#00d4ff" opacity="0.15"/>` : ""}
+        <!-- Robot body -->
+        <circle cx="${rx}" cy="${ry}" r="16"
+          fill="#1a2a3a" stroke="#00d4ff" stroke-width="3"/>
+        <!-- Direction indicators (rotated to heading) -->
+        <g transform="translate(${rx},${ry}) rotate(${headingDeg})">
+          <!-- Front bumper arc -->
+          <path d="M -13,-9 A 16,16 0 0,1 13,-9"
+            fill="none" stroke="#00d4ff" stroke-width="3.5" stroke-linecap="round"/>
+          <!-- Arrow head pointing forward -->
+          <polygon points="0,-26 7,-16 -7,-16" fill="#00d4ff"/>
+        </g>
+        <!-- Centre sensor dot -->
+        <circle cx="${rx}" cy="${ry}" r="4" fill="white" opacity="0.8"/>
       </g>`;
     }
 
