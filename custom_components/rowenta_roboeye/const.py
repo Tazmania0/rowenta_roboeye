@@ -110,8 +110,8 @@ DATA_CLEANING_GRID = "cleaning_grid_map"
 DATA_FEATURE_MAP = "feature_map"
 DATA_TILE_MAP = "tile_map"
 DATA_TOPO_MAP = "topo_map"
-DATA_AREAS_MAP3 = "areas_map3"
-DATA_SEEN_POLY_MAP3 = "seen_poly_map3"
+DATA_AREAS_SAVED_MAP = "areas_saved_map"
+DATA_SEEN_POLY_SAVED_MAP = "seen_poly_saved_map"
 
 # ── Map-geometry refresh interval ─────────────────────────────────────
 SCAN_INTERVAL_MAP_GEOMETRY = 600
