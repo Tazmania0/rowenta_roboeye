@@ -124,8 +124,8 @@ LIVE_SENSORS: tuple[RobEyeSensorDescription, ...] = (
         icon="mdi:texture-box",
         entity_registry_enabled_default=False,
         value_fn=lambda c: _safe_round(
-            c.live_parameters.get("area_cleaned"), divisor=100, precision=1
-        ),
+            c.live_parameters.get("area_cleaned"), divisor=10000, precision=1
+        ),  # API = cm²
     ),
     RobEyeSensorDescription(
         key="current_cleaning_time",
@@ -174,7 +174,7 @@ STATISTICS_SENSORS: tuple[RobEyeSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         suggested_display_precision=1,
         value_fn=lambda c: round(
-            c.statistics.get("total_area_cleaned", 0) / 100, 1  # API = dm²
+            c.statistics.get("total_area_cleaned", 0) / 10000, 1  # API = cm²
         ),
     ),
     RobEyeSensorDescription(
