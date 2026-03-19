@@ -63,7 +63,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     # Initial dashboard write
     await async_create_dashboard(
-        hass, coordinator.areas, coordinator.robot_info, manager=dashboard_manager
+        hass, coordinator.areas, coordinator.robot_info,
+        manager=dashboard_manager, device_id=coordinator.device_id,
     )
 
     # Debounced dashboard regeneration on every coordinator update
@@ -84,6 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                     coordinator.areas,
                     coordinator.robot_info,
                     manager=dashboard_manager,
+                    device_id=coordinator.device_id,
                 )
             )
 
@@ -105,6 +107,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 coordinator.areas,
                 coordinator.robot_info,
                 manager=dashboard_manager,
+                device_id=coordinator.device_id,
             )
         )
 

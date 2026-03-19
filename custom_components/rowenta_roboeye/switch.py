@@ -24,8 +24,6 @@ from .const import DOMAIN, LOGGER, SIGNAL_AREAS_UPDATED
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
 
-_DEVICE_SLUG = "rowenta_xplorer_120"
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -140,7 +138,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         self._area_id = area_id
         self._attr_unique_id = "room_deep_clean_" + area_id + "_" + coordinator.device_id
         self._attr_name = room_name + " Deep Clean"
-        self.entity_id = "switch." + _DEVICE_SLUG + "_room_" + area_id + "_deep_clean"
+        self.entity_id = f"switch.{coordinator.device_id}_room_{area_id}_deep_clean"
         self._is_on: bool = False
 
     @property
