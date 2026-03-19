@@ -1,4 +1,4 @@
-// Rowenta Xplorer 120 — Live Map Card  v1.2.0
+// Rowenta Xplorer 120 — Live Map Card  v1.3.1
 // cleaning_grid_map decoder: RLE occupancy grid → SVG rect cells
 
 const VERSION = "1.3.1";
