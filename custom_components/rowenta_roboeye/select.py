@@ -23,6 +23,8 @@ from .const import DOMAIN, FAN_SPEED_MAP, FAN_SPEED_REVERSE_MAP, FAN_SPEEDS, LOG
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
 
+_DEVICE_SLUG = "rowenta_xplorer_120"
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -153,6 +155,7 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         self._room_name = room_name
         self._attr_unique_id = f"room_fan_speed_{area_id}_{coordinator.device_id}"
         self._attr_name = f"{room_name} Fan Speed"
+        self.entity_id = f"select.{_DEVICE_SLUG}_room_{area_id}_fan_speed"
         self._selected: str = "normal"
 
     @property
