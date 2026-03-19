@@ -58,8 +58,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
-    # One manager per config entry — holds hash + dashboard object reference
+    # One manager per config entry — holds hash + dashboard object reference.
+    # Stored in hass.data so async_remove_entry can call async_delete() on it.
     dashboard_manager = RobEyeDashboardManager()
+    hass.data[DOMAIN][f"{config_entry.entry_id}_dashboard"] = dashboard_manager
 
     # Initial dashboard write
     await async_create_dashboard(
@@ -130,7 +132,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Handle removal of an entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
+        hass.data[DOMAIN].pop(f"{entry.entry_id}_dashboard", None)
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the Lovelace dashboard when the integration is removed."""
+    manager = hass.data.get(DOMAIN, {}).pop(f"{entry.entry_id}_dashboard", None)
+    if manager is None:
+        # Entry was already unloaded — create a temporary manager just for deletion
+        manager = RobEyeDashboardManager()
+    await manager.async_delete(hass)
 
 
 async def _async_update_listener(
