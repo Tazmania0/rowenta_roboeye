@@ -92,7 +92,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if serial:
             return str(serial).lower().replace("-", "_").replace(" ", "_")
-        return self.config_entry.entry_id
+        return self.config_entry.entry_id.lower()
 
     # ── Core update ───────────────────────────────────────────────────
 
