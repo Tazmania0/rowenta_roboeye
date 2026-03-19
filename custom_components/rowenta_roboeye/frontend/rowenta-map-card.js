@@ -1,7 +1,7 @@
-// Rowenta Xplorer 120 — Live Map Card  v1.3.1
+// Rowenta Xplorer 120 — Live Map Card  v1.3.2
 // cleaning_grid_map decoder: RLE occupancy grid → SVG rect cells
 
-const VERSION = "1.3.1";
+const VERSION = "1.3.2";
 
 // ── RLE decoder ────────────────────────────────────────────────────────
 // API format: { lower_left_x, lower_left_y, size_x, size_y, resolution, cleaned:[...] }
@@ -285,14 +285,29 @@ class RowentaMapCard extends HTMLElement {
     const COLORS = ["#4fc3f7","#81c784","#ffb74d","#ba68c8",
                     "#4db6ac","#f06292","#aed581","#4dd0e1"];
 
-    // Room polygons
+    // Room polygons / outlines
     let rooms = "";
     floorPlan.forEach((room, i) => {
-      const pts = (room.polygon||[]).map(p=>`${sx(p[0])},${sy(p[1])}`).join(" ");
-      if (!pts) return;
       const c = COLORS[i % COLORS.length];
-      rooms += `<polygon points="${pts}" fill="${c}33" stroke="${c}"
-        stroke-width="1.5" stroke-linejoin="round"/>`;
+
+      // Light bounding-box fill (always available)
+      const bboxPts = (room.polygon||[]).map(p=>`${sx(p[0])},${sy(p[1])}`).join(" ");
+      if (bboxPts)
+        rooms += `<polygon points="${bboxPts}" fill="${c}22" stroke="none"/>`;
+
+      if (room.segments && room.segments.length) {
+        // Accurate room outline from raw segments
+        const d = room.segments.map(s =>
+          `M${sx(s.x1)},${sy(s.y1)} L${sx(s.x2)},${sy(s.y2)}`
+        ).join(" ");
+        rooms += `<path d="${d}" fill="none" stroke="${c}"
+          stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+      } else if (bboxPts) {
+        // Fallback: bounding-box outline
+        rooms += `<polygon points="${bboxPts}" fill="none" stroke="${c}"
+          stroke-width="1.5" stroke-linejoin="round"/>`;
+      }
+
       if (room.center)
         rooms += `<text x="${sx(room.center.x)}" y="${sy(room.center.y)}"
           font-size="13" fill="${c}" text-anchor="middle" dominant-baseline="middle"

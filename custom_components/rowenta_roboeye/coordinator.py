@@ -472,18 +472,25 @@ def _extract_floor_plan(
             [min_x, max_y],
         ]
 
-    def _make_room(area_id: Any, pts: list) -> dict[str, Any]:
-        rect = _axis_aligned_rect(pts)
-        if not rect:
-            rect = pts
+    def _make_room(
+        area_id: Any,
+        pts: list,
+        segments: list | None = None,
+    ) -> dict[str, Any]:
+        # Use bounding-box rectangle for center and bounds computation
+        rect = _axis_aligned_rect(pts) or pts
         xs = [p[0] for p in rect]
         ys = [p[1] for p in rect]
-        return {
+        room: dict[str, Any] = {
             "id":      area_id,
             "name":    name_by_id.get(area_id, f"Room {area_id}"),
             "polygon": rect,
             "center":  {"x": sum(xs) / len(xs), "y": sum(ys) / len(ys)},
         }
+        # Attach raw segments so the frontend can draw the actual room outline
+        if segments:
+            room["segments"] = segments
+        return room
 
     result: list[dict[str, Any]] = []
 
@@ -499,10 +506,10 @@ def _extract_floor_plan(
             if not isinstance(poly, dict):
                 continue
             area_id  = poly.get("id") or poly.get("area_id") or i
-            segments = poly.get("segments", [])
-            if segments:
+            raw_segs = poly.get("segments", [])
+            if raw_segs:
                 pts = []
-                for s in segments:
+                for s in raw_segs:
                     if "x1" in s:
                         pts.append([s["x1"], s["y1"]])
                     if "x2" in s:
@@ -514,8 +521,9 @@ def _extract_floor_plan(
                     else [p.get("x", 0), p.get("y", 0)]
                     for p in raw_pts
                 ]
+                raw_segs = None
             if pts:
-                result.append(_make_room(area_id, pts))
+                result.append(_make_room(area_id, pts, raw_segs or None))
         if result:
             return result
 
