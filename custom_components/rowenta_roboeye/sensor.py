@@ -174,7 +174,7 @@ STATISTICS_SENSORS: tuple[RobEyeSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         suggested_display_precision=1,
         value_fn=lambda c: round(
-            c.statistics.get("total_area_cleaned", 0) / 1000, 1  # API = 10 cm² units
+            c.statistics.get("total_area_cleaned", 0) / 10000, 1  # API = cm²
         ),
     ),
     RobEyeSensorDescription(
