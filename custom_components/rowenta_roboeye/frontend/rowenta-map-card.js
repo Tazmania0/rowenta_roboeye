@@ -359,6 +359,28 @@ class RowentaMapCard extends HTMLElement {
         stroke-dasharray="${(sw * 4).toFixed(1)},${(sw * 2).toFixed(1)}"/>`;
     }
 
+       // ── Debug: 10× movement amplification ───────────────────────────
+    // Amplifies robot displacement from the dock (or map centre) by 10×
+    // so sub-millimetre movements are clearly visible during scaling diagnosis.
+    let displayRobot = robot;
+    let displayPath  = robotPath;
+    if (ampX10 && robot) {
+      // Reference point: dock position, or fall back to map centre
+      const refX = dock ? dock.x : (bounds.min_x + bounds.max_x) / 2;
+      const refY = dock ? dock.y : (bounds.min_y + bounds.max_y) / 2;
+      const AMP  = 10;
+      displayRobot = {
+        ...robot,
+        x: refX + (robot.x - refX) * AMP,
+        y: refY + (robot.y - refY) * AMP,
+      };
+      displayPath = robotPath.map(([px, py]) => [
+        refX + (px - refX) * AMP,
+        refY + (py - refY) * AMP,
+      ]);
+    }
+
+    
     // ── Layer 4c: robot path trail ───────────────────────────────────
     let trailLayer = "";
     if (displayPath?.length >= 2) {
@@ -408,26 +430,7 @@ class RowentaMapCard extends HTMLElement {
       }
     }
 
-    // ── Debug: 10× movement amplification ───────────────────────────
-    // Amplifies robot displacement from the dock (or map centre) by 10×
-    // so sub-millimetre movements are clearly visible during scaling diagnosis.
-    let displayRobot = robot;
-    let displayPath  = robotPath;
-    if (ampX10 && robot) {
-      // Reference point: dock position, or fall back to map centre
-      const refX = dock ? dock.x : (bounds.min_x + bounds.max_x) / 2;
-      const refY = dock ? dock.y : (bounds.min_y + bounds.max_y) / 2;
-      const AMP  = 10;
-      displayRobot = {
-        ...robot,
-        x: refX + (robot.x - refX) * AMP,
-        y: refY + (robot.y - refY) * AMP,
-      };
-      displayPath = robotPath.map(([px, py]) => [
-        refX + (px - refX) * AMP,
-        refY + (py - refY) * AMP,
-      ]);
-    }
+    
 
     // ── Layer 6: dock icon (home) — draws on top of labels ──────────
     let dockIcon = "";
