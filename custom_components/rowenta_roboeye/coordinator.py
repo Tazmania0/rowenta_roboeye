@@ -22,7 +22,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import CannotConnect, RobEyeApiClient
 from .const import (
     DATA_AREAS,
-    DATA_AREAS_MAP3,
+    DATA_AREAS_SAVED_MAP,
     DATA_CLEANING_GRID,
     DATA_FEATURE_MAP,
     DATA_LIVE_MAP,
@@ -31,7 +31,7 @@ from .const import (
     DATA_ROBOT_FLAGS,
     DATA_ROBOT_INFO,
     DATA_SEEN_POLYGON,
-    DATA_SEEN_POLY_MAP3,
+    DATA_SEEN_POLY_SAVED_MAP,
     DATA_SENSOR_STATUS,
     DATA_STATISTICS,
     DATA_STATUS,
@@ -156,8 +156,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     cleaning_grid=cleaning_grid,
                     feature_map=data.get(DATA_FEATURE_MAP, {}),
                     tile_map=data.get(DATA_TILE_MAP, {}),
-                    areas_data=data.get(DATA_AREAS_MAP3, {}),
-                    seen_poly_map3=data.get(DATA_SEEN_POLY_MAP3, {}),
+                    areas_data=data.get(DATA_AREAS_SAVED_MAP, {}),
+                    seen_poly_saved_map=data.get(DATA_SEEN_POLY_SAVED_MAP, {}),
                     is_active=is_active,
                     map_id=self.map_id,
                 )
@@ -195,11 +195,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except CannotConnect:
                     LOGGER.debug("get_tile_map unavailable, skipping")
                 try:
-                    data[DATA_AREAS_MAP3] = await self.client.get_areas(self.map_id)
+                    data[DATA_AREAS_SAVED_MAP] = await self.client.get_areas(self.map_id)
                 except CannotConnect:
                     LOGGER.debug("get_areas (map geometry) unavailable, skipping")
                 try:
-                    data[DATA_SEEN_POLY_MAP3] = await self.client.get_seen_polygon(self.map_id)
+                    data[DATA_SEEN_POLY_SAVED_MAP] = await self.client.get_seen_polygon(self.map_id)
                 except CannotConnect:
                     LOGGER.debug("get_seen_polygon (map geometry) unavailable, skipping")
                 self._last_map_geometry = now
@@ -352,7 +352,7 @@ def _build_live_map_payload(
     feature_map: dict[str, Any],
     tile_map: dict[str, Any],
     areas_data: dict[str, Any],
-    seen_poly_map3: dict[str, Any],
+    seen_poly_saved_map: dict[str, Any],
     is_active: bool,
     map_id: str,
 ) -> dict[str, Any]:
@@ -385,8 +385,8 @@ def _build_live_map_payload(
     # ── Outline (saved-map boundary from /get/seen_polygon?map_id) ───
     outline: list[list[int]] = []
     sp_polygons = (
-        seen_poly_map3.get("seen_polygon", {}).get("polygons")
-        or seen_poly_map3.get("polygons")
+        seen_poly_saved_map.get("seen_polygon", {}).get("polygons")
+        or seen_poly_saved_map.get("polygons")
         or []
     )
     for poly in sp_polygons:
