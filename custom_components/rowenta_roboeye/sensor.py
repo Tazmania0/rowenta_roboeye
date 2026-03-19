@@ -477,7 +477,7 @@ def _build_room_sensors(
             value_fn=lambda c: round(
                 _stats(c).get("average_cleaning_time", 0) / 60_000, 1
             ),
-            forced_entity_id=f"sensor.{_DEVICE_SLUG}_room_{area_id}_avg_time",
+            forced_entity_id=f"sensor.{_DEVICE_SLUG}_room_{area_id}_avg_clean_time",
         ),
         RobEyeRoomSensor(
             coordinator=coordinator,
