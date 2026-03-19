@@ -187,7 +187,7 @@ def test_room_sensor_values():
     assert cleanings.native_value == 12
 
     area = next(s for s in sensors if s._attr_name == "Bedroom Area")
-    assert area.native_value == 12.0  # 12_000_000 µm² / 1_000_000
+    assert area.native_value == 24.0  # 12_000_000 / 500_000
 
     avg_time = next(s for s in sensors if "Avg" in s._attr_name)
     assert avg_time.native_value == 15.0  # 900_000 ms / 60_000

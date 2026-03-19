@@ -489,7 +489,7 @@ def _build_room_sensors(
             display_name=f"{room_name} Area",
             native_unit=UnitOfArea.SQUARE_METERS,
             icon="mdi:texture-box",
-            value_fn=lambda c: round(_stats(c).get("area_size", 0) / 1_000_000, 2),  # API = mm²
+            value_fn=lambda c: round(_stats(c).get("area_size", 0) / 500_000, 2),  # API = 0.5 mm² units
             forced_entity_id=f"sensor.{_dev}_room_{area_id}_area",
         ),
         RobEyeRoomSensor(
