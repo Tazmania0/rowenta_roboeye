@@ -1,7 +1,7 @@
-// Rowenta Xplorer 120 — Live Map Card  v1.2.0
+// Rowenta Xplorer 120 — Live Map Card  v1.3.1
 // cleaning_grid_map decoder: RLE occupancy grid → SVG rect cells
 
-const VERSION = "1.3.0";
+const VERSION = "1.3.1";
 
 // ── RLE decoder ────────────────────────────────────────────────────────
 // API format: { lower_left_x, lower_left_y, size_x, size_y, resolution, cleaned:[...] }
@@ -43,16 +43,25 @@ function decodeCleaningGrid(grid) {
     }
   }
 
-  // Bounding box: always use grid extent so the map renders even before
-  // any cells are filled (e.g. first seconds of a new cleaning run).
-  const bounds = {
+  // Tight bounding box of filled cells only (null when no cells exist yet)
+  const wx = rects.map(r => r.x);
+  const wy = rects.map(r => r.y);
+  const bounds = rects.length ? {
+    min_x: Math.min(...wx),
+    max_x: Math.max(...wx.map((x,i) => x + rects[i].w)),
+    min_y: Math.min(...wy),
+    max_y: Math.max(...wy.map((y,i) => y + rects[i].h)),
+  } : null;
+
+  // Full grid extent — used as last-resort fallback when no cells are filled yet
+  const extent = {
     min_x: llx,
     max_x: llx + cols * res,
     min_y: lly,
     max_y: lly + rows * res,
   };
 
-  return { rects, bounds, cols, rows, res, llx, lly };
+  return { rects, bounds, extent, cols, rows, res, llx, lly };
 }
 
 
@@ -129,8 +138,11 @@ class RowentaMapCard extends HTMLElement {
     // Decode cleaning grid
     const grid = decodeCleaningGrid(cleaningGrid);
 
-    // Compute unified bounds: prefer grid bounds, fall back to stored bounds
-    const mapBounds = grid?.bounds || bounds;
+    // Bounds priority:
+    //  1. floor_plan coordinate_bounds (from n_n_polygons) — most semantically correct
+    //  2. tight bounds of filled grid cells — correct when cleaning but no floor plan
+    //  3. full grid extent — last resort so the viewport is non-null from the first poll
+    const mapBounds = bounds || grid?.bounds || grid?.extent;
 
     const svgContent = this._buildSvg(floorPlan, cleanedArea, robotPos, mapBounds, grid);
     const debugHtml  = this._config.show_debug
