@@ -11,7 +11,6 @@ Key improvements over v1:
 from __future__ import annotations
 
 import json
-import math
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -434,27 +433,39 @@ def _extract_floor_plan(
             except Exception:
                 pass
 
-    def _make_room(area_id: Any, pts: list) -> dict[str, Any]:
-        # Deduplicate while preserving unique points
-        seen: set = set()
-        unique: list = []
+    def _convex_hull(pts: list) -> list:
+        """Andrew's monotone chain — returns convex hull in CCW order."""
+        pts = sorted({(p[0], p[1]) for p in pts})
+        if len(pts) <= 2:
+            return [list(p) for p in pts]
+
+        def cross(O, A, B):
+            return (A[0] - O[0]) * (B[1] - O[1]) - (A[1] - O[1]) * (B[0] - O[0])
+
+        lower: list = []
         for p in pts:
-            key = (p[0], p[1])
-            if key not in seen:
-                seen.add(key)
-                unique.append(p)
-        pts = unique or pts
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        cx = sum(xs) / len(xs)
-        cy = sum(ys) / len(ys)
-        # Sort by angle from centroid → proper non-self-intersecting polygon
-        pts_sorted = sorted(pts, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
+            while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+                lower.pop()
+            lower.append(p)
+        upper: list = []
+        for p in reversed(pts):
+            while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+                upper.pop()
+            upper.append(p)
+        hull = lower[:-1] + upper[:-1]
+        return [list(p) for p in hull]
+
+    def _make_room(area_id: Any, pts: list) -> dict[str, Any]:
+        hull = _convex_hull(pts)
+        if not hull:
+            hull = pts
+        xs = [p[0] for p in hull]
+        ys = [p[1] for p in hull]
         return {
             "id":      area_id,
             "name":    name_by_id.get(area_id, f"Room {area_id}"),
-            "polygon": pts_sorted,
-            "center":  {"x": cx, "y": cy},
+            "polygon": hull,
+            "center":  {"x": sum(xs) / len(xs), "y": sum(ys) / len(ys)},
         }
 
     result: list[dict[str, Any]] = []
