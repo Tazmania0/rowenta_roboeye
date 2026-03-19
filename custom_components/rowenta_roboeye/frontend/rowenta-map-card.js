@@ -1,8 +1,8 @@
-// Rowenta Xplorer 120 — Live Map Card  v2.3.0
+// Rowenta Xplorer 120 — Live Map Card  v2.4.0
 // Renders rooms, walls, dock, robot, live outline and post-run session
 // replay (cleaning grid + robot trail) from _build_live_map_payload() schema.
 
-const VERSION = "2.3.0";
+const VERSION = "2.4.0";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -175,8 +175,12 @@ class RowentaMapCard extends HTMLElement {
           background: #ff572218; border-bottom: 2px solid #ff5722;
           padding: 3px 14px; font-size: 11px; color: #ff5722;
         }
-        .svg-wrap { background: #0d1a2a; }
-        .svg-wrap svg { display: block; width: 100%; height: auto; }
+        .svg-wrap { background: #0d1a2a; overflow: hidden; }
+        .svg-wrap svg {
+          display: block; width: 100%; height: auto;
+          transform: rotate(${cfg.rotate ?? 0}deg);
+          transform-origin: center center;
+        }
         .empty {
           display: flex; align-items: center; justify-content: center;
           min-height: 200px; flex-direction: column; gap: 8px; padding: 20px;
@@ -241,8 +245,9 @@ class RowentaMapCard extends HTMLElement {
 
     // ── Adaptive sizing: scales with map extent so icons and text remain
     //    legible on both mobile (narrow viewport) and desktop (wide viewport).
-    //    Map coordinates are in cm; minDim drives all proportional sizing.
-    const minDim       = Math.min(W, H);
+    //    Map coordinates are in API units (1 unit = 2 mm); minDim drives all
+    //    proportional sizing so the card looks correct at any display resolution.
+    const minDim        = Math.min(W, H);
     const labelFontSize = Math.max(28,  (minDim * 0.038) | 0);  // room name
     const areaFontSize  = Math.max(20,  (minDim * 0.026) | 0);  // area m²
     const robotBodyR    = Math.max(20,  minDim * 0.030);         // robot body
@@ -250,12 +255,21 @@ class RowentaMapCard extends HTMLElement {
     const rf            = robotBodyR / 16;                       // scale factor vs original r=16
     const dockGlowR     = Math.max(24,  minDim * 0.036);         // dock glow
     const df            = dockGlowR / 24;                        // scale factor vs original r=24
+    // Stroke weight: proportional to map extent so lines are neither invisible
+    // on large maps nor overwhelming on small ones, across all display resolutions.
+    const sw            = Math.max(1.5, minDim * 0.0018);
+    // Session badge: scales with map so the badge is always readable and
+    // appropriately sized relative to the total map area.
+    const badgeFontSz   = Math.max(14,  (minDim * 0.020) | 0);
+    const badgeHalfW    = badgeFontSz * 6.5;
+    const badgeHh       = badgeFontSz * 1.05;
+    const badgeRx       = badgeFontSz * 0.55;
 
     // ── Layer 1: floor fill (seen_polygon outline) ──────────────────
     let floorFill = "";
     if (outline.length > 2) {
       floorFill = `<polygon points="${pts2str(outline)}"
-        fill="#0d1a2a" stroke="#1a3a5c" stroke-width="3"/>`;
+        fill="#0d1a2a" stroke="#1a3a5c" stroke-width="${(sw * 1.5).toFixed(1)}"/>`;
     } else {
       // Fallback: draw a background rect covering viewBox
       floorFill = `<rect x="0" y="0" width="${W}" height="${H}" fill="#0d1a2a"/>`;
@@ -271,16 +285,18 @@ class RowentaMapCard extends HTMLElement {
       if (room.redundant && !cfg.show_redundant_rooms) continue;
       if (room.redundant) {
         // Redundant auto-segment: very faint, dashed border, no fill
+        const dashLen = (sw * 4).toFixed(1);
+        const gapLen  = (sw * 2.5).toFixed(1);
         roomFills += `<polygon points="${pts2str(p)}"
           fill="none"
-          stroke="${room.color}" stroke-width="1.5" stroke-linejoin="round"
-          stroke-dasharray="6,4" stroke-opacity="0.35"
+          stroke="${room.color}" stroke-width="${(sw * 0.8).toFixed(1)}" stroke-linejoin="round"
+          stroke-dasharray="${dashLen},${gapLen}" stroke-opacity="0.35"
           data-room="${this._esc(room.name)}"
           style="cursor:pointer"/>`;
       } else {
         roomFills += `<polygon points="${pts2str(p)}"
           fill="${room.color}" fill-opacity="${roomOpacity}"
-          stroke="${room.color}" stroke-width="2" stroke-linejoin="round"
+          stroke="${room.color}" stroke-width="${sw.toFixed(1)}" stroke-linejoin="round"
           data-room="${this._esc(room.name)}"
           style="cursor:pointer"/>`;
       }
@@ -294,7 +310,7 @@ class RowentaMapCard extends HTMLElement {
         wallLines += `<line
           x1="${x1 - minX}" y1="${flipY(y1) - minY}"
           x2="${x2 - minX}" y2="${flipY(y2) - minY}"
-          stroke="white" stroke-width="2" stroke-opacity="0.55"
+          stroke="white" stroke-width="${sw.toFixed(1)}" stroke-opacity="0.55"
           stroke-linecap="round"/>`;
       }
     }
@@ -312,7 +328,7 @@ class RowentaMapCard extends HTMLElement {
         const gh  = r.h;
         return `<rect x="${gx1.toFixed(1)}" y="${gy1.toFixed(1)}"
           width="${gw}" height="${gh}"
-          fill="${gridFill}" stroke="${gridStroke}" stroke-width="0.4"/>`;
+          fill="${gridFill}" stroke="${gridStroke}" stroke-width="${(sw * 0.22).toFixed(2)}"/>`;
       }).join("");
     }
 
@@ -321,7 +337,8 @@ class RowentaMapCard extends HTMLElement {
     if (liveOut.length > 2) {
       liveOutline = `<polygon points="${pts2str(liveOut)}"
         fill="#00aaff" fill-opacity="0.08"
-        stroke="#00aaff" stroke-width="1.5" stroke-dasharray="6,3"/>`;
+        stroke="#00aaff" stroke-width="${(sw * 0.8).toFixed(1)}"
+        stroke-dasharray="${(sw * 4).toFixed(1)},${(sw * 2).toFixed(1)}"/>`;
     }
 
     // ── Layer 4c: robot path trail ───────────────────────────────────
@@ -334,10 +351,10 @@ class RowentaMapCard extends HTMLElement {
                           .map(([x, y]) => `${x - minX},${flipY(y) - minY}`).join(" ");
       trailLayer = `
         <polyline points="${allPts}"
-          fill="none" stroke="#64B5F6" stroke-width="2.5"
+          fill="none" stroke="#64B5F6" stroke-width="${(sw * 1.4).toFixed(1)}"
           stroke-opacity="${dimOp}" stroke-linecap="round" stroke-linejoin="round"/>
         <polyline points="${recentPts}"
-          fill="none" stroke="#64B5F6" stroke-width="5"
+          fill="none" stroke="#64B5F6" stroke-width="${(sw * 2.8).toFixed(1)}"
           stroke-opacity="${brightOp}" stroke-linecap="round" stroke-linejoin="round"/>`;
     }
 
@@ -436,15 +453,19 @@ class RowentaMapCard extends HTMLElement {
         );
         cleanedM2 = (cellCount * cellM2).toFixed(2);
       }
-      // Place badge anchored to top-right corner of SVG
-      const bx = W - 10;
-      const by = 10;
+      // Place badge anchored to top-right corner of SVG; all dimensions scale
+      // with badgeFontSz (derived from minDim) so it looks right at any resolution.
+      const bx = W - badgeHalfW * 0.15;
+      const by = badgeHh * 1.2;
       sessionBadge = `
-        <g transform="translate(${bx},${by})">
-          <rect x="-148" y="-14" width="148" height="28" rx="8"
-            fill="rgba(13,26,10,0.9)" stroke="#4CAF50" stroke-width="1.5"/>
-          <text x="-74" y="0" text-anchor="middle" dominant-baseline="middle"
-            fill="#4CAF50" font-size="14" font-family="sans-serif" font-weight="600">
+        <g transform="translate(${bx.toFixed(1)},${by.toFixed(1)})">
+          <rect x="${(-badgeHalfW * 2).toFixed(1)}" y="${(-badgeHh).toFixed(1)}"
+            width="${(badgeHalfW * 2).toFixed(1)}" height="${(badgeHh * 2).toFixed(1)}"
+            rx="${badgeRx.toFixed(1)}"
+            fill="rgba(13,26,10,0.9)" stroke="#4CAF50" stroke-width="${(sw * 0.8).toFixed(1)}"/>
+          <text x="${(-badgeHalfW).toFixed(1)}" y="0" text-anchor="middle"
+            dominant-baseline="middle"
+            fill="#4CAF50" font-size="${badgeFontSz}" font-family="sans-serif" font-weight="600">
             ✓ Last session · ${cleanedM2} m²
           </text>
         </g>`;
@@ -452,7 +473,7 @@ class RowentaMapCard extends HTMLElement {
 
     return `<svg viewBox="0 0 ${W} ${H}"
       xmlns="http://www.w3.org/2000/svg"
-      style="width:100%;height:auto;transform:rotate(${cfg.rotate ?? 0}deg)">
+      style="width:100%;height:auto">
       ${floorFill}
       ${roomFills}
       ${wallLines}
