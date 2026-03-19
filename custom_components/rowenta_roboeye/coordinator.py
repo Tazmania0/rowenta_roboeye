@@ -363,7 +363,9 @@ def _is_real_room(area: dict) -> bool:
 def _calc_area_m2(points: list[dict]) -> float:
     """Shoelace formula for polygon area in m².
 
-    Converts from cm² (coordinate units) to m².
+    Scale: 1 API unit = 2 mm = 0.2 cm.
+    area_m2 = area_units² × (0.2 cm/unit)² / 10 000 cm²/m²
+            = area_units² × 4e-6
     NOTE: The API's area_size field is always 2× the real value — ignore it.
     """
     pts = [(p["x"], p["y"]) for p in points]
@@ -376,7 +378,7 @@ def _calc_area_m2(points: list[dict]) -> float:
             for i in range(n)
         )
     ) / 2
-    return round(a / 10000, 1)  # cm² → m²
+    return round(a * 4e-6, 1)  # units² → m²  (1 unit = 2 mm = 0.2 cm)
 
 
 def _build_live_map_payload(
@@ -535,5 +537,5 @@ def _build_live_map_payload(
         "robot": robot,
         "live_outline": live_outline,
         "bounds": bounds,
-        "scale": "cm",
+        "scale": "mm",  # 1 API unit = 2 mm
     }
