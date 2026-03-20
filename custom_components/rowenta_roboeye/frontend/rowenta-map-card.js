@@ -76,7 +76,6 @@ class RowentaMapCard extends HTMLElement {
     this._config  = {};
     this._frozen  = false;
     this._lastAttrs = null;
-    this._ampX10  = false;  // debug: amplify robot displacement × 10
   }
 
   setConfig(config) {
@@ -148,11 +147,10 @@ class RowentaMapCard extends HTMLElement {
                      : "var(--secondary-text-color)";
 
     const frozen = this._frozen;
-    const ampX10 = this._ampX10;
 
     const svgHtml = this._buildSvg(
       rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
-      cleaningGrid, robotPath, sessionComplete, ampX10, robotIsLive, isLiveMap
+      cleaningGrid, robotPath, sessionComplete, robotIsLive, isLiveMap
     );
 
     this.shadowRoot.innerHTML = `
@@ -176,13 +174,6 @@ class RowentaMapCard extends HTMLElement {
           background: ${frozen ? "#ff572222" : "var(--secondary-background-color)"};
           color: ${frozen ? "#ff5722" : "var(--primary-text-color)"};
           font-weight: ${frozen ? "bold" : "normal"};
-        }
-        .ampbtn {
-          padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
-          border: 1px solid var(--divider-color); white-space: nowrap;
-          background: ${ampX10 ? "#ff980022" : "var(--secondary-background-color)"};
-          color: ${ampX10 ? "#ff9800" : "var(--secondary-text-color)"};
-          font-weight: ${ampX10 ? "bold" : "normal"};
         }
         .frozen-bar {
           background: #ff572218; border-bottom: 2px solid #ff5722;
@@ -210,20 +201,11 @@ class RowentaMapCard extends HTMLElement {
         <div class="hdr">
           <span class="title">${cfg.title}</span>
           <span class="badge">${mapState.toUpperCase()}</span>
-          <button class="ampbtn" id="ampbtn" title="Debug: amplify robot displacement × 10 from dock/center">${ampX10 ? "10× ON" : "10×"}</button>
           <button class="fbtn" id="fbtn">${frozen ? "▶ Live" : "⏸ Freeze"}</button>
         </div>
         ${frozen ? `<div class="frozen-bar">⏸ Frozen — click Live to resume</div>` : ""}
         <div class="svg-wrap">${svgHtml}</div>
       </ha-card>`;
-
-    this.shadowRoot.getElementById("ampbtn")?.addEventListener("click", () => {
-      this._ampX10 = !this._ampX10;
-      this._renderFull(
-        this._hass?.states[this._config.entity]?.state || "idle",
-        this._lastAttrs || {}
-      );
-    });
 
     this.shadowRoot.getElementById("fbtn")?.addEventListener("click", () => {
       if (this._frozen) {
@@ -242,7 +224,7 @@ class RowentaMapCard extends HTMLElement {
   // ── SVG renderer ──────────────────────────────────────────────────────
 
   _buildSvg(rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
-            cleaningGrid, robotPath, sessionComplete, ampX10 = false,
+            cleaningGrid, robotPath, sessionComplete,
             robotIsLive = true, isLiveMap = false) {
     if (!bounds) {
       return `<div class="empty">
@@ -251,63 +233,13 @@ class RowentaMapCard extends HTMLElement {
       </div>`;
     }
 
-    // ── Debug: 10× movement amplification ───────────────────────────
-    // Amplifies robot displacement from its resting/start position by 10×
-    // so sub-millimetre movements are clearly visible during scaling diagnosis.
-    //
-    // Reference-point strategy (avoids coordinate-system mismatch between
-    // docking_pose and rob_pose that would push the robot off-screen):
-    //   • Docked / idle          → robot's own current position (displacement = 0,
-    //                              robot stays in place regardless of dock offset)
-    //   • Cleaning, path exists  → robotPath[0] (where cleaning started, same
-    //                              coordinate space as current robot position)
-    //   • Cleaning, path empty   → dock position (fallback, robot just left dock)
-    //
-    // Computed here (before bounds) so the viewBox can be expanded to contain
-    // the amplified position and path — otherwise the robot disappears off-screen.
-    let displayRobot = robot;
-    let displayPath  = robotPath;
-    if (ampX10 && robot) {
-      let refX, refY;
-      if (isActive && robotPath.length > 0) {
-        // Cleaning with recorded path: amplify from session start position
-        [refX, refY] = robotPath[0];
-      } else if (isActive && dock) {
-        // Just started cleaning, no path yet: use dock as fallback
-        refX = dock.x;
-        refY = dock.y;
-      } else {
-        // Docked / idle: use robot's own position → zero displacement → stays in place
-        refX = robot.x;
-        refY = robot.y;
-      }
-      const AMP = 10;
-      displayRobot = {
-        ...robot,
-        x: refX + (robot.x - refX) * AMP,
-        y: refY + (robot.y - refY) * AMP,
-      };
-      displayPath = robotPath.map(([px, py]) => [
-        refX + (px - refX) * AMP,
-        refY + (py - refY) * AMP,
-      ]);
-    }
+    const displayRobot = robot;
+    const displayPath  = robotPath;
 
-    // Expand effective bounds to keep the (possibly amplified) robot and its
-    // full path visible.  Without path expansion, amplified trail points outside
-    // the current robot position would be clipped by the viewBox.
     let effMinX = displayRobot ? Math.min(bounds.min_x, displayRobot.x) : bounds.min_x;
     let effMaxX = displayRobot ? Math.max(bounds.max_x, displayRobot.x) : bounds.max_x;
     let effMinY = displayRobot ? Math.min(bounds.min_y, displayRobot.y) : bounds.min_y;
     let effMaxY = displayRobot ? Math.max(bounds.max_y, displayRobot.y) : bounds.max_y;
-    if (ampX10 && displayPath.length > 0) {
-      for (const [px, py] of displayPath) {
-        effMinX = Math.min(effMinX, px);
-        effMaxX = Math.max(effMaxX, px);
-        effMinY = Math.min(effMinY, py);
-        effMaxY = Math.max(effMaxY, py);
-      }
-    }
 
     const PAD  = 100;
     const minX = effMinX - PAD;
@@ -507,8 +439,7 @@ class RowentaMapCard extends HTMLElement {
       // heading_deg: 0 = north (SVG -Y), 90 = east (+X) — matches SVG rotate()
       const headingDeg = displayRobot.heading_deg ?? 0;
       const activeClass = (isActive && robotIsLive) ? ' class="robot-active"' : "";
-      // Color: orange when 10× debug, grey when stale, cyan when live
-      const robotColor  = ampX10 ? "#ff9800" : (robotIsLive ? "#00d4ff" : "#888888");
+      const robotColor  = robotIsLive ? "#00d4ff" : "#888888";
       const robotOpacity = robotIsLive ? "1.0" : "0.5";
       robotIcon = `<g${activeClass} opacity="${robotOpacity}">
         ${(isActive && robotIsLive) ? `<circle cx="${rx}" cy="${ry}" r="${robotGlowR.toFixed(1)}" fill="${robotColor}" opacity="0.15"/>` : ""}
@@ -525,10 +456,6 @@ class RowentaMapCard extends HTMLElement {
         </g>
         <!-- Centre sensor dot -->
         <circle cx="${rx}" cy="${ry}" r="${(4*rf).toFixed(1)}" fill="white" opacity="0.8"/>
-        ${ampX10 ? `<!-- 10× debug label -->
-        <text x="${rx}" y="${ry - robotBodyR - (4*rf)}" text-anchor="middle"
-          font-size="${(labelFontSize * 0.6).toFixed(0)}" fill="#ff9800" font-family="monospace"
-          font-weight="bold">10×</text>` : ""}
         ${!robotIsLive ? `<!-- Stale position indicator -->
         <text x="${rx}" y="${ry + robotBodyR + (labelFontSize * 0.55)}" text-anchor="middle"
           font-size="${(labelFontSize * 0.45).toFixed(0)}" fill="#888" font-family="sans-serif"
