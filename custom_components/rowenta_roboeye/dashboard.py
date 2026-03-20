@@ -47,6 +47,7 @@ DASHBOARD_TITLE    = "Rowenta Xplorer 120"
 DASHBOARD_URL_PATH = "rowenta-xplorer120"   # contains hyphen — valid without ALLOW_SINGLE_WORD
 DASHBOARD_ICON     = "mdi:robot-vacuum"
 _DEV               = "rowenta_xplorer_120"
+E_SCHEDULE         = f"sensor.{_DEV}_schedule"
 
 # HA lovelace constants (avoid importing from lovelace to stay compatible)
 _LOVELACE_DATA_KEY = "lovelace"          # hass.data key for LovelaceData
@@ -190,6 +191,25 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
                     *live_entities,
                     *live_map_entities,
                 ],
+            },
+            {
+                "type": "markdown",
+                "title": "Schedule",
+                "content": (
+                    "{% set sched = state_attr('"
+                    + f"sensor.{_d}_schedule"
+                    + "', 'schedules') %}"
+                    "\n{% if sched %}"
+                    "\n{% for s in sched %}"
+                    "\n{{ '✅' if s.enabled else '⬜' }} "
+                    "**{{ s.days | join('/') }}** {{ s.time }}"
+                    " — {{ s.rooms_str }}"
+                    "{% if s.fan_raw > 0 %} · {{ s.fan_speed }}{% endif %}"
+                    "\n{% endfor %}"
+                    "\n{% else %}"
+                    "\n*No schedule configured*"
+                    "\n{% endif %}"
+                ),
             },
         ],
     }
