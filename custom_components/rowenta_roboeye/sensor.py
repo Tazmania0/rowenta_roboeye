@@ -48,6 +48,8 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN, FAN_SPEED_MAP, LOGGER, SIGNAL_AREAS_UPDATED
+
+_DOW_NAMES = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
 
@@ -280,6 +282,9 @@ async def async_setup_entry(
     # Phase-2 live map sensor
     entities.append(RobEyeLiveMapSensor(coordinator))
 
+    # Schedule sensor
+    entities.append(RobEyeScheduleSensor(coordinator))
+
     # ── Per-room sensors (from current area list) ─────────────────────
     known_ids: set = set()
     room_entities, new_ids = _build_room_sensor_entities(
@@ -384,6 +389,81 @@ class RobEyeLiveMapSensor(RobEyeEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return dict(self.coordinator.live_map)
+
+
+class RobEyeScheduleSensor(RobEyeEntity, SensorEntity):
+    """Sensor that exposes the robot's cleaning schedule as attributes.
+
+    State: number of active schedules (or 0 when none).
+    Attribute 'schedules': list of parsed schedule dicts consumed by the
+    dashboard Jinja2 markdown card.
+    """
+
+    _attr_icon = "mdi:calendar-clock"
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(self, coordinator: RobEyeCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"schedule_{coordinator.device_id}"
+        self._attr_name = "Schedule"
+        self.entity_id = f"sensor.{coordinator.device_id}_schedule"
+
+    @property
+    def native_value(self) -> int:
+        return len(self._parsed_schedules())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"schedules": self._parsed_schedules()}
+
+    def _parsed_schedules(self) -> list[dict[str, Any]]:
+        raw_list = self.coordinator.schedule.get("schedule", [])
+        if not isinstance(raw_list, list):
+            return []
+        parsed: list[dict[str, Any]] = []
+        for item in raw_list:
+            time_block = item.get("time", {})
+            task_block = item.get("task", {})
+            days_of_week = time_block.get("days_of_week", [])
+            days = [_DOW_NAMES.get(d, str(d)) for d in days_of_week]
+            hour = time_block.get("hour", 0)
+            minute = time_block.get("min", 0)
+            time_str = f"{hour:02d}:{minute:02d}"
+            fan_raw = int(task_block.get("cleaning_parameter_set", 0))
+            fan_speed = FAN_SPEED_MAP.get(str(fan_raw), "")
+            room_ids = task_block.get("parameters", [])
+            if room_ids:
+                rooms_str = ", ".join(
+                    _room_name_for_id(self.coordinator, int(r)) for r in room_ids
+                )
+            else:
+                rooms_str = "All Rooms"
+            parsed.append({
+                "enabled": bool(item.get("enabled", 0)),
+                "days": days,
+                "time": time_str,
+                "rooms_str": rooms_str,
+                "fan_raw": fan_raw,
+                "fan_speed": fan_speed,
+            })
+        return parsed
+
+
+def _room_name_for_id(coordinator: RobEyeCoordinator, area_id: int) -> str:
+    """Return the human-readable room name for an area_id, or the id as fallback."""
+    for area in coordinator.areas:
+        if area.get("id") == area_id:
+            meta_raw = area.get("area_meta_data", "")
+            if meta_raw:
+                try:
+                    meta = json.loads(meta_raw)
+                    name = meta.get("name", "").strip()
+                    if name:
+                        return name
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            return f"Room {area_id}"
+    return f"Room {area_id}"
 
 
 class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
