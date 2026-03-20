@@ -34,6 +34,7 @@ from .const import (
     DATA_PERMANENT_STATISTICS,
     DATA_RELOCALIZATION,
     DATA_ROBOT_FLAGS,
+    DATA_SCHEDULE,
     DATA_ROBOT_INFO,
     DATA_SEEN_POLYGON,
     DATA_SEEN_POLY_SAVED_MAP,
@@ -86,6 +87,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_robot_info: datetime | None = None
         self._last_live_map: datetime | None = None
         self._last_map_geometry: datetime | None = None
+        self._last_schedule: datetime | None = None
         self._consecutive_failures: int = 0
 
         # Track known area IDs so we can detect additions/removals without reload
@@ -341,6 +343,16 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     LOGGER.debug("get_permanent_statistics unavailable, skipping")
                 self._last_statistics = now
 
+            # ── Every 60 s: schedule ─────────────────────────────────
+            if self._last_schedule is None or (
+                now - self._last_schedule
+            ) >= timedelta(seconds=60):
+                try:
+                    data[DATA_SCHEDULE] = await self.client.get_schedule()
+                except CannotConnect:
+                    LOGGER.debug("get_schedule unavailable, skipping")
+                self._last_schedule = now
+
             # ── Every 3600 s: robot identity / wifi ──────────────────
             if self._last_robot_info is None or (
                 now - self._last_robot_info
@@ -443,6 +455,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def robot_flags(self) -> dict[str, Any]:
         return (self.data or {}).get(DATA_ROBOT_FLAGS, {})
+
+    @property
+    def schedule(self) -> dict[str, Any]:
+        return (self.data or {}).get(DATA_SCHEDULE, {})
 
     @property
     def robot_info(self) -> dict[str, Any]:

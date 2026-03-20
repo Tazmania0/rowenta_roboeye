@@ -125,6 +125,7 @@ DATA_SEEN_POLY_SAVED_MAP = "seen_poly_saved_map"
 DATA_MAP_STATUS = "map_status"
 DATA_EXPLORATION = "exploration"
 DATA_RELOCALIZATION = "relocalization"
+DATA_SCHEDULE = "schedule"
 
 # ── Saved map ID ──────────────────────────────────────────────────────
 SAVED_MAP_ID = "3"  # permanent saved map; all rooms are on this map
