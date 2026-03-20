@@ -20,5 +20,28 @@
     {
       "type": "_robeye._tcp.local."
     }
+  ]
+}{
+  "domain": "rowenta_roboeye",
+  "name": "Rowenta Xplorer 120",
+  "version": "1.3.7",
+  "codeowners": [
+    "@your-username"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/your-username/rowenta-roboeye-ha",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "dependencies": [
+    "frontend",
+    "http",
+    "lovelace",
+    "zeroconf"
+  ],
+  "zeroconf": [
+    {
+      "type": "_robeye._tcp.local."
+    }
   ],
 }
