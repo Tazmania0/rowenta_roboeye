@@ -13,6 +13,7 @@ LOGGER = logging.getLogger(__package__)
 PLATFORMS: list[Platform] = [
     Platform.VACUUM,
     Platform.SENSOR,
+    Platform.BINARY_SENSOR,
     Platform.SELECT,
     Platform.BUTTON,
     Platform.SWITCH,
@@ -106,6 +107,7 @@ FAN_SPEED_REVERSE_MAP: dict[str, str] = {v: k for k, v in FAN_SPEED_MAP.items()}
 FAN_SPEEDS: list[str] = list(FAN_SPEED_MAP.values())
 
 # ── Coordinator data keys ─────────────────────────────────────────────
+DATA_SENSOR_VALUES = "sensor_values"
 DATA_STATUS = "status"
 DATA_STATISTICS = "statistics"
 DATA_PERMANENT_STATISTICS = "permanent_statistics"

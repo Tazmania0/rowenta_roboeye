@@ -227,6 +227,39 @@ ROBOT_INFO_SENSORS: tuple[RobEyeSensorDescription, ...] = (
     ),
 )
 
+SENSOR_VALUES_SENSORS: tuple[RobEyeSensorDescription, ...] = (
+    RobEyeSensorDescription(
+        key="main_brush_current_ma",
+        translation_key="main_brush_current_ma",
+        native_unit_of_measurement="mA",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:current-ac",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda c: c.sensor_values_parsed.get("current_sensor__main_brush"),
+    ),
+    RobEyeSensorDescription(
+        key="side_brush_left_current_ma",
+        translation_key="side_brush_left_current_ma",
+        native_unit_of_measurement="mA",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:current-ac",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda c: c.sensor_values_parsed.get("current_sensor__side_brush_left"),
+    ),
+    RobEyeSensorDescription(
+        key="side_brush_right_current_ma",
+        translation_key="side_brush_right_current_ma",
+        native_unit_of_measurement="mA",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:current-ac",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda c: c.sensor_values_parsed.get("current_sensor__side_brush_right"),
+    ),
+)
+
 SENSOR_HEALTH_SENSORS: tuple[RobEyeSensorDescription, ...] = (
     RobEyeSensorDescription(
         key="sensor_cliff_status",
@@ -260,6 +293,7 @@ ALL_STATIC_SENSORS: tuple[tuple[RobEyeSensorDescription, ...], ...] = (
     STATISTICS_SENSORS,
     ROBOT_INFO_SENSORS,
     SENSOR_HEALTH_SENSORS,
+    SENSOR_VALUES_SENSORS,
 )
 
 
