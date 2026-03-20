@@ -198,3 +198,40 @@ async def test_test_connection_failure(client, session):
     session.get.side_effect = asyncio.TimeoutError
     with pytest.raises(CannotConnect):
         await client.test_connection()
+
+
+# ── Position / debug endpoints ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_relocalization(client, session):
+    payload = {"localization_algo_input": [
+        {"localization_type": "continuous",
+         "rob_pose": [-661, 235, -6269],
+         "rtc_time": {"year": 2026, "month": 3, "day": 18,
+                      "hour": 18, "min": 9, "sec": 10}}
+    ]}
+    session.get.return_value = _mock_response(payload)
+    result = await client.get_relocalization()
+    assert result["localization_algo_input"][0]["localization_type"] == "continuous"
+    assert "/debug/relocalization" in session.get.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_get_exploration(client, session):
+    payload = {"exploration_points": [
+        {"ts": 474811434, "type": "smsu_no_nearby_expl_points",
+         "rob_pose": [-861, 352, -6298]}
+    ]}
+    session.get.return_value = _mock_response(payload)
+    result = await client.get_exploration()
+    assert result["exploration_points"][0]["ts"] == 474811434
+    assert "/debug/exploration" in session.get.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_get_map_status(client, session):
+    payload = {"operation_map_id": 57, "active_map_id": 3}
+    session.get.return_value = _mock_response(payload)
+    result = await client.get_map_status()
+    assert result["operation_map_id"] == 57
+    assert "/get/map_status" in session.get.call_args[0][0]

@@ -62,6 +62,26 @@ MOCK_PROTOCOL_VERSION = {"version": "2.3.1"}
 MOCK_LIVE_PARAMETERS = {"area_cleaned": 50000, "cleaning_time": 720}
 MOCK_SENSOR_STATUS = {"cliff_sensor": "ok", "bump_sensor": "ok", "wheel_drop": "ok"}
 MOCK_ROBOT_FLAGS = {"has_mop": False, "has_camera": True}
+MOCK_MAP_STATUS = {"operation_map_id": 3, "active_map_id": 3}
+
+MOCK_LOCALIZATION = {"localization_algo_input": [
+    {"localization_type": "global",
+     "rob_pose": [-6, -9, 5295],
+     "rtc_time": {"year": 2026, "month": 3, "day": 18}},
+]}
+
+MOCK_RELOCALIZATION = {"localization_algo_input": [
+    {"localization_type": "continuous",
+     "rob_pose": [-661, 235, -6269],
+     "rtc_time": {"year": 2026, "month": 3, "day": 18,
+                  "hour": 18, "min": 9, "sec": 10}},
+]}
+
+MOCK_EXPLORATION = {"exploration_points": [
+    {"ts": 474811434, "type": "smsu_no_nearby_expl_points",
+     "rob_pose": [-861, 352, -6298]},
+]}
+
 MOCK_CLEANING_GRID = {
     "map_id": 3,
     "lower_left_x": -823,
@@ -96,6 +116,10 @@ def mock_client():
     client.get_sensor_status.return_value = dict(MOCK_SENSOR_STATUS)
     client.get_robot_flags.return_value = dict(MOCK_ROBOT_FLAGS)
     client.get_cleaning_grid_map.return_value = dict(MOCK_CLEANING_GRID)
+    client.get_map_status.return_value = dict(MOCK_MAP_STATUS)
+    client.get_localization.return_value = dict(MOCK_LOCALIZATION)
+    client.get_relocalization.return_value = dict(MOCK_RELOCALIZATION)
+    client.get_exploration.return_value = dict(MOCK_EXPLORATION)
     client.test_connection.return_value = True
     client.clean_all.return_value = None
     client.clean_map.return_value = None

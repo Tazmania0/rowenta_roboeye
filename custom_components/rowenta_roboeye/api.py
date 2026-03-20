@@ -57,6 +57,7 @@ from .const import (
     API_GET_N_N_POLYGONS,
     API_DEBUG_LOCALIZATION,
     API_DEBUG_RELOCALIZATION,
+    API_DEBUG_EXPLORATION,
     API_GET_PERMANENT_STATISTICS,
     API_GET_POINTS_OF_INTEREST,
     API_GET_PROTOCOL_VERSION,
@@ -263,6 +264,17 @@ class RobEyeApiClient:
         heading_raw is in units where 65536 == 360°.
         """
         return await self._get(API_DEBUG_RELOCALIZATION)
+
+    async def get_exploration(self) -> dict[str, Any]:
+        """GET /debug/exploration — live position for new-map exploration sessions.
+
+        Use when operation_map_id != saved_map_id (robot is building a new live map).
+        Returns exploration_points list, each with rob_pose = [x, y, heading_raw].
+        Use entry with highest 'ts' value for most recent position.
+        Coordinates are in the LIVE MAP's own coordinate system (not map 3).
+        Confirmed from live map 57 session 2026-03-20.
+        """
+        return await self._get(API_DEBUG_EXPLORATION)
 
     async def get_points_of_interest(self) -> dict[str, Any]:
         """GET /get/points_of_interest — saved POI and charging-dock locations."""

@@ -17,7 +17,12 @@ from custom_components.rowenta_roboeye.const import (
     SCAN_INTERVAL_ROBOT_INFO,
     SCAN_INTERVAL_STATISTICS,
 )
-from custom_components.rowenta_roboeye.coordinator import RobEyeCoordinator
+from custom_components.rowenta_roboeye.coordinator import (
+    RobEyeCoordinator,
+    _extract_relocalization_position,
+    _extract_localization_position,
+    _extract_exploration_position,
+)
 
 from .conftest import MOCK_AREAS, MOCK_CLEANING_GRID, MOCK_STATISTICS, MOCK_STATUS
 
@@ -269,3 +274,86 @@ def test_session_complete_property_default(coordinator):
 
 def test_last_session_grid_property_default(coordinator):
     assert coordinator.last_session_grid == {}
+
+
+# ── Position extraction helpers ───────────────────────────────────────
+
+def test_extract_relocalization_uses_last_continuous():
+    """Uses the LAST 'continuous' entry (highest rtc_time = most recent)."""
+    data = {"localization_algo_input": [
+        {"localization_type": "continuous",
+         "rob_pose": [-139, -48, 4012],
+         "rtc_time": {"year": 2026, "month": 3, "day": 18}},
+        {"localization_type": "continuous",
+         "rob_pose": [-661, 235, -6269],   # ← last entry, should be used
+         "rtc_time": {"year": 2026, "month": 3, "day": 18}},
+    ]}
+    pos = _extract_relocalization_position(data)
+    assert pos is not None
+    assert pos["x"] == -661
+    assert pos["y"] == 235
+    assert pos["source"] == "relocalization"
+    assert pos["is_live"] is True
+    assert abs(pos["heading_deg"] - (-34.4)) < 0.2
+
+
+def test_extract_relocalization_no_continuous_returns_none():
+    data = {"localization_algo_input": [
+        {"localization_type": "global", "rob_pose": [0, 0, 0]},
+    ]}
+    assert _extract_relocalization_position(data) is None
+
+
+def test_extract_relocalization_empty_returns_none():
+    assert _extract_relocalization_position({}) is None
+
+
+def test_extract_localization_prefers_global():
+    """Prefers 'global' over 'startpoint' when both present."""
+    data = {"localization_algo_input": [
+        {"localization_type": "startpoint", "rob_pose": [-66, 16, 1488]},
+        {"localization_type": "global",     "rob_pose": [-6, -9, 5295]},
+    ]}
+    pos = _extract_localization_position(data)
+    assert pos is not None
+    assert pos["x"] == -6
+    assert pos["y"] == -9
+    assert pos["is_live"] is False
+    assert pos["source"] == "localization"
+
+
+def test_extract_localization_falls_back_to_startpoint():
+    data = {"localization_algo_input": [
+        {"localization_type": "startpoint", "rob_pose": [-66, 16, 1488]},
+    ]}
+    pos = _extract_localization_position(data)
+    assert pos is not None
+    assert pos["x"] == -66
+    assert pos["is_live"] is False
+
+
+def test_extract_localization_empty_returns_none():
+    assert _extract_localization_position({}) is None
+
+
+def test_extract_exploration_uses_highest_ts():
+    """Uses entry with highest 'ts' value (most recent navigation decision)."""
+    data = {"exploration_points": [
+        {"ts": 474766129, "type": "smsu_fail_plan",
+         "rob_pose": [-8, 3, 1832]},
+        {"ts": 474811434, "type": "smsu_no_nearby_expl_points",
+         "rob_pose": [-861, 352, -6298]},   # ← highest ts
+    ]}
+    pos = _extract_exploration_position(data)
+    assert pos is not None
+    assert pos["x"] == -861
+    assert pos["y"] == 352
+    assert pos["ts"] == 474811434
+    assert pos["source"] == "exploration"
+    assert pos["is_live"] is True
+    assert pos["event_type"] == "smsu_no_nearby_expl_points"
+
+
+def test_extract_exploration_empty_points_returns_none():
+    assert _extract_exploration_position({"exploration_points": []}) is None
+    assert _extract_exploration_position({}) is None

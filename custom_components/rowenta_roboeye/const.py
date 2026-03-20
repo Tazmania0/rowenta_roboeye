@@ -61,6 +61,8 @@ API_GET_N_N_POLYGONS = "/get/n_n_polygons"
 API_GET_POINTS_OF_INTEREST = "/get/points_of_interest"
 API_DEBUG_LOCALIZATION = "/debug/localization"
 API_DEBUG_RELOCALIZATION = "/debug/relocalization"
+API_DEBUG_EXPLORATION = "/debug/exploration"
+API_DEBUG_SMSC = "/debug/smsc"
 
 # ── SET / command endpoints ───────────────────────────────────────────
 API_SET_CLEAN_ALL = "/set/clean_all"
@@ -113,6 +115,12 @@ DATA_TILE_MAP = "tile_map"
 DATA_TOPO_MAP = "topo_map"
 DATA_AREAS_SAVED_MAP = "areas_saved_map"
 DATA_SEEN_POLY_SAVED_MAP = "seen_poly_saved_map"
+DATA_MAP_STATUS = "map_status"
+DATA_EXPLORATION = "exploration"
+DATA_RELOCALIZATION = "relocalization"
+
+# ── Saved map ID ──────────────────────────────────────────────────────
+SAVED_MAP_ID = "3"  # permanent saved map; all rooms are on this map
 
 # ── Map-geometry refresh interval ─────────────────────────────────────
 SCAN_INTERVAL_MAP_GEOMETRY = 600
