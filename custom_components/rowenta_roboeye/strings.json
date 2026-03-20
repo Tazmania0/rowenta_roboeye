@@ -97,6 +97,15 @@
       },
       "live_map": {
         "name": "Live Map"
+      },
+      "main_brush_current_ma": {
+        "name": "Main brush current"
+      },
+      "side_brush_left_current_ma": {
+        "name": "Left brush current"
+      },
+      "side_brush_right_current_ma": {
+        "name": "Right brush current"
       }
     },
     "select": {

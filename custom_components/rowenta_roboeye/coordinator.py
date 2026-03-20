@@ -24,6 +24,7 @@ from .const import (
     AREA_STATE_BLOCKING,
     AREA_TYPE_AVOIDANCE,
     DATA_AREAS,
+    DATA_SENSOR_VALUES,
     DATA_AREAS_SAVED_MAP,
     DATA_CLEANING_GRID,
     DATA_EXPLORATION,
@@ -95,6 +96,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Deep clean mode — toggled by switch entity, read by all clean operations
         self.deep_clean_enabled: bool = False
+
+        # Brush stuck notification state tracking
+        self._brush_left_notified: bool = False
+        self._brush_right_notified: bool = False
 
         # Live session map tracking
         self._operation_map_id: str = map_id  # current session map; changes each new clean
@@ -285,6 +290,34 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     data[DATA_ROBOT_FLAGS] = await self.client.get_robot_flags()
                 except CannotConnect:
                     LOGGER.debug("get_robot_flags unavailable, skipping")
+                try:
+                    raw_sv = await self.client.get_sensor_values()
+                    data[DATA_SENSOR_VALUES] = raw_sv
+                    parsed_sv = _parse_sensor_values(raw_sv)
+                    data["sensor_values_parsed"] = parsed_sv
+                    # Fire persistent notification when a brush becomes newly stuck
+                    from homeassistant.components import persistent_notification
+                    for side, descriptor, notified_attr in (
+                        ("Left",  "side_brush_left_stuck",  "_brush_left_notified"),
+                        ("Right", "side_brush_right_stuck", "_brush_right_notified"),
+                    ):
+                        stuck = _gpio(parsed_sv, descriptor) == "active"
+                        was_notified = getattr(self, notified_attr)
+                        if stuck and not was_notified:
+                            persistent_notification.async_create(
+                                self.hass,
+                                (
+                                    f"\u26a0\ufe0f {side} side brush is stuck or wrapped. "
+                                    "Please check and clean it before the next run."
+                                ),
+                                title="Rowenta \u2014 Brush Alert",
+                                notification_id=f"rowenta_brush_{descriptor}",
+                            )
+                            setattr(self, notified_attr, True)
+                        elif not stuck:
+                            setattr(self, notified_attr, False)
+                except CannotConnect:
+                    LOGGER.debug("get_sensor_values unavailable, skipping")
 
                 self._last_areas = now
                 self._check_for_new_areas(new_areas_blob)
@@ -457,6 +490,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return (self.data or {}).get(DATA_ROBOT_FLAGS, {})
 
     @property
+    def sensor_values_parsed(self) -> dict[str, Any]:
+        return (self.data or {}).get("sensor_values_parsed", {})
+
+    @property
     def schedule(self) -> dict[str, Any]:
         return (self.data or {}).get(DATA_SCHEDULE, {})
 
@@ -485,6 +522,41 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_send_command(self, coro_func, *args: Any, **kwargs: Any) -> None:
         await coro_func(*args, **kwargs)
         await self.async_request_refresh()
+
+
+# ── Sensor-values helpers ─────────────────────────────────────────────
+
+def _parse_sensor_values(raw: dict) -> dict:
+    """Flatten sensor_values into a simple dtype__descriptor → value dict.
+
+    GPIO entries carry value='active'|'inactive'.
+    current_sensor entries carry current (mA integer).
+    voltage_sensor entries carry voltage (mV integer).
+    """
+    result: dict = {}
+    for device in raw.get("sensor_data", []):
+        dtype = device.get("device_type", "")
+        for entry in device.get("sensor_data", []):
+            desc = entry.get("device_descriptor", "")
+            data = entry.get("payload", {}).get("data", {})
+            key = f"{dtype}__{desc}"
+            if "value" in data:
+                result[key] = data["value"]
+            elif "current" in data:
+                result[key] = data["current"]
+            elif "voltage" in data:
+                result[key] = data["voltage"]
+    return result
+
+
+def _gpio(parsed: dict, descriptor: str) -> str:
+    """Return the GPIO value ('active'|'inactive') for a descriptor."""
+    return parsed.get(f"gpio__{descriptor}", "inactive")
+
+
+def _current_ma(parsed: dict, descriptor: str) -> int | None:
+    """Return the current-sensor reading in mA, or None if unavailable."""
+    return parsed.get(f"current_sensor__{descriptor}")
 
 
 # ── Live-map helpers ──────────────────────────────────────────────────
