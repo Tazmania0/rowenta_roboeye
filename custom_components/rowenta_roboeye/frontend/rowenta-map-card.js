@@ -1,8 +1,8 @@
-// Rowenta Xplorer 120 — Live Map Card  v2.4.4
+// Rowenta Xplorer 120 — Live Map Card  v2.5.0
 // Renders rooms, walls, dock, robot, live outline and post-run session
 // replay (cleaning grid + robot trail) from _build_live_map_payload() schema.
 
-const VERSION = "2.4.4";
+const VERSION = "2.5.0";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -133,11 +133,15 @@ class RowentaMapCard extends HTMLElement {
     const liveOut         = attrs.live_outline     || [];
     const bounds          = attrs.bounds           || null;
     const isActive        = attrs.is_active        || false;
+    const isLiveMap       = attrs.is_live_map      || false;
     const cleaningGrid    = attrs.cleaning_grid    || null;
     const robotPath       = attrs.robot_path       || [];
     const sessionComplete = attrs.session_complete || false;
+    // is_live=false means stale localization data (robot idle/docked) → dim the icon
+    const robotIsLive     = robot?.is_live         ?? true;
 
     const stateColor = mapState === "cleaning"         ? "#4CAF50"
+                     : mapState === "exploring"        ? "#9C27B0"
                      : mapState === "returning"        ? "#FF9800"
                      : mapState === "mapping"          ? "#2196F3"
                      : mapState === "session_complete" ? "#4CAF50"
@@ -148,7 +152,7 @@ class RowentaMapCard extends HTMLElement {
 
     const svgHtml = this._buildSvg(
       rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
-      cleaningGrid, robotPath, sessionComplete, ampX10
+      cleaningGrid, robotPath, sessionComplete, ampX10, robotIsLive, isLiveMap
     );
 
     this.shadowRoot.innerHTML = `
@@ -238,7 +242,8 @@ class RowentaMapCard extends HTMLElement {
   // ── SVG renderer ──────────────────────────────────────────────────────
 
   _buildSvg(rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
-            cleaningGrid, robotPath, sessionComplete, ampX10 = false) {
+            cleaningGrid, robotPath, sessionComplete, ampX10 = false,
+            robotIsLive = true, isLiveMap = false) {
     if (!bounds) {
       return `<div class="empty">
         <div style="font-size:40px;opacity:.25">🏠</div>
@@ -494,16 +499,19 @@ class RowentaMapCard extends HTMLElement {
     // ── Layer 7: robot icon — draws on top of everything ───────────
     // All dimensions scale with rf (= robotBodyR / 16) so the robot icon
     // remains proportional to the map on any screen size.
+    // robotIsLive=false → stale/docked position → dimmed grey icon, no pulse.
     let robotIcon = "";
     if (displayRobot != null) {
       const rx = displayRobot.x - minX;
       const ry = flipY(displayRobot.y) - minY;
       // heading_deg: 0 = north (SVG -Y), 90 = east (+X) — matches SVG rotate()
       const headingDeg = displayRobot.heading_deg ?? 0;
-      const activeClass = isActive ? ' class="robot-active"' : "";
-      const robotColor  = ampX10 ? "#ff9800" : "#00d4ff";  // orange tint when amplified
-      robotIcon = `<g${activeClass}>
-        ${isActive ? `<circle cx="${rx}" cy="${ry}" r="${robotGlowR.toFixed(1)}" fill="${robotColor}" opacity="0.15"/>` : ""}
+      const activeClass = (isActive && robotIsLive) ? ' class="robot-active"' : "";
+      // Color: orange when 10× debug, grey when stale, cyan when live
+      const robotColor  = ampX10 ? "#ff9800" : (robotIsLive ? "#00d4ff" : "#888888");
+      const robotOpacity = robotIsLive ? "1.0" : "0.5";
+      robotIcon = `<g${activeClass} opacity="${robotOpacity}">
+        ${(isActive && robotIsLive) ? `<circle cx="${rx}" cy="${ry}" r="${robotGlowR.toFixed(1)}" fill="${robotColor}" opacity="0.15"/>` : ""}
         <!-- Robot body -->
         <circle cx="${rx}" cy="${ry}" r="${robotBodyR.toFixed(1)}"
           fill="#1a2a3a" stroke="${robotColor}" stroke-width="${(3*rf).toFixed(1)}"/>
@@ -521,6 +529,10 @@ class RowentaMapCard extends HTMLElement {
         <text x="${rx}" y="${ry - robotBodyR - (4*rf)}" text-anchor="middle"
           font-size="${(labelFontSize * 0.6).toFixed(0)}" fill="#ff9800" font-family="monospace"
           font-weight="bold">10×</text>` : ""}
+        ${!robotIsLive ? `<!-- Stale position indicator -->
+        <text x="${rx}" y="${ry + robotBodyR + (labelFontSize * 0.55)}" text-anchor="middle"
+          font-size="${(labelFontSize * 0.45).toFixed(0)}" fill="#888" font-family="sans-serif"
+          opacity="0.8">last known</text>` : ""}
       </g>`;
     }
 

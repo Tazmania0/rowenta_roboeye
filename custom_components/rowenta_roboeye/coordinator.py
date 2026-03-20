@@ -24,10 +24,13 @@ from .const import (
     DATA_AREAS,
     DATA_AREAS_SAVED_MAP,
     DATA_CLEANING_GRID,
+    DATA_EXPLORATION,
     DATA_FEATURE_MAP,
     DATA_LIVE_MAP,
     DATA_LIVE_PARAMETERS,
+    DATA_MAP_STATUS,
     DATA_PERMANENT_STATISTICS,
+    DATA_RELOCALIZATION,
     DATA_ROBOT_FLAGS,
     DATA_ROBOT_INFO,
     DATA_SEEN_POLYGON,
@@ -88,6 +91,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Deep clean mode — toggled by switch entity, read by all clean operations
         self.deep_clean_enabled: bool = False
+
+        # Live session map tracking
+        self._operation_map_id: str = map_id  # current session map; changes each new clean
 
         # Last-session replay state
         self._robot_path: list[tuple[float, float]] = []
@@ -171,9 +177,44 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except CannotConnect:
                     LOGGER.debug("get_live_parameters unavailable, skipping")
 
+                # ── Determine which map session is active ─────────────────
+                try:
+                    map_status = await self.client.get_map_status()
+                    data[DATA_MAP_STATUS] = map_status
+                    operation_map_id = str(map_status.get("operation_map_id", self.map_id))
+                except CannotConnect:
+                    operation_map_id = self._operation_map_id
+                is_live_map = (operation_map_id != self.map_id)
+                self._operation_map_id = operation_map_id
+
+                # ── Robot position — choose endpoint based on map session ──
+                robot_position: dict | None = None
+                if is_active and is_live_map:
+                    # New-map session (map 55/56/57…) → /debug/exploration
+                    try:
+                        exploration = await self.client.get_exploration()
+                        data[DATA_EXPLORATION] = exploration
+                        robot_position = _extract_exploration_position(exploration)
+                    except CannotConnect:
+                        LOGGER.debug("get_exploration unavailable, skipping")
+                elif is_active and not is_live_map:
+                    # Cleaning saved map (map 3) → /debug/relocalization
+                    try:
+                        reloc = await self.client.get_relocalization()
+                        data[DATA_RELOCALIZATION] = reloc
+                        robot_position = _extract_relocalization_position(reloc)
+                    except CannotConnect:
+                        LOGGER.debug("get_relocalization unavailable, skipping")
+                else:
+                    # Idle → /debug/localization (global entry)
+                    try:
+                        loc = await self.client.get_localization()
+                        robot_position = _extract_localization_position(loc)
+                    except CannotConnect:
+                        LOGGER.debug("get_localization unavailable, skipping")
+
                 cleaning_grid: dict = {}
                 seen_polygon_raw: dict = {}
-                localization: dict = {}
                 if is_active:
                     try:
                         seen_polygon_raw = await self.client.get_seen_polygon()
@@ -185,26 +226,27 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         data[DATA_CLEANING_GRID] = cleaning_grid
                     except CannotConnect:
                         LOGGER.debug("get_cleaning_grid_map unavailable, skipping")
-                    # Bug 1: /debug/relocalization returns live "continuous" entries
-                    # during cleaning; /debug/localization only has stale "global"
-                    # entries computed at session start (docked position).
-                    try:
-                        localization = await self.client.get_relocalization()
-                        LOGGER.debug("relocalization raw: %s", localization)
-                    except CannotConnect:
-                        LOGGER.debug("get_relocalization unavailable, skipping")
                 else:
                     data[DATA_SEEN_POLYGON] = {}
                     data[DATA_CLEANING_GRID] = {}
-                    try:
-                        localization = await self.client.get_localization()
-                    except CannotConnect:
-                        LOGGER.debug("get_localization unavailable, skipping")
+
+                # ── Accumulate robot path during cleaning ─────────────
+                if is_active and robot_position:
+                    pt: tuple[float, float] = (robot_position["x"], robot_position["y"])
+                    if (
+                        not self._robot_path
+                        or (pt[0] - self._robot_path[-1][0]) ** 2
+                        + (pt[1] - self._robot_path[-1][1]) ** 2
+                        >= _MIN_MOVE_UNITS ** 2
+                    ):
+                        self._robot_path.append(pt)
+                        if len(self._robot_path) > _MAX_PATH_POINTS:
+                            self._robot_path = self._robot_path[-_MAX_PATH_POINTS:]
 
                 data[DATA_LIVE_MAP] = _build_live_map_payload(
                     existing=data.get(DATA_LIVE_MAP, {}),
                     live_params=live_params,
-                    localization=localization,
+                    robot_position=robot_position,
                     seen_polygon_raw=seen_polygon_raw,
                     cleaning_grid=cleaning_grid,
                     feature_map=data.get(DATA_FEATURE_MAP, {}),
@@ -212,28 +254,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     areas_data=data.get(DATA_AREAS_SAVED_MAP, {}),
                     seen_poly_saved_map=data.get(DATA_SEEN_POLY_SAVED_MAP, {}),
                     is_active=is_active,
+                    is_live_map=is_live_map,
                     map_id=self.map_id,
+                    operation_map_id=operation_map_id,
                     robot_path=self._robot_path,
                     last_session_grid=self._last_session_grid,
                     last_session_path=self._last_session_path,
                     last_session_outline=self._last_session_outline,
                     session_complete=self._session_complete,
                 )
-
-                # ── Accumulate robot path during cleaning ─────────────
-                if mode == MODE_CLEANING:
-                    robot = data[DATA_LIVE_MAP].get("robot")
-                    if robot:
-                        pt: tuple[float, float] = (robot["x"], robot["y"])
-                        if (
-                            not self._robot_path
-                            or (pt[0] - self._robot_path[-1][0]) ** 2
-                            + (pt[1] - self._robot_path[-1][1]) ** 2
-                            >= _MIN_MOVE_UNITS ** 2
-                        ):
-                            self._robot_path.append(pt)
-                            if len(self._robot_path) > _MAX_PATH_POINTS:
-                                self._robot_path = self._robot_path[-_MAX_PATH_POINTS:]
 
                 self._last_live_map = now
 
@@ -452,6 +481,95 @@ _ROOM_COLORS = [
 _HEADING_SCALE = 65536 / 360  # raw heading units per degree
 
 
+# ── Position extraction helpers ───────────────────────────────────────
+
+def _extract_relocalization_position(reloc: dict) -> dict | None:
+    """Extract robot position from /debug/relocalization response.
+
+    Used during cleaning of the saved map (map_id=3).
+    Returns multiple 'continuous' entries — use the LAST one (highest rtc_time).
+    rob_pose = [x_units, y_units, heading_raw]; 1 unit = 2 mm.
+    """
+    entries = reloc.get("localization_algo_input", [])
+    entry = next(
+        (e for e in reversed(entries)
+         if e.get("localization_type") == "continuous"),
+        None,
+    )
+    if not entry or "rob_pose" not in entry:
+        return None
+    rob_pose = entry["rob_pose"]
+    if not isinstance(rob_pose, list) or len(rob_pose) < 2:
+        return None
+    x, y = rob_pose[0], rob_pose[1]
+    h = rob_pose[2] if len(rob_pose) > 2 else 0
+    return {
+        "x":           x,
+        "y":           y,
+        "heading_deg": round(h / _HEADING_SCALE, 1),
+        "source":      "relocalization",
+        "is_live":     True,
+    }
+
+
+def _extract_localization_position(loc: dict) -> dict | None:
+    """Extract robot position from /debug/localization response.
+
+    Used when robot is idle (mode='ready'/'charging').
+    Prefers 'global' entry over 'startpoint'.
+    Data may be hours old — shown as dimmed 'last known' position.
+    """
+    entries = loc.get("localization_algo_input", [])
+    entry = next(
+        (e for e in entries if e.get("localization_type") == "global"),
+        None,
+    ) or next(
+        (e for e in entries if e.get("localization_type") == "startpoint"),
+        None,
+    )
+    if not entry or "rob_pose" not in entry:
+        return None
+    rob_pose = entry["rob_pose"]
+    if not isinstance(rob_pose, list) or len(rob_pose) < 2:
+        return None
+    x, y = rob_pose[0], rob_pose[1]
+    h = rob_pose[2] if len(rob_pose) > 2 else 0
+    return {
+        "x":           x,
+        "y":           y,
+        "heading_deg": round(h / _HEADING_SCALE, 1),
+        "source":      "localization",
+        "is_live":     False,  # stale — shown dimmed in card
+    }
+
+
+def _extract_exploration_position(exploration: dict) -> dict | None:
+    """Extract robot position from /debug/exploration response.
+
+    Used during new-map exploration sessions (operation_map_id != saved map_id).
+    Uses entry with highest 'ts' (most recent navigation decision).
+    Coordinates are in the LIVE MAP's own coordinate system (not map 3).
+    """
+    points = exploration.get("exploration_points", [])
+    if not points:
+        return None
+    last = max(points, key=lambda p: p.get("ts", 0))
+    rob_pose = last.get("rob_pose")
+    if not rob_pose or len(rob_pose) < 2:
+        return None
+    x, y = rob_pose[0], rob_pose[1]
+    h = rob_pose[2] if len(rob_pose) > 2 else 0
+    return {
+        "x":           x,
+        "y":           y,
+        "heading_deg": round(h / _HEADING_SCALE, 1),
+        "source":      "exploration",
+        "is_live":     True,
+        "ts":          last.get("ts"),
+        "event_type":  last.get("type", ""),
+    }
+
+
 def _is_real_room(area: dict) -> bool:
     """Return True if this area is a real named room, not a redundant auto-segment.
 
@@ -509,7 +627,7 @@ def _parse_live_outline(seen_polygon_raw: dict) -> list:
 def _build_live_map_payload(
     existing: dict[str, Any],
     live_params: dict[str, Any],
-    localization: dict[str, Any],
+    robot_position: dict | None,
     seen_polygon_raw: dict[str, Any],
     cleaning_grid: dict[str, Any],
     feature_map: dict[str, Any],
@@ -517,7 +635,9 @@ def _build_live_map_payload(
     areas_data: dict[str, Any],
     seen_poly_saved_map: dict[str, Any],
     is_active: bool,
+    is_live_map: bool,
     map_id: str,
+    operation_map_id: str,
     robot_path: list,
     last_session_grid: dict,
     last_session_path: list,
@@ -591,52 +711,10 @@ def _build_live_map_payload(
         }
 
     # ── Robot live position ───────────────────────────────────────────
-    # Bug 2: Select the correct entry type based on which endpoint was called.
-    #   Active   → /debug/relocalization → "continuous" entries (use LAST = most recent)
-    #   Idle     → /debug/localization   → "global" or "startpoint" entries (use first match)
-    # heading_raw is in units where 65536 == 360° (not milliradians).
-    robot: dict[str, Any] | None = None
-    if localization:
-        entries = localization.get("localization_algo_input", [])
-        entry = None
-        if is_active:
-            # /debug/relocalization: multiple "continuous" entries, last is newest
-            entry = next(
-                (e for e in reversed(entries)
-                 if e.get("localization_type") == "continuous"),
-                None,
-            )
-        else:
-            # /debug/localization: prefer "global" full-map match, fall back to "startpoint"
-            entry = next(
-                (e for e in entries if e.get("localization_type") == "global"),
-                None,
-            ) or next(
-                (e for e in entries if e.get("localization_type") == "startpoint"),
-                None,
-            )
-
-        if entry is not None:
-            rob_pose = entry.get("rob_pose")
-            if isinstance(rob_pose, list) and len(rob_pose) >= 2:
-                x, y = rob_pose[0], rob_pose[1]
-                h_raw = rob_pose[2] if len(rob_pose) > 2 else 0
-                robot = {
-                    "x": x,
-                    "y": y,
-                    "heading_deg": round(h_raw / _HEADING_SCALE, 1),
-                }
-
-        if robot is None and not entries:
-            # Fallback: generic position/pose dict
-            loc = localization.get("position", {}) or localization.get("pose", {})
-            if loc:
-                h = loc.get("heading", loc.get("angle", 0))
-                robot = {
-                    "x": loc.get("x", 0),
-                    "y": loc.get("y", 0),
-                    "heading_deg": round(h / _HEADING_SCALE, 1),
-                }
+    # Pre-extracted by _extract_relocalization_position / _extract_exploration_position
+    # / _extract_localization_position based on which endpoint was polled.
+    # robot_position already contains {x, y, heading_deg, source, is_live}.
+    robot: dict[str, Any] | None = robot_position
 
     # ── Live / session outline ────────────────────────────────────────
     if is_active:
@@ -683,6 +761,8 @@ def _build_live_map_payload(
     return {
         "map_id": map_id,
         "is_active": is_active,
+        "is_live_map": is_live_map,
+        "operation_map_id": operation_map_id,
         "rooms": rooms,
         "outline": outline,
         "walls": walls,

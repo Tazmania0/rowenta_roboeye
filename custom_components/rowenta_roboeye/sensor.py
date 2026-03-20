@@ -364,10 +364,12 @@ class RobEyeLiveMapSensor(RobEyeEntity, SensorEntity):
     def native_value(self) -> str:
         from .const import MODE_CLEANING, MODE_GO_HOME
         mode = self.coordinator.status.get("mode", "")
-        charging = self.coordinator.status.get("charging", "")
         if mode == MODE_CLEANING:
-            # Distinguish mapping (no area data yet) from cleaning
             live_map = self.coordinator.live_map
+            # Exploring new map (no saved map rooms available yet)
+            if live_map.get("is_live_map"):
+                return "exploring"
+            # Distinguish mapping (no area data yet) from cleaning
             rooms = live_map.get("rooms", [])
             live_outline = live_map.get("live_outline", [])
             if not rooms and live_outline:
