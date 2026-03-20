@@ -1,8 +1,9 @@
-// Rowenta Xplorer 120 — Live Map Card  v2.5.0
+// Rowenta Xplorer 120 — Live Map Card  v2.6.0
 // Renders rooms, walls, dock, robot, live outline and post-run session
 // replay (cleaning grid + robot trail) from _build_live_map_payload() schema.
+// v2.6.0: avoidance zones rendered as hatched red overlay.
 
-const VERSION = "2.5.0";
+const VERSION = "2.6.0";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -125,6 +126,7 @@ class RowentaMapCard extends HTMLElement {
     const cfg = this._config;
 
     const rooms           = attrs.rooms            || [];
+    const avoidanceZones  = attrs.avoidance_zones  || [];
     const outline         = attrs.outline          || [];
     const walls           = attrs.walls            || [];
     const dock            = attrs.dock             || null;
@@ -149,7 +151,7 @@ class RowentaMapCard extends HTMLElement {
     const frozen = this._frozen;
 
     const svgHtml = this._buildSvg(
-      rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
+      rooms, avoidanceZones, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
       cleaningGrid, robotPath, sessionComplete, robotIsLive, isLiveMap
     );
 
@@ -223,7 +225,7 @@ class RowentaMapCard extends HTMLElement {
 
   // ── SVG renderer ──────────────────────────────────────────────────────
 
-  _buildSvg(rooms, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
+  _buildSvg(rooms, avoidanceZones, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
             cleaningGrid, robotPath, sessionComplete,
             robotIsLive = true, isLiveMap = false) {
     if (!bounds) {
@@ -312,6 +314,21 @@ class RowentaMapCard extends HTMLElement {
           stroke="${room.color}" stroke-width="${sw.toFixed(1)}" stroke-linejoin="round"
           data-room="${this._esc(room.name)}"
           style="cursor:pointer"/>`;
+      }
+    }
+
+    // ── Layer 2.5: avoidance zones (hatched red) ────────────────────
+    const hatchSize = Math.max(20, (minDim * 0.025) | 0);
+    const hatchSW   = Math.max(2,  (hatchSize * 0.25) | 0);
+    let avoidanceLayer = "";
+    if (avoidanceZones.length) {
+      for (const zone of avoidanceZones) {
+        const p = zone.polygon || [];
+        if (p.length < 3) continue;
+        avoidanceLayer += `<polygon points="${pts2str(p)}"
+          fill="url(#hatch-red)" stroke="#f44336"
+          stroke-width="${(sw * 2).toFixed(1)}" stroke-linejoin="round"
+          opacity="0.7"/>`;
       }
     }
 
@@ -498,8 +515,16 @@ class RowentaMapCard extends HTMLElement {
       preserveAspectRatio="xMidYMid meet"
       xmlns="http://www.w3.org/2000/svg"
       style="display:block;height:auto">
+      <defs>
+        <pattern id="hatch-red" patternUnits="userSpaceOnUse"
+          width="${hatchSize}" height="${hatchSize}" patternTransform="rotate(45)">
+          <line x1="0" y1="0" x2="0" y2="${hatchSize}"
+            stroke="#f44336" stroke-width="${hatchSW}" stroke-opacity="0.8"/>
+        </pattern>
+      </defs>
       ${floorFill}
       ${roomFills}
+      ${avoidanceLayer}
       ${wallLines}
       ${gridLayer}
       ${liveOutline}

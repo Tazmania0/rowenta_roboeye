@@ -21,6 +21,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import CannotConnect, RobEyeApiClient
 from .const import (
+    AREA_STATE_BLOCKING,
+    AREA_TYPE_AVOIDANCE,
     DATA_AREAS,
     DATA_AREAS_SAVED_MAP,
     DATA_CLEANING_GRID,
@@ -624,6 +626,25 @@ def _parse_live_outline(seen_polygon_raw: dict) -> list:
     return []
 
 
+def _classify_areas(areas: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split areas into (rooms, avoidance_zones).
+
+    Avoidance zones: area_state == "blocking" or area_type == "to_be_cleaned".
+    Everything else is treated as a room (including redundant inactive segments).
+    """
+    rooms: list[dict] = []
+    avoidance: list[dict] = []
+    for area in areas:
+        if (
+            area.get("area_state") == AREA_STATE_BLOCKING
+            or area.get("area_type") == AREA_TYPE_AVOIDANCE
+        ):
+            avoidance.append(area)
+        else:
+            rooms.append(area)
+    return rooms, avoidance
+
+
 def _build_live_map_payload(
     existing: dict[str, Any],
     live_params: dict[str, Any],
@@ -650,9 +671,12 @@ def _build_live_map_payload(
       map_id, is_active, rooms, outline, walls, dock, robot,
       live_outline, bounds, scale
     """
+    # ── Classify areas: rooms vs avoidance zones ──────────────────────
+    room_areas, avoidance_areas = _classify_areas(areas_data.get("areas", []))
+
     # ── Rooms (from /get/areas?map_id) ───────────────────────────────
     rooms: list[dict[str, Any]] = []
-    for idx, area in enumerate(areas_data.get("areas", [])):
+    for idx, area in enumerate(room_areas):
         try:
             meta = json.loads(area.get("area_meta_data", "{}") or "{}")
         except (json.JSONDecodeError, TypeError):
@@ -670,6 +694,16 @@ def _build_live_map_payload(
             "color": _ROOM_COLORS[idx % len(_ROOM_COLORS)],
             "redundant": redundant,
             "area_m2": _calc_area_m2(raw_pts),
+        })
+
+    # ── Avoidance zones (area_state="blocking" / area_type="to_be_cleaned") ──
+    avoidance_zones: list[dict[str, Any]] = []
+    for area in avoidance_areas:
+        raw_pts = area.get("points", [])
+        pts = [[p["x"], p["y"]] for p in raw_pts]
+        avoidance_zones.append({
+            "id": area.get("id"),
+            "polygon": pts,
         })
 
     # ── Outline (saved-map boundary from /get/seen_polygon?map_id) ───
@@ -735,6 +769,7 @@ def _build_live_map_payload(
     # ── Bounding box ─────────────────────────────────────────────────
     all_pts: list[list[int]] = (
         [pt for r in rooms for pt in r["polygon"]]
+        + [pt for z in avoidance_zones for pt in z["polygon"]]
         + outline
         + live_outline
         + ([[dock["x"], dock["y"]]] if dock else [])
@@ -764,6 +799,7 @@ def _build_live_map_payload(
         "is_live_map": is_live_map,
         "operation_map_id": operation_map_id,
         "rooms": rooms,
+        "avoidance_zones": avoidance_zones,
         "outline": outline,
         "walls": walls,
         "dock": dock,

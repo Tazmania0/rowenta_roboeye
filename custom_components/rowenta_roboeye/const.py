@@ -88,6 +88,13 @@ CHARGING_CHARGING = "charging"
 CHARGING_CONNECTED = "connected"
 CHARGING_UNCONNECTED = "unconnected"
 
+# ── Area type / state constants ───────────────────────────────────────
+AREA_TYPE_ROOM      = "room"
+AREA_TYPE_AVOIDANCE = "to_be_cleaned"
+AREA_STATE_CLEAN    = "clean"
+AREA_STATE_INACTIVE = "inactive"
+AREA_STATE_BLOCKING = "blocking"
+
 # ── Fan speed mapping  API value (str) -> human label ─────────────────
 FAN_SPEED_MAP: dict[str, str] = {
     "1": "eco",
