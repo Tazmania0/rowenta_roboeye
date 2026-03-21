@@ -8,7 +8,7 @@ from homeassistant.const import CONF_HOST
 from homeassistant.core import Event, HomeAssistant, CoreState, EVENT_HOMEASSISTANT_STARTED, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.event import async_call_later, async_track_device_registry_updated_event
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
@@ -126,29 +126,40 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         )
     )
 
-    # Hide/show dashboard sidebar when the device is disabled/enabled in HA
-    @callback
-    def _on_device_registry_updated(event: Event) -> None:
-        if event.data.get("action") != "updated":
-            return
-        if "disabled_by" not in event.data.get("changes", {}):
-            return
-        registry = dr.async_get(hass)
-        device = registry.async_get_device(
-            identifiers={(DOMAIN, coordinator.device_id)}
-        )
-        if device is None or device.id != event.data.get("device_id"):
-            return
-        hass.async_create_task(
-            dashboard_manager.async_set_sidebar_visible(hass, device.disabled_by is None)
-        )
-
-    config_entry.async_on_unload(
-        hass.bus.async_listen(
-            dr.EVENT_DEVICE_REGISTRY_UPDATED,
-            _on_device_registry_updated,
-        )
+    # Hide/show dashboard sidebar when the device is disabled/enabled in HA.
+    # Use async_track_device_registry_updated_event (the HA-recommended API) so
+    # events are pre-filtered to our specific device — no manual device_id check
+    # needed.  The event action is "update" (not "updated") per the HA device
+    # registry TypedDict definition.
+    _dev_registry = dr.async_get(hass)
+    _ha_device = _dev_registry.async_get_device(
+        identifiers={(DOMAIN, coordinator.device_id)}
     )
+
+    if _ha_device is not None:
+        @callback
+        def _on_device_registry_updated(event: Event) -> None:
+            if "disabled_by" not in event.data.get("changes", {}):
+                return
+            device = dr.async_get(hass).async_get_device(
+                identifiers={(DOMAIN, coordinator.device_id)}
+            )
+            if device is None:
+                return
+            hass.async_create_task(
+                dashboard_manager.async_set_sidebar_visible(hass, device.disabled_by is None)
+            )
+
+        config_entry.async_on_unload(
+            async_track_device_registry_updated_event(
+                hass, _ha_device.id, _on_device_registry_updated
+            )
+        )
+    else:
+        LOGGER.warning(
+            "RobEye: HA device not found for '%s' — sidebar hide/show on disable will not work",
+            coordinator.device_id,
+        )
 
     config_entry.async_on_unload(
         config_entry.add_update_listener(_async_update_listener)
