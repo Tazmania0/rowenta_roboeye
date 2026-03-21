@@ -320,11 +320,12 @@ class RobEyeApiClient:
         return await self._get(API_GET_POINTS_OF_INTEREST)
 
     async def get_rooms(self) -> dict[str, Any]:
-        """GET /get/rooms — named room list.
+        """GET /get/rooms — named room list (UNCONFIRMED).
 
-        Discovered in APK v9.5.1-RC1. Likely a newer replacement for /get/areas
-        that may return room names + polygons in a single call.
-        Format unconfirmed — probe and document when live data is available.
+        Discovered in APK v9.5.1-RC1 source analysis only.
+        NOT yet confirmed to exist on the physical device.
+        May return 404 or an empty response on current firmware.
+        Do not call this in production polling loops until confirmed live.
         """
         return await self._get(API_GET_ROOMS)
 
