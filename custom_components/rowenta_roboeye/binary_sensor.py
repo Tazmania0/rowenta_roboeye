@@ -98,10 +98,10 @@ class RowentaBrushRightStuckSensor(RobEyeEntity, BinarySensorEntity):
 class RowentaDustbinSensor(RobEyeEntity, BinarySensorEntity):
     """Binary sensor: dustbin present or missing.
 
-    is_on = True  → dustbin is missing (GPIO 'inactive') → state: Missing
-    is_on = False → dustbin is present (GPIO 'active')   → state: Present
+    is_on = True  → dustbin is present (GPIO 'active')   → state: Present
+    is_on = False → dustbin is missing (GPIO 'inactive') → state: Missing
 
-    No device_class so HA uses the translation strings (Missing / Present)
+    No device_class so HA uses the translation strings (Present / Missing)
     rather than the built-in PROBLEM class labels (Problem / OK).
     Icon is defined per-state in icons.json.
     """
@@ -117,6 +117,5 @@ class RowentaDustbinSensor(RobEyeEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         return (
-            self.coordinator.sensor_values_parsed.get("gpio__dustbin") != "active"
-            and "gpio__dustbin" in self.coordinator.sensor_values_parsed
+            self.coordinator.sensor_values_parsed.get("gpio__dustbin") == "active"
         )

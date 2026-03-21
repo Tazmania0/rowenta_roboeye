@@ -4,8 +4,8 @@
       "dustbin": {
         "default": "mdi:delete-alert",
         "state": {
-          "off": "mdi:delete",
-          "on": "mdi:delete-alert"
+          "off": "mdi:delete-alert",
+          "on": "mdi:delete"
         }
       },
       "brush_left": {
