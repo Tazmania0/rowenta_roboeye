@@ -55,7 +55,6 @@ class RowentaBrushLeftStuckSensor(RobEyeEntity, BinarySensorEntity):
     """
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
-    _attr_icon = "mdi:brush"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_translation_key = "brush_left"
 
@@ -80,7 +79,6 @@ class RowentaBrushRightStuckSensor(RobEyeEntity, BinarySensorEntity):
     """
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
-    _attr_icon = "mdi:brush"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_translation_key = "brush_right"
 

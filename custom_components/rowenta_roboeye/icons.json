@@ -2,10 +2,20 @@
   "entity": {
     "binary_sensor": {
       "dustbin": {
+        "default": "mdi:delete-alert"
+      },
+      "brush_left": {
         "default": "mdi:star-three-points",
         "state": {
-          "on": "mdi:star-three-points-outline",
-          "off": "mdi:star-three-points"
+          "on": "mdi:star-three-points",
+          "off": "mdi:star-three-points-outline"
+        }
+      },
+      "brush_right": {
+        "default": "mdi:star-three-points",
+        "state": {
+          "on": "mdi:star-three-points",
+          "off": "mdi:star-three-points-outline"
         }
       }
     },
