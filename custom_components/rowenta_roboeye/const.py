@@ -20,14 +20,14 @@ PLATFORMS: list[Platform] = [
 ]
 
 # ── Coordinator timing ────────────────────────────────────────────────
-UPDATE_INTERVAL_CLEANING = timedelta(seconds=2)   # rob_pose + status during cleaning
+UPDATE_INTERVAL_CLEANING = timedelta(seconds=5)   # rob_pose + status during cleaning
 UPDATE_INTERVAL_IDLE     = timedelta(seconds=15)  # status only when idle
 
 # Keep UPDATE_INTERVAL as an alias for the idle interval (used by coordinator init)
 UPDATE_INTERVAL = UPDATE_INTERVAL_IDLE
 
-SCAN_INTERVAL_ROB_POSE   = 2     # s — /get/rob_pose (cleaning only; idle uses 15 s)
-SCAN_INTERVAL_STATUS     = 2     # s — /get/status
+SCAN_INTERVAL_ROB_POSE   = 5     # s — /get/rob_pose (cleaning only; idle uses 15 s)
+SCAN_INTERVAL_STATUS     = 5     # s — /get/status
 SCAN_INTERVAL_STATISTICS = 600
 SCAN_INTERVAL_AREAS = 300
 SCAN_INTERVAL_ROBOT_INFO = 3600
