@@ -20,10 +20,23 @@ PLATFORMS: list[Platform] = [
 ]
 
 # ── Coordinator timing ────────────────────────────────────────────────
-UPDATE_INTERVAL = timedelta(seconds=15)
-SCAN_INTERVAL_STATISTICS = 600
-SCAN_INTERVAL_AREAS = 300
-SCAN_INTERVAL_ROBOT_INFO = 3600
+# Base coordinator tick — controls how often _async_update_data() is called.
+# Dynamically switched at runtime based on cleaning state.
+# 500ms during cleaning matches gyro hardware update rate for smooth heading.
+UPDATE_INTERVAL_CLEANING = timedelta(milliseconds=500)  # gyro/odometry tick
+UPDATE_INTERVAL_IDLE     = timedelta(seconds=15)        # status only
+
+# Within each tick, slower buckets are gated by these intervals:
+SCAN_INTERVAL_GYRO       = 0.5   # s — sensor_values: gyro heading + odometry delta
+SCAN_INTERVAL_STATUS     = 2     # s — /get/status: mode, battery (every 4 gyro ticks)
+SCAN_INTERVAL_SLAM       = 5     # s — SLAM position + polygon + grid (cleaning only)
+SCAN_INTERVAL_SENSOR_HW  = 10    # s — brush stuck gpio (less critical, every 20 ticks)
+SCAN_INTERVAL_IDLE_LOC   = 30    # s — /debug/localization when idle (stale ok)
+SCAN_INTERVAL_AREAS      = 300   # s — areas + schedule
+SCAN_INTERVAL_STATISTICS = 600   # s — lifetime totals
+SCAN_INTERVAL_ROBOT_INFO = 3600  # s — serial, wifi, firmware
+
+# live_parameters is NOT polled — confirmed config-only, no position data.
 
 # ── Config entry keys ─────────────────────────────────────────────────
 CONF_MAP_ID = "map_id"
@@ -108,7 +121,8 @@ FAN_SPEED_REVERSE_MAP: dict[str, str] = {v: k for k, v in FAN_SPEED_MAP.items()}
 FAN_SPEEDS: list[str] = list(FAN_SPEED_MAP.values())
 
 # ── Coordinator data keys ─────────────────────────────────────────────
-DATA_SENSOR_VALUES = "sensor_values"
+DATA_SENSOR_VALUES        = "sensor_values"
+DATA_SENSOR_VALUES_PARSED = "sensor_values_parsed"  # flattened dict from _parse_sensor_values
 DATA_STATUS = "status"
 DATA_STATISTICS = "statistics"
 DATA_PERMANENT_STATISTICS = "permanent_statistics"
