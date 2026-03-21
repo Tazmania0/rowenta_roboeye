@@ -535,23 +535,30 @@ class RobEyeDashboardManager:
         # Yield to event loop so HA's storage_dashboard_changed listener fires.
         # That listener (lovelace/__init__.py) handles CHANGE_ADDED and adds the
         # LovelaceStorage object to hass.data[LOVELACE_DATA].dashboards[url_path].
-        # Without this yield we check hass.data before the listener has run.
-        await asyncio.sleep(0)
-
-        # Re-fetch from hass.data
-        lovelace_dashboards = getattr(lovelace_data, "dashboards", {})
-        store = lovelace_dashboards.get(DASHBOARD_URL_PATH)
+        # The listener may itself be async and require more than one event-loop
+        # iteration to complete, so we retry up to 10 yields before giving up.
+        store = None
+        for attempt in range(10):
+            await asyncio.sleep(0)
+            lovelace_dashboards = getattr(lovelace_data, "dashboards", {})
+            store = lovelace_dashboards.get(DASHBOARD_URL_PATH)
+            if store is not None:
+                break
+            _LOGGER.debug(
+                "RobEye dashboard: store not ready yet after yield %d/10", attempt + 1
+            )
 
         if store is None:
             _LOGGER.warning(
-                "RobEye dashboard: '%s' still not in hass.data after yield. "
+                "RobEye dashboard: '%s' still not in hass.data after 10 yields. "
                 "dashboards keys: %s — will retry next cycle",
                 DASHBOARD_URL_PATH,
                 list(lovelace_dashboards.keys()),
             )
         else:
             _LOGGER.info(
-                "RobEye dashboard: store obtained — type=%s", type(store).__name__
+                "RobEye dashboard: store obtained after %d yield(s) — type=%s",
+                attempt + 1, type(store).__name__,
             )
 
         return store
