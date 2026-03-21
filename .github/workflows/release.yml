@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -15,7 +17,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Get version from manifest
+        id: version
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('custom_components/rowenta_roboeye/manifest.json'))['version'])")
+          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Create tag if on main branch
+        if: github.ref == 'refs/heads/main'
+        run: |
+          TAG="${{ steps.version.outputs.version }}"
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "Tag $TAG already exists, skipping release creation."
+            echo "skip=true" >> $GITHUB_ENV
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "$TAG"
+            git push origin "$TAG"
+            echo "skip=false" >> $GITHUB_ENV
+          fi
+
       - name: Create release zip
+        if: env.skip != 'true'
         run: |
           mkdir -p release
           cp -r custom_components release/
@@ -24,7 +48,9 @@ jobs:
           cd ..
 
       - name: Create GitHub Release
+        if: env.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.version }}
           files: rowenta_roboeye.zip
           generate_release_notes: true
