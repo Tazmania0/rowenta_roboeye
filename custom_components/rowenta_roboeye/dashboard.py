@@ -415,41 +415,80 @@ class RobEyeDashboardManager:
             _LOGGER.warning("RobEye dashboard: async_save() failed: %s", err)
             return False
 
-    def set_sidebar_visible(self, hass: HomeAssistant, visible: bool) -> None:
+    async def async_set_sidebar_visible(self, hass: HomeAssistant, visible: bool) -> None:
         """Show or hide the dashboard in the HA sidebar without deleting it.
 
         Called when the device is enabled or disabled in the device registry.
         Toggling visibility preserves all dashboard content and configuration.
-        """
-        try:
-            from homeassistant.components import frontend as _frontend
-        except ImportError as err:
-            _LOGGER.warning("RobEye dashboard: cannot import frontend: %s", err)
-            return
 
+        Two-step approach:
+          1. Immediate: re-register the panel with show_in_sidebar=visible so the
+             sidebar updates without an HA restart.
+          2. Persistent: write show_in_sidebar to the Lovelace storage entry so
+             that on the next HA boot the global DashboardsCollection reads the
+             correct value and does not re-show a disabled device's dashboard.
+        """
         self._sidebar_hidden = not visible
 
-        if visible:
-            try:
-                _frontend.async_register_built_in_panel(
-                    hass,
-                    component_name="lovelace",
-                    sidebar_title=DASHBOARD_TITLE,
-                    sidebar_icon=DASHBOARD_ICON,
-                    frontend_url_path=DASHBOARD_URL_PATH,
-                    config={"mode": "storage"},
-                    require_admin=False,
-                    update=True,
-                )
-                _LOGGER.info("RobEye dashboard: sidebar shown — device enabled")
-            except Exception as err:
-                _LOGGER.warning("RobEye dashboard: failed to show sidebar: %s", err)
-        else:
-            try:
-                _frontend.async_remove_panel(hass, DASHBOARD_URL_PATH)
-                _LOGGER.info("RobEye dashboard: sidebar hidden — device disabled")
-            except Exception as err:
-                _LOGGER.debug("RobEye dashboard: panel removal skipped: %s", err)
+        # ── Step 1: immediate frontend update ────────────────────────────
+        try:
+            from homeassistant.components import frontend as _frontend
+            _frontend.async_register_built_in_panel(
+                hass,
+                component_name="lovelace",
+                sidebar_title=DASHBOARD_TITLE,
+                sidebar_icon=DASHBOARD_ICON,
+                frontend_url_path=DASHBOARD_URL_PATH,
+                config={"mode": "storage"},
+                require_admin=False,
+                update=True,
+                show_in_sidebar=visible,
+            )
+            _LOGGER.info(
+                "RobEye dashboard: sidebar %s — device %s",
+                "shown" if visible else "hidden",
+                "enabled" if visible else "disabled",
+            )
+        except Exception as err:
+            _LOGGER.warning("RobEye dashboard: panel update failed: %s", err)
+
+        # ── Step 2: persist show_in_sidebar to storage ───────────────────
+        # Without this, HA restart re-reads show_in_sidebar=True from storage
+        # and re-shows the panel even though the device is disabled.
+        try:
+            from homeassistant.components.lovelace.dashboard import DashboardsCollection
+        except ImportError as err:
+            _LOGGER.warning("RobEye dashboard: cannot import lovelace: %s", err)
+            return
+
+        dashboards_collection = DashboardsCollection(hass)
+        try:
+            await dashboards_collection.async_load()
+        except Exception as err:
+            _LOGGER.warning("RobEye dashboard: async_load() failed: %s", err)
+            return
+
+        item = next(
+            (i for i in dashboards_collection.async_items()
+             if i.get(_CONF_URL_PATH) == DASHBOARD_URL_PATH),
+            None,
+        )
+        if item is None:
+            _LOGGER.debug(
+                "RobEye dashboard: item not found in storage — show_in_sidebar not persisted"
+            )
+            return
+
+        try:
+            await dashboards_collection.async_update_item(
+                item["id"],
+                {_CONF_SHOW_IN_SIDEBAR: visible},
+            )
+            _LOGGER.info(
+                "RobEye dashboard: show_in_sidebar=%s persisted to storage", visible
+            )
+        except Exception as err:
+            _LOGGER.warning("RobEye dashboard: async_update_item() failed: %s", err)
 
     async def async_delete(self, hass: HomeAssistant) -> None:
         """Remove the dashboard from the Lovelace registry.
@@ -626,7 +665,7 @@ class RobEyeDashboardManager:
 
         # Register the frontend panel so the dashboard appears in the sidebar,
         # but only when the device is not disabled — _sidebar_hidden is set by
-        # set_sidebar_visible() before we reach this path on a re-create.
+        # async_set_sidebar_visible() before we reach this path on a re-create.
         if not self._sidebar_hidden:
             try:
                 from homeassistant.components import frontend as _frontend

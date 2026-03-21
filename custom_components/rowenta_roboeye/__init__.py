@@ -139,7 +139,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         )
         if device is None or device.id != event.data.get("device_id"):
             return
-        dashboard_manager.set_sidebar_visible(hass, device.disabled_by is None)
+        hass.async_create_task(
+            dashboard_manager.async_set_sidebar_visible(hass, device.disabled_by is None)
+        )
 
     config_entry.async_on_unload(
         hass.bus.async_listen(
@@ -194,7 +196,7 @@ async def _async_initial_dashboard(
             LOGGER.info("RobEye: dashboard ready (attempt %d)", attempt)
             # If the device was already disabled before this boot, hide the panel now.
             if _is_device_disabled(hass, coordinator.device_id):
-                dashboard_manager.set_sidebar_visible(hass, False)
+                await dashboard_manager.async_set_sidebar_visible(hass, False)
             return
 
         LOGGER.warning(
