@@ -229,6 +229,52 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             self._last_mode = mode
 
+            # ── Every 600 s: saved-map geometry (walls, rooms, outline) ──
+            # Fetched BEFORE the live-map block so that feature_map / tile_map /
+            # areas_saved_map are available the very first time _build_live_map_payload
+            # is called (otherwise the map stays blank for the first 60 s after startup).
+            if self._is_live_map_enabled() and (
+                self._last_map_geometry is None or (
+                    now - self._last_map_geometry
+                ) >= timedelta(seconds=SCAN_INTERVAL_MAP_GEOMETRY)
+            ):
+                try:
+                    data[DATA_FEATURE_MAP] = await self.client.get_feature_map(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_feature_map unavailable, skipping")
+                try:
+                    data[DATA_TILE_MAP] = await self.client.get_tile_map(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_tile_map unavailable, skipping")
+                try:
+                    data[DATA_AREAS_SAVED_MAP] = await self.client.get_areas(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_areas (map geometry) unavailable, skipping")
+                try:
+                    data[DATA_SEEN_POLY_SAVED_MAP] = await self.client.get_seen_polygon(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_seen_polygon (map geometry) unavailable, skipping")
+
+                # Load last-session grid from saved map (also runs on startup)
+                if not is_active:
+                    try:
+                        saved_grid = await self.client.get_cleaning_grid_map(
+                            map_id=self.map_id
+                        )
+                        if saved_grid.get("size_x", 0) > 0:
+                            self._last_session_grid = saved_grid
+                            if not self._session_complete:
+                                self._session_complete = True
+                                LOGGER.info(
+                                    "Loaded last session grid from saved map: %d×%d",
+                                    saved_grid["size_x"],
+                                    saved_grid["size_y"],
+                                )
+                    except CannotConnect:
+                        LOGGER.debug("get_cleaning_grid_map saved map unavailable")
+
+                self._last_map_geometry = now
+
             # ── Live-map polling ──────────────────────────────────────
             # Skipped entirely when the live_map sensor entity is disabled.
             if self._is_live_map_enabled():
@@ -336,51 +382,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 self._last_areas = now
                 self._check_for_new_areas(new_areas_blob)
-
-            # ── Every 600 s: saved-map geometry (walls, rooms, outline) ──
-            # Only needed when the live_map sensor is enabled — all data in this
-            # block feeds exclusively into _build_live_map_payload().
-            if self._is_live_map_enabled() and (
-                self._last_map_geometry is None or (
-                    now - self._last_map_geometry
-                ) >= timedelta(seconds=SCAN_INTERVAL_MAP_GEOMETRY)
-            ):
-                try:
-                    data[DATA_FEATURE_MAP] = await self.client.get_feature_map(self.map_id)
-                except CannotConnect:
-                    LOGGER.debug("get_feature_map unavailable, skipping")
-                try:
-                    data[DATA_TILE_MAP] = await self.client.get_tile_map(self.map_id)
-                except CannotConnect:
-                    LOGGER.debug("get_tile_map unavailable, skipping")
-                try:
-                    data[DATA_AREAS_SAVED_MAP] = await self.client.get_areas(self.map_id)
-                except CannotConnect:
-                    LOGGER.debug("get_areas (map geometry) unavailable, skipping")
-                try:
-                    data[DATA_SEEN_POLY_SAVED_MAP] = await self.client.get_seen_polygon(self.map_id)
-                except CannotConnect:
-                    LOGGER.debug("get_seen_polygon (map geometry) unavailable, skipping")
-
-                # Load last-session grid from saved map (also runs on startup)
-                if not is_active:
-                    try:
-                        saved_grid = await self.client.get_cleaning_grid_map(
-                            map_id=self.map_id
-                        )
-                        if saved_grid.get("size_x", 0) > 0:
-                            self._last_session_grid = saved_grid
-                            if not self._session_complete:
-                                self._session_complete = True
-                                LOGGER.info(
-                                    "Loaded last session grid from saved map: %d×%d",
-                                    saved_grid["size_x"],
-                                    saved_grid["size_y"],
-                                )
-                    except CannotConnect:
-                        LOGGER.debug("get_cleaning_grid_map saved map unavailable")
-
-                self._last_map_geometry = now
 
             # ── Every 600 s: lifetime statistics ─────────────────────
             if self._last_statistics is None or (
