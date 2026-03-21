@@ -414,6 +414,40 @@ class RobEyeDashboardManager:
             _LOGGER.warning("RobEye dashboard: async_save() failed: %s", err)
             return False
 
+    def set_sidebar_visible(self, hass: HomeAssistant, visible: bool) -> None:
+        """Show or hide the dashboard in the HA sidebar without deleting it.
+
+        Called when the device is enabled or disabled in the device registry.
+        Toggling visibility preserves all dashboard content and configuration.
+        """
+        try:
+            from homeassistant.components import frontend as _frontend
+        except ImportError as err:
+            _LOGGER.warning("RobEye dashboard: cannot import frontend: %s", err)
+            return
+
+        if visible:
+            try:
+                _frontend.async_register_built_in_panel(
+                    hass,
+                    component_name="lovelace",
+                    sidebar_title=DASHBOARD_TITLE,
+                    sidebar_icon=DASHBOARD_ICON,
+                    frontend_url_path=DASHBOARD_URL_PATH,
+                    config={"mode": "storage"},
+                    require_admin=False,
+                    update=True,
+                )
+                _LOGGER.info("RobEye dashboard: sidebar shown — device enabled")
+            except Exception as err:
+                _LOGGER.warning("RobEye dashboard: failed to show sidebar: %s", err)
+        else:
+            try:
+                _frontend.async_remove_panel(hass, DASHBOARD_URL_PATH, warn_if_unknown=False)
+                _LOGGER.info("RobEye dashboard: sidebar hidden — device disabled")
+            except Exception as err:
+                _LOGGER.debug("RobEye dashboard: panel removal skipped: %s", err)
+
     async def async_delete(self, hass: HomeAssistant) -> None:
         """Remove the dashboard from the Lovelace registry.
 
