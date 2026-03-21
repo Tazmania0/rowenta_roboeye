@@ -139,6 +139,20 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
                 ],
             },
             {
+                "type": "conditional",
+                "conditions": [
+                    {"entity": e_vacuum, "state": "error"},
+                ],
+                "card": {
+                    "type": "markdown",
+                    "content": (
+                        "⚠️ **{{ state_attr('"
+                        + e_vacuum
+                        + "', 'error') }}**"
+                    ),
+                },
+            },
+            {
                 "type": "horizontal-stack",
                 "cards": [
                     {
