@@ -98,11 +98,11 @@ class RowentaBrushRightStuckSensor(RobEyeEntity, BinarySensorEntity):
 class RowentaDustbinSensor(RobEyeEntity, BinarySensorEntity):
     """Binary sensor: dustbin present or missing.
 
-    The dustbin GPIO is active-low: the signal reads 'inactive' when the
-    dustbin is physically seated and 'active' when it is removed.
+    The API only sends gpio__dustbin when the dustbin is removed (value
+    'active').  When the dustbin is seated the key is absent entirely.
 
-    is_on = True  → dustbin is present (GPIO 'inactive') → state: Present
-    is_on = False → dustbin is missing (GPIO 'active')   → state: Missing
+    is_on = True  → dustbin present (key absent or 'inactive') → Present
+    is_on = False → dustbin missing (key == 'active')           → Missing
 
     No device_class so HA uses the translation strings (Present / Missing)
     rather than the built-in PROBLEM class labels (Problem / OK).
@@ -120,5 +120,5 @@ class RowentaDustbinSensor(RobEyeEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         return (
-            self.coordinator.sensor_values_parsed.get("gpio__dustbin") == "inactive"
+            self.coordinator.sensor_values_parsed.get("gpio__dustbin") != "active"
         )
