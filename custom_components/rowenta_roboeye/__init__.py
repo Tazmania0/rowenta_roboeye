@@ -139,19 +139,19 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     if _ha_device is not None:
         @callback
         def _on_device_registry_updated(event: Event) -> None:
-            LOGGER.debug(
+            LOGGER.warning(
                 "RobEye: device-registry event received — action=%r changes=%r",
                 event.data.get("action"),
                 list(event.data.get("changes", {}).keys()),
             )
             if event.data.get("action") != "update":
-                LOGGER.debug(
+                LOGGER.warning(
                     "RobEye: ignoring device-registry event — action %r is not 'update'",
                     event.data.get("action"),
                 )
                 return
             if "disabled_by" not in event.data.get("changes", {}):
-                LOGGER.debug(
+                LOGGER.warning(
                     "RobEye: ignoring device-registry event — 'disabled_by' not in changes %r",
                     list(event.data.get("changes", {}).keys()),
                 )
@@ -282,7 +282,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             and dashboard_manager is not None
             and _is_device_disabled(hass, coordinator.device_id)
         ):
-            LOGGER.debug(
+            LOGGER.warning(
                 "RobEye: device is disabled — hiding dashboard sidebar on entry unload"
             )
             await dashboard_manager.async_set_sidebar_visible(hass, False)
