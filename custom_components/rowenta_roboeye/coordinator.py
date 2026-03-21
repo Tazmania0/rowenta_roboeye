@@ -137,6 +137,36 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # ── Every 15 s: status ───────────────────────────────────
             data[DATA_STATUS] = await self.client.get_status()
 
+            # ── Every cycle: sensor values (GPIO, dustbin, brushes) ──
+            try:
+                raw_sv = await self.client.get_sensor_values()
+                data[DATA_SENSOR_VALUES] = raw_sv
+                parsed_sv = _parse_sensor_values(raw_sv)
+                data["sensor_values_parsed"] = parsed_sv
+                # Fire persistent notification when a brush becomes newly stuck
+                from homeassistant.components import persistent_notification
+                for side, descriptor, notified_attr in (
+                    ("Left",  "side_brush_left_stuck",  "_brush_left_notified"),
+                    ("Right", "side_brush_right_stuck", "_brush_right_notified"),
+                ):
+                    stuck = _gpio(parsed_sv, descriptor) == "active"
+                    was_notified = getattr(self, notified_attr)
+                    if stuck and not was_notified:
+                        persistent_notification.async_create(
+                            self.hass,
+                            (
+                                f"\u26a0\ufe0f {side} side brush is stuck or wrapped. "
+                                "Please check and clean it before the next run."
+                            ),
+                            title="Rowenta \u2014 Brush Alert",
+                            notification_id=f"rowenta_brush_{descriptor}",
+                        )
+                        setattr(self, notified_attr, True)
+                    elif not stuck:
+                        setattr(self, notified_attr, False)
+            except CannotConnect:
+                LOGGER.debug("get_sensor_values unavailable, skipping")
+
             mode = data[DATA_STATUS].get("mode", "")
             is_active = mode in (MODE_CLEANING, MODE_GO_HOME)
 
@@ -292,34 +322,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     data[DATA_ROBOT_FLAGS] = await self.client.get_robot_flags()
                 except CannotConnect:
                     LOGGER.debug("get_robot_flags unavailable, skipping")
-                try:
-                    raw_sv = await self.client.get_sensor_values()
-                    data[DATA_SENSOR_VALUES] = raw_sv
-                    parsed_sv = _parse_sensor_values(raw_sv)
-                    data["sensor_values_parsed"] = parsed_sv
-                    # Fire persistent notification when a brush becomes newly stuck
-                    from homeassistant.components import persistent_notification
-                    for side, descriptor, notified_attr in (
-                        ("Left",  "side_brush_left_stuck",  "_brush_left_notified"),
-                        ("Right", "side_brush_right_stuck", "_brush_right_notified"),
-                    ):
-                        stuck = _gpio(parsed_sv, descriptor) == "active"
-                        was_notified = getattr(self, notified_attr)
-                        if stuck and not was_notified:
-                            persistent_notification.async_create(
-                                self.hass,
-                                (
-                                    f"\u26a0\ufe0f {side} side brush is stuck or wrapped. "
-                                    "Please check and clean it before the next run."
-                                ),
-                                title="Rowenta \u2014 Brush Alert",
-                                notification_id=f"rowenta_brush_{descriptor}",
-                            )
-                            setattr(self, notified_attr, True)
-                        elif not stuck:
-                            setattr(self, notified_attr, False)
-                except CannotConnect:
-                    LOGGER.debug("get_sensor_values unavailable, skipping")
 
                 self._last_areas = now
                 self._check_for_new_areas(new_areas_blob)
