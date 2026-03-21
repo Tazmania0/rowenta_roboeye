@@ -16,6 +16,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -127,6 +128,22 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return str(serial).lower().replace("-", "_").replace(" ", "_")
         return self.config_entry.entry_id.lower()
 
+    # ── Entity state helpers ───────────────────────────────────────────
+
+    def _is_live_map_enabled(self) -> bool:
+        """Return True if the live_map sensor entity is enabled in the entity registry.
+
+        Falls back to True when the entity has not been registered yet (first startup).
+        """
+        ent_reg = er.async_get(self.hass)
+        entity_id = ent_reg.async_get_entity_id(
+            "sensor", DOMAIN, f"live_map_{self.device_id}"
+        )
+        if entity_id is None:
+            return True  # not yet registered — assume enabled
+        entry = ent_reg.async_get(entity_id)
+        return entry is None or not entry.disabled
+
     # ── Core update ───────────────────────────────────────────────────
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -208,108 +225,109 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._last_mode = mode
 
             # ── Live-map polling: every cycle when active, every 60 s when idle ──
-            # When cleaning, always fetch position/area on every coordinator tick
-            # so robot position tracks the robot in near-real-time.  When idle
-            # there is no need to hammer the endpoints; 60 s is fine.
-            if is_active or self._last_live_map is None or (
-                now - self._last_live_map
-            ) >= timedelta(seconds=60):
-                live_params: dict[str, Any] = {}
+            # Skipped entirely when the live_map sensor entity is disabled so the
+            # robot's embedded HTTP server is not burdened with position/grid calls
+            # that serve no purpose without the map card.
+            if self._is_live_map_enabled():
+                if is_active or self._last_live_map is None or (
+                    now - self._last_live_map
+                ) >= timedelta(seconds=60):
+                    live_params: dict[str, Any] = {}
 
-                try:
-                    live_params = await self.client.get_live_parameters()
-                    data[DATA_LIVE_PARAMETERS] = live_params
-                except CannotConnect:
-                    LOGGER.debug("get_live_parameters unavailable, skipping")
-
-                # ── Determine which map session is active ─────────────────
-                try:
-                    map_status = await self.client.get_map_status()
-                    data[DATA_MAP_STATUS] = map_status
-                    operation_map_id = str(map_status.get("operation_map_id", self.map_id))
-                except CannotConnect:
-                    operation_map_id = self._operation_map_id
-                is_live_map = (operation_map_id != self.map_id)
-                self._operation_map_id = operation_map_id
-
-                # ── Robot position — choose endpoint based on map session ──
-                robot_position: dict | None = None
-                if is_active and is_live_map:
-                    # New-map session (map 55/56/57…) → /debug/exploration
                     try:
-                        exploration = await self.client.get_exploration()
-                        data[DATA_EXPLORATION] = exploration
-                        robot_position = _extract_exploration_position(exploration)
+                        live_params = await self.client.get_live_parameters()
+                        data[DATA_LIVE_PARAMETERS] = live_params
                     except CannotConnect:
-                        LOGGER.debug("get_exploration unavailable, skipping")
-                elif is_active and not is_live_map:
-                    # Cleaning saved map (map 3) → /debug/relocalization
-                    try:
-                        reloc = await self.client.get_relocalization()
-                        data[DATA_RELOCALIZATION] = reloc
-                        robot_position = _extract_relocalization_position(reloc)
-                    except CannotConnect:
-                        LOGGER.debug("get_relocalization unavailable, skipping")
-                else:
-                    # Idle → /debug/localization (global entry)
-                    try:
-                        loc = await self.client.get_localization()
-                        robot_position = _extract_localization_position(loc)
-                    except CannotConnect:
-                        LOGGER.debug("get_localization unavailable, skipping")
+                        LOGGER.debug("get_live_parameters unavailable, skipping")
 
-                cleaning_grid: dict = {}
-                seen_polygon_raw: dict = {}
-                if is_active:
+                    # ── Determine which map session is active ─────────────────
                     try:
-                        seen_polygon_raw = await self.client.get_seen_polygon()
-                        data[DATA_SEEN_POLYGON] = seen_polygon_raw
+                        map_status = await self.client.get_map_status()
+                        data[DATA_MAP_STATUS] = map_status
+                        operation_map_id = str(map_status.get("operation_map_id", self.map_id))
                     except CannotConnect:
-                        LOGGER.debug("get_seen_polygon unavailable, skipping")
-                    try:
-                        cleaning_grid = await self.client.get_cleaning_grid_map()
-                        data[DATA_CLEANING_GRID] = cleaning_grid
-                    except CannotConnect:
-                        LOGGER.debug("get_cleaning_grid_map unavailable, skipping")
-                else:
-                    data[DATA_SEEN_POLYGON] = {}
-                    data[DATA_CLEANING_GRID] = {}
+                        operation_map_id = self._operation_map_id
+                    is_live_map = (operation_map_id != self.map_id)
+                    self._operation_map_id = operation_map_id
 
-                # ── Accumulate robot path during cleaning ─────────────
-                if is_active and robot_position:
-                    pt: tuple[float, float] = (robot_position["x"], robot_position["y"])
-                    if (
-                        not self._robot_path
-                        or (pt[0] - self._robot_path[-1][0]) ** 2
-                        + (pt[1] - self._robot_path[-1][1]) ** 2
-                        >= _MIN_MOVE_UNITS ** 2
-                    ):
-                        self._robot_path.append(pt)
-                        if len(self._robot_path) > _MAX_PATH_POINTS:
-                            self._robot_path = self._robot_path[-_MAX_PATH_POINTS:]
+                    # ── Robot position — choose endpoint based on map session ──
+                    robot_position: dict | None = None
+                    if is_active and is_live_map:
+                        # New-map session (map 55/56/57…) → /debug/exploration
+                        try:
+                            exploration = await self.client.get_exploration()
+                            data[DATA_EXPLORATION] = exploration
+                            robot_position = _extract_exploration_position(exploration)
+                        except CannotConnect:
+                            LOGGER.debug("get_exploration unavailable, skipping")
+                    elif is_active and not is_live_map:
+                        # Cleaning saved map (map 3) → /debug/relocalization
+                        try:
+                            reloc = await self.client.get_relocalization()
+                            data[DATA_RELOCALIZATION] = reloc
+                            robot_position = _extract_relocalization_position(reloc)
+                        except CannotConnect:
+                            LOGGER.debug("get_relocalization unavailable, skipping")
+                    else:
+                        # Idle → /debug/localization (global entry)
+                        try:
+                            loc = await self.client.get_localization()
+                            robot_position = _extract_localization_position(loc)
+                        except CannotConnect:
+                            LOGGER.debug("get_localization unavailable, skipping")
 
-                data[DATA_LIVE_MAP] = _build_live_map_payload(
-                    existing=data.get(DATA_LIVE_MAP, {}),
-                    live_params=live_params,
-                    robot_position=robot_position,
-                    seen_polygon_raw=seen_polygon_raw,
-                    cleaning_grid=cleaning_grid,
-                    feature_map=data.get(DATA_FEATURE_MAP, {}),
-                    tile_map=data.get(DATA_TILE_MAP, {}),
-                    areas_data=data.get(DATA_AREAS_SAVED_MAP, {}),
-                    seen_poly_saved_map=data.get(DATA_SEEN_POLY_SAVED_MAP, {}),
-                    is_active=is_active,
-                    is_live_map=is_live_map,
-                    map_id=self.map_id,
-                    operation_map_id=operation_map_id,
-                    robot_path=self._robot_path,
-                    last_session_grid=self._last_session_grid,
-                    last_session_path=self._last_session_path,
-                    last_session_outline=self._last_session_outline,
-                    session_complete=self._session_complete,
-                )
+                    cleaning_grid: dict = {}
+                    seen_polygon_raw: dict = {}
+                    if is_active:
+                        try:
+                            seen_polygon_raw = await self.client.get_seen_polygon()
+                            data[DATA_SEEN_POLYGON] = seen_polygon_raw
+                        except CannotConnect:
+                            LOGGER.debug("get_seen_polygon unavailable, skipping")
+                        try:
+                            cleaning_grid = await self.client.get_cleaning_grid_map()
+                            data[DATA_CLEANING_GRID] = cleaning_grid
+                        except CannotConnect:
+                            LOGGER.debug("get_cleaning_grid_map unavailable, skipping")
+                    else:
+                        data[DATA_SEEN_POLYGON] = {}
+                        data[DATA_CLEANING_GRID] = {}
 
-                self._last_live_map = now
+                    # ── Accumulate robot path during cleaning ─────────────
+                    if is_active and robot_position:
+                        pt: tuple[float, float] = (robot_position["x"], robot_position["y"])
+                        if (
+                            not self._robot_path
+                            or (pt[0] - self._robot_path[-1][0]) ** 2
+                            + (pt[1] - self._robot_path[-1][1]) ** 2
+                            >= _MIN_MOVE_UNITS ** 2
+                        ):
+                            self._robot_path.append(pt)
+                            if len(self._robot_path) > _MAX_PATH_POINTS:
+                                self._robot_path = self._robot_path[-_MAX_PATH_POINTS:]
+
+                    data[DATA_LIVE_MAP] = _build_live_map_payload(
+                        existing=data.get(DATA_LIVE_MAP, {}),
+                        live_params=live_params,
+                        robot_position=robot_position,
+                        seen_polygon_raw=seen_polygon_raw,
+                        cleaning_grid=cleaning_grid,
+                        feature_map=data.get(DATA_FEATURE_MAP, {}),
+                        tile_map=data.get(DATA_TILE_MAP, {}),
+                        areas_data=data.get(DATA_AREAS_SAVED_MAP, {}),
+                        seen_poly_saved_map=data.get(DATA_SEEN_POLY_SAVED_MAP, {}),
+                        is_active=is_active,
+                        is_live_map=is_live_map,
+                        map_id=self.map_id,
+                        operation_map_id=operation_map_id,
+                        robot_path=self._robot_path,
+                        last_session_grid=self._last_session_grid,
+                        last_session_path=self._last_session_path,
+                        last_session_outline=self._last_session_outline,
+                        session_complete=self._session_complete,
+                    )
+
+                    self._last_live_map = now
 
             # ── Every 300 s: areas + sensor status ───────────────────
             if self._last_areas is None or (
@@ -331,9 +349,13 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._check_for_new_areas(new_areas_blob)
 
             # ── Every 600 s: saved-map geometry (walls, rooms, outline) ──
-            if self._last_map_geometry is None or (
-                now - self._last_map_geometry
-            ) >= timedelta(seconds=SCAN_INTERVAL_MAP_GEOMETRY):
+            # Only needed when the live_map sensor is enabled — all data in this
+            # block feeds exclusively into _build_live_map_payload().
+            if self._is_live_map_enabled() and (
+                self._last_map_geometry is None or (
+                    now - self._last_map_geometry
+                ) >= timedelta(seconds=SCAN_INTERVAL_MAP_GEOMETRY)
+            ):
                 try:
                     data[DATA_FEATURE_MAP] = await self.client.get_feature_map(self.map_id)
                 except CannotConnect:
