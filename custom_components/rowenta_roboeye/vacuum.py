@@ -115,7 +115,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
 
         # Collect specific hardware fault conditions
         _error_conditions: list[str] = []
-        if sv.get("gpio__dustbin") == "active":
+        if sv.get("gpio__dustbin") == "inactive":
             _error_conditions.append("Dustbin missing")
         if sv.get("gpio__side_brush_left_stuck") == "active":
             _error_conditions.append("Left brush stuck")
