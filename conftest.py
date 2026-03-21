@@ -224,12 +224,3 @@ _modules = {
 
 for _name, _mod in _modules.items():
     sys.modules.setdefault(_name, _mod)
-
-# ---------------------------------------------------------------------------
-# Stub aiohttp so api.py can be imported without the real library
-# ---------------------------------------------------------------------------
-if "aiohttp" not in sys.modules:
-    _aiohttp = _make_module("aiohttp", ClientSession=MagicMock, ClientError=Exception)
-    _aiohttp.ClientTimeout = MagicMock
-    _aiohttp.ClientResponseError = type("ClientResponseError", (Exception,), {"status": 0})
-    sys.modules["aiohttp"] = _aiohttp
