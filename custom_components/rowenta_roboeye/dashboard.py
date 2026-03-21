@@ -373,8 +373,12 @@ class RobEyeDashboardManager:
         hass: HomeAssistant,
         areas: list[dict[str, Any]],
         device_id: str = _DEV,
-    ) -> None:
-        """Create or update the dashboard only when config has changed."""
+    ) -> bool:
+        """Create or update the dashboard only when config has changed.
+
+        Returns True if the dashboard is ready (saved or unchanged),
+        False if the lovelace store is not yet available or save failed.
+        """
         rooms = _extract_rooms(areas)
         config = _build_config(hass, rooms, device_id)
         new_hash = _config_hash(config)
@@ -390,13 +394,12 @@ class RobEyeDashboardManager:
         if lovelace_store is None:
             # lovelace not ready yet (HA still starting up) — will retry next cycle
             _LOGGER.debug("RobEye dashboard: lovelace store not ready, will retry")
-            return
+            return False
 
         # Step 2: skip save if config is identical AND dashboard exists
-        dashboard_exists = lovelace_store is not None
-        if new_hash == self._last_hash and dashboard_exists:
+        if new_hash == self._last_hash:
             _LOGGER.debug("RobEye dashboard: config unchanged, skipping save")
-            return
+            return True
 
         # Step 3: save config
         try:
@@ -406,9 +409,11 @@ class RobEyeDashboardManager:
                 "RobEye dashboard: saved — %d rooms, hash=%s",
                 len(rooms), new_hash[:8],
             )
+            return True
         except Exception as err:
             self._last_hash = None   # retry next cycle
             _LOGGER.warning("RobEye dashboard: async_save() failed: %s", err)
+            return False
 
     async def async_delete(self, hass: HomeAssistant) -> None:
         """Remove the dashboard from the Lovelace registry."""
@@ -592,7 +597,11 @@ async def async_create_dashboard(
     robot_info: dict[str, Any] | None = None,
     manager: "RobEyeDashboardManager | None" = None,
     device_id: str = _DEV,
-) -> None:
-    """Create or update the dashboard. Idempotent — safe to call repeatedly."""
+) -> bool:
+    """Create or update the dashboard. Idempotent — safe to call repeatedly.
+
+    Returns True if the dashboard was saved (or was already up-to-date),
+    False if the lovelace store was not available or the save failed.
+    """
     _mgr = manager or RobEyeDashboardManager()
-    await _mgr.async_update(hass, areas, device_id)
+    return await _mgr.async_update(hass, areas, device_id)

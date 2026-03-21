@@ -5,7 +5,7 @@ from __future__ import annotations
 __version__ = "1.3.6"
 
 import asyncio
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant, CoreState, EVENT_HOMEASSISTANT_STARTED, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -61,10 +61,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     dashboard_manager = RobEyeDashboardManager()
     hass.data[DOMAIN][f"{config_entry.entry_id}_dashboard"] = dashboard_manager
 
-    # Initial dashboard write
-    await async_create_dashboard(
-        hass, coordinator.areas, coordinator.robot_info,
-        manager=dashboard_manager, device_id=coordinator.device_id,
+    # Launch dashboard creation in the background so setup returns immediately.
+    # The helper retries with increasing delays; last resort: request HA restart.
+    hass.async_create_task(
+        _async_initial_dashboard(hass, config_entry, coordinator, dashboard_manager),
+        eager_start=False,
     )
 
     # Debounced dashboard regeneration on every coordinator update
@@ -124,6 +125,60 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     )
 
     return True
+
+
+_DASHBOARD_RETRY_DELAYS = (0, 2, 5, 15, 30)  # seconds between attempts
+
+
+async def _async_initial_dashboard(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    coordinator: RobEyeCoordinator,
+    dashboard_manager: RobEyeDashboardManager,
+) -> None:
+    """Create the dashboard in the background with retries.
+
+    Tries up to len(_DASHBOARD_RETRY_DELAYS) times with increasing sleep
+    delays between attempts.  If all attempts fail, requests an HA restart
+    as a last resort so the next boot picks up the persisted registry entry.
+    """
+    for attempt, delay in enumerate(_DASHBOARD_RETRY_DELAYS, start=1):
+        if delay:
+            await asyncio.sleep(delay)
+
+        # Abort if the entry was removed while we were waiting
+        if config_entry.state not in (
+            ConfigEntryState.LOADED,
+            ConfigEntryState.SETUP_IN_PROGRESS,
+        ):
+            LOGGER.debug("RobEye: entry no longer loaded — cancelling dashboard init")
+            return
+
+        success = await async_create_dashboard(
+            hass,
+            coordinator.areas,
+            coordinator.robot_info,
+            manager=dashboard_manager,
+            device_id=coordinator.device_id,
+        )
+
+        if success:
+            LOGGER.info("RobEye: dashboard ready (attempt %d)", attempt)
+            return
+
+        LOGGER.warning(
+            "RobEye: dashboard creation attempt %d/%d failed",
+            attempt, len(_DASHBOARD_RETRY_DELAYS),
+        )
+
+    # All retries exhausted — restart HA so the persisted registry entry
+    # is loaded on next boot and the dashboard becomes available.
+    LOGGER.error(
+        "RobEye: dashboard could not be created after %d attempts — "
+        "requesting HA restart",
+        len(_DASHBOARD_RETRY_DELAYS),
+    )
+    await hass.services.async_call("homeassistant", "restart")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
