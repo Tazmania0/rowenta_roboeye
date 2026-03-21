@@ -5,6 +5,8 @@ A native Home Assistant custom integration for **Rowenta and Tefal X-Plorer Seri
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 [![GitHub release](https://img.shields.io/github/v/release/Tazmania0/rowenta_roboeye)](https://github.com/Tazmania0/rowenta_roboeye/releases)
 
+[![Add to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Tazmania0&repository=rowenta_roboeye&category=integration)
+
 ---
 
 ## Compatible Models
@@ -33,6 +35,10 @@ X-Plorer Serie 50, 60, 75, 75S, 80, S85, S90, S135, S140, S275, S280, S375+, S38
 ### 1 — Install
 
 **Via HACS (recommended)**
+
+[![Add to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Tazmania0&repository=rowenta_roboeye&category=integration)
+
+Click the button above, or add manually:
 1. HACS → Integrations → ⋮ → Custom repositories
 2. Add `https://github.com/Tazmania0/rowenta_roboeye` as **Integration**
 3. Search *RobEye*, install, restart HA
