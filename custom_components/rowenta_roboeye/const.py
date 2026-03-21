@@ -8,6 +8,7 @@ from datetime import timedelta
 from homeassistant.const import Platform
 
 DOMAIN = "rowenta_roboeye"
+VERSION = "1.0.0"
 LOGGER = logging.getLogger(__package__)
 
 PLATFORMS: list[Platform] = [
