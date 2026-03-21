@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-__version__ = "1.3.6"
-
 import asyncio
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_HOST
@@ -13,7 +11,7 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
-from .const import CONF_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED
+from .const import CONF_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, VERSION
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
@@ -26,7 +24,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     happens once regardless of how many config entries exist.
     """
     async def _register_frontend(_event: object = None) -> None:
-        reg = JSModuleRegistration(hass, __version__)
+        reg = JSModuleRegistration(hass, VERSION)
         await reg.async_register()
 
     if hass.state == CoreState.running:
