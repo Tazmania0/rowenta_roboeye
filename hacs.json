@@ -2,6 +2,6 @@
   "name": "Rowenta Xplorer 120",
   "iot_class": "local_polling",
   "homeassistant": "2024.1.0",
-  "zip_release": true,
-  "filename": "rowenta_roboeye.zip"
+  "zip_release": false,
+  //"filename": "rowenta_roboeye.zip"
 }
