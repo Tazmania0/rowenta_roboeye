@@ -171,7 +171,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             is_active = mode in (MODE_CLEANING, MODE_GO_HOME)
 
             # ── Bug 3: Dynamically adjust polling rate ────────────────
-            target_interval = timedelta(seconds=5 if is_active else 15)
+            target_interval = timedelta(seconds=10 if is_active else 30)
             if self.update_interval != target_interval:
                 self.update_interval = target_interval
                 LOGGER.debug("Coordinator interval → %s s", target_interval.seconds)

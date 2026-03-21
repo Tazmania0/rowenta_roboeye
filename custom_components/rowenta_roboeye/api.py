@@ -94,12 +94,11 @@ class RobEyeApiClient:
     def __init__(
         self,
         host: str,
-        session: aiohttp.ClientSession,
+        session: aiohttp.ClientSession | None = None,
         port: int = DEFAULT_PORT,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> None:
         self._host = host
-        self._session = session
         self._port = port
         self._timeout = aiohttp.ClientTimeout(total=timeout)
 
@@ -111,15 +110,22 @@ class RobEyeApiClient:
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """Perform a GET request and return parsed JSON.
 
+        A fresh TCP connection is created for every request and closed immediately
+        after the response is received.  This prevents HA from holding a persistent
+        keep-alive connection that would block the native Rowenta app from connecting
+        to the robot's embedded HTTP server.
+
         Raises CannotConnect on network errors, timeouts, or HTTP errors.
         """
         url = self._url(path)
         try:
-            async with self._session.get(
-                url, params=params, timeout=self._timeout
-            ) as resp:
-                resp.raise_for_status()
-                return await resp.json(content_type=None)
+            connector = aiohttp.TCPConnector(force_close=True)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.get(
+                    url, params=params, timeout=self._timeout
+                ) as resp:
+                    resp.raise_for_status()
+                    return await resp.json(content_type=None)
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise CannotConnect(
                 f"Error communicating with RobEye API at {url}: {err}"

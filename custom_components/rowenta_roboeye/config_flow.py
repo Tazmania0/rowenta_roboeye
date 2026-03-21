@@ -10,7 +10,6 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.const import CONF_HOST
 from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .api import CannotConnect, RobEyeApiClient
@@ -142,8 +141,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
     # ------------------------------------------------------------------
 
     async def _test_connection(self, host: str) -> None:
-        session = async_get_clientsession(self.hass)
-        client = RobEyeApiClient(host=host, session=session)
+        client = RobEyeApiClient(host=host)
         await client.test_connection()
 
 
@@ -167,8 +165,7 @@ class RobEyeOptionsFlow(OptionsFlow):
             host: str = user_input[CONF_HOST].strip()
             map_id: str = user_input[CONF_MAP_ID].strip()
             try:
-                session = async_get_clientsession(self.hass)
-                client = RobEyeApiClient(host=host, session=session)
+                client = RobEyeApiClient(host=host)
                 await client.test_connection()
             except CannotConnect:
                 errors["base"] = "cannot_connect"
