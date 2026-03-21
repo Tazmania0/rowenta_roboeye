@@ -186,6 +186,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._last_session_path = []
                 self._last_session_outline = []
                 self._session_complete = False
+                # Force an immediate live-map / position fetch on the first cleaning
+                # tick so the robot icon moves to its real location right away instead
+                # of waiting up to 60 s for the next idle-mode update to expire.
+                self._last_live_map = None
                 LOGGER.debug("New cleaning session — path and grid reset")
 
             if was_cleaning and now_docked and not self._session_complete:
@@ -841,6 +845,12 @@ def _build_live_map_payload(
     # / _extract_localization_position based on which endpoint was polled.
     # robot_position already contains {x, y, heading_deg, source, is_live}.
     robot: dict[str, Any] | None = robot_position
+
+    # When idle, /debug/localization returns the last position from the previous
+    # cleaning run (not the dock position).  Override with the known dock position
+    # so the robot icon shows at the charger while it is not cleaning.
+    if not is_active and dock and (robot is None or not robot.get("is_live", True)):
+        robot = {**dock, "source": "dock", "is_live": False}
 
     # ── Live / session outline ────────────────────────────────────────
     if is_active:
