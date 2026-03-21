@@ -3,11 +3,14 @@
 Entities
 --------
 RowentaBrushLeftStuckSensor  — BinarySensorDeviceClass.PROBLEM
-    On when side_brush_left_stuck GPIO reads 'active'.
+    On when side_brush_left_stuck GPIO reads 'active' (brush stuck).
+    Off when brush is free (OK).
 RowentaBrushRightStuckSensor — BinarySensorDeviceClass.PROBLEM
-    On when side_brush_right_stuck GPIO reads 'active'.
+    On when side_brush_right_stuck GPIO reads 'active' (brush stuck).
+    Off when brush is free (OK).
 RowentaDustbinSensor         — BinarySensorDeviceClass.PROBLEM
-    On (Problem) when dustbin GPIO reads 'inactive' (dustbin is absent).
+    On (Problem) when dustbin GPIO reads 'inactive' (dustbin is missing).
+    Off when dustbin is present.
 
 All three are EntityCategory.DIAGNOSTIC and read from
 coordinator.data["sensor_values_parsed"], which is populated every 300 s
@@ -45,16 +48,20 @@ async def async_setup_entry(
 
 
 class RowentaBrushLeftStuckSensor(RobEyeEntity, BinarySensorEntity):
-    """Binary sensor: left side brush stuck or wrapped."""
+    """Binary sensor: left side brush stuck or free.
+
+    is_on = True  → brush is stuck  (GPIO 'active')
+    is_on = False → brush is OK     (GPIO 'inactive')
+    """
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_icon = "mdi:brush"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "brush_left"
 
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"brush_left_stuck_{coordinator.device_id}"
-        self._attr_name = "Left Brush Stuck"
         self.entity_id = f"binary_sensor.{coordinator.device_id}_left_brush_stuck"
 
     @property
@@ -66,16 +73,20 @@ class RowentaBrushLeftStuckSensor(RobEyeEntity, BinarySensorEntity):
 
 
 class RowentaBrushRightStuckSensor(RobEyeEntity, BinarySensorEntity):
-    """Binary sensor: right side brush stuck or wrapped."""
+    """Binary sensor: right side brush stuck or free.
+
+    is_on = True  → brush is stuck  (GPIO 'active')
+    is_on = False → brush is OK     (GPIO 'inactive')
+    """
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_icon = "mdi:brush"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "brush_right"
 
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"brush_right_stuck_{coordinator.device_id}"
-        self._attr_name = "Right Brush Stuck"
         self.entity_id = f"binary_sensor.{coordinator.device_id}_right_brush_stuck"
 
     @property
@@ -87,20 +98,20 @@ class RowentaBrushRightStuckSensor(RobEyeEntity, BinarySensorEntity):
 
 
 class RowentaDustbinSensor(RobEyeEntity, BinarySensorEntity):
-    """Binary sensor: dustbin missing (problem when absent).
+    """Binary sensor: dustbin present or missing.
 
-    is_on = True  → dustbin is absent (GPIO 'inactive') → PROBLEM
-    is_on = False → dustbin is present (GPIO 'active')  → OK
+    is_on = True  → dustbin is missing (GPIO 'inactive') → PROBLEM
+    is_on = False → dustbin is present (GPIO 'active')   → OK
     """
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_icon = "mdi:delete-alert"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "dustbin"
 
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"dustbin_present_{coordinator.device_id}"
-        self._attr_name = "Dustbin Missing"
         self.entity_id = f"binary_sensor.{coordinator.device_id}_dustbin_present"
 
     @property
