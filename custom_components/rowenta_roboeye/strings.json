@@ -47,8 +47,8 @@
       "dustbin": {
         "name": "Dustbin",
         "state": {
-          "on": "Missing",
-          "off": "Present"
+          "on": "Present",
+          "off": "Missing"
         }
       },
       "brush_left": {
