@@ -2,7 +2,11 @@
   "entity": {
     "binary_sensor": {
       "dustbin": {
-        "default": "mdi:delete-alert"
+        "default": "mdi:delete-alert",
+        "state": {
+          "off": "mdi:delete",
+          "on": "mdi:delete-alert"
+        }
       },
       "brush_left": {
         "default": "mdi:star-three-points",
