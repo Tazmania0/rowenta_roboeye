@@ -5,10 +5,8 @@ from __future__ import annotations
 import asyncio
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_HOST
-from homeassistant.core import Event, HomeAssistant, CoreState, EVENT_HOMEASSISTANT_STARTED, callback
-from homeassistant.helpers import device_registry as dr
+from homeassistant.core import HomeAssistant, CoreState, EVENT_HOMEASSISTANT_STARTED, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
@@ -16,13 +14,6 @@ from .const import CONF_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED,
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
-
-
-def _is_device_disabled(hass: HomeAssistant, integration_device_id: str) -> bool:
-    """Return True if the HA device for this integration is disabled."""
-    registry = dr.async_get(hass)
-    device = registry.async_get_device(identifiers={(DOMAIN, integration_device_id)})
-    return device is not None and device.disabled_by is not None
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -74,34 +65,23 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         eager_start=False,
     )
 
-    # Debounced dashboard regeneration on every coordinator update
-    _cancel_pending: list[asyncio.TimerHandle | None] = [None]
-
+    # Regenerate dashboard on every coordinator update.
+    # async_create_dashboard is a no-op when config hasn't changed (hash-based dedup).
     @callback
     def _schedule_dashboard_regen(*_args: object) -> None:
-        if _cancel_pending[0] is not None:
-            _cancel_pending[0]()
-            _cancel_pending[0] = None
-
-        @callback
-        def _do_regen(_now: object) -> None:
-            _cancel_pending[0] = None
-            hass.async_create_task(
-                async_create_dashboard(
-                    hass,
-                    coordinator.areas,
-                    coordinator.robot_info,
-                    manager=dashboard_manager,
-                    device_id=coordinator.device_id,
-                )
+        hass.async_create_task(
+            async_create_dashboard(
+                hass,
+                coordinator.areas,
+                coordinator.robot_info,
+                manager=dashboard_manager,
+                device_id=coordinator.device_id,
             )
+        )
 
-        _cancel_pending[0] = async_call_later(hass, 5, _do_regen)
-
-    cancel_coordinator_listener = coordinator.async_add_listener(
-        _schedule_dashboard_regen
+    config_entry.async_on_unload(
+        coordinator.async_add_listener(_schedule_dashboard_regen)
     )
-    config_entry.async_on_unload(cancel_coordinator_listener)
 
     # When rooms change, regenerate dashboard immediately
     @callback
@@ -125,68 +105,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             _on_areas_changed,
         )
     )
-
-    # Hide/show dashboard sidebar when the device is disabled/enabled in HA.
-    # Listen directly on the bus so we control filtering ourselves — avoids the
-    # async_track_device_registry_updated_event argument-order trap and the need
-    # to await the registration call inside a non-async context.
-    _dev_registry = dr.async_get(hass)
-    _ha_device = _dev_registry.async_get_device(
-        identifiers={(DOMAIN, coordinator.device_id)}
-    )
-
-    if _ha_device is not None:
-        _tracked_device_id = _ha_device.id
-
-        @callback
-        def _on_device_registry_updated(event: Event) -> None:
-            # Filter to our device only.
-            if event.data.get("device_id") != _tracked_device_id:
-                return
-            LOGGER.warning(
-                "RobEye: device-registry event received — action=%r changes=%r",
-                event.data.get("action"),
-                list(event.data.get("changes", {}).keys()),
-            )
-            if event.data.get("action") != "update":
-                LOGGER.warning(
-                    "RobEye: ignoring device-registry event — action %r is not 'update'",
-                    event.data.get("action"),
-                )
-                return
-            if "disabled_by" not in event.data.get("changes", {}):
-                LOGGER.warning(
-                    "RobEye: ignoring device-registry event — 'disabled_by' not in changes %r",
-                    list(event.data.get("changes", {}).keys()),
-                )
-                return
-            device = dr.async_get(hass).async_get_device(
-                identifiers={(DOMAIN, coordinator.device_id)}
-            )
-            if device is None:
-                LOGGER.warning(
-                    "RobEye: device-registry event for '%s' — device no longer found, skipping sidebar update",
-                    coordinator.device_id,
-                )
-                return
-            visible = device.disabled_by is None
-            LOGGER.warning(
-                "RobEye: device %s — updating dashboard sidebar visibility"
-                " (handled by device-registry event listener)",
-                "enabled" if visible else "disabled",
-            )
-            hass.async_create_task(
-                dashboard_manager.async_set_sidebar_visible(hass, visible)
-            )
-
-        config_entry.async_on_unload(
-            hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _on_device_registry_updated)
-        )
-    else:
-        LOGGER.warning(
-            "RobEye: HA device not found for '%s' — sidebar hide/show on disable will not work",
-            coordinator.device_id,
-        )
 
     config_entry.async_on_unload(
         config_entry.add_update_listener(_async_update_listener)
@@ -232,9 +150,6 @@ async def _async_initial_dashboard(
 
         if success:
             LOGGER.info("RobEye: dashboard ready (attempt %d)", attempt)
-            # If the device was already disabled before this boot, hide the panel now.
-            if _is_device_disabled(hass, coordinator.device_id):
-                await dashboard_manager.async_set_sidebar_visible(hass, False)
             return
 
         LOGGER.warning(
@@ -266,28 +181,24 @@ async def _async_initial_dashboard(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Handle removal of an entry."""
-    # Grab references before platforms are torn down so we can hide the
-    # dashboard sidebar if the device was disabled (HA unloads the config
-    # entry when a device is disabled, which cancels the device-registry
-    # event listener before it can fire — so we must act here instead).
-    coordinator: RobEyeCoordinator | None = hass.data[DOMAIN].get(entry.entry_id)
+    # Grab the dashboard manager before platforms are torn down.
     dashboard_manager: RobEyeDashboardManager | None = hass.data[DOMAIN].get(
         f"{entry.entry_id}_dashboard"
     )
 
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
+        hass.data[DOMAIN].pop(entry.entry_id, None)
         hass.data[DOMAIN].pop(f"{entry.entry_id}_dashboard", None)
 
-        if (
-            coordinator is not None
-            and dashboard_manager is not None
-            and _is_device_disabled(hass, coordinator.device_id)
-        ):
+        # HA sets entry.disabled_by before calling async_unload_entry when a
+        # device or entry is disabled — this is the reliable signal that we
+        # should remove the dashboard (not just a reload or HA shutdown).
+        if dashboard_manager is not None and entry.disabled_by is not None:
             LOGGER.warning(
-                "RobEye: device is disabled — hiding dashboard sidebar on entry unload"
+                "RobEye: entry disabled (%s) — deleting dashboard",
+                entry.disabled_by,
             )
-            await dashboard_manager.async_set_sidebar_visible(hass, False)
+            await dashboard_manager.async_delete(hass)
 
     return unload_ok
 
