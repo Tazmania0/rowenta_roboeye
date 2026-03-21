@@ -8,7 +8,7 @@ from homeassistant.const import CONF_HOST
 from homeassistant.core import Event, HomeAssistant, CoreState, EVENT_HOMEASSISTANT_STARTED, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_call_later, async_track_device_registry_updated_event
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
@@ -127,18 +127,22 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     )
 
     # Hide/show dashboard sidebar when the device is disabled/enabled in HA.
-    # Use async_track_device_registry_updated_event (the HA-recommended API) so
-    # events are pre-filtered to our specific device — no manual device_id check
-    # needed.  The event action is "update" (not "updated") per the HA device
-    # registry TypedDict definition.
+    # Listen directly on the bus so we control filtering ourselves — avoids the
+    # async_track_device_registry_updated_event argument-order trap and the need
+    # to await the registration call inside a non-async context.
     _dev_registry = dr.async_get(hass)
     _ha_device = _dev_registry.async_get_device(
         identifiers={(DOMAIN, coordinator.device_id)}
     )
 
     if _ha_device is not None:
+        _tracked_device_id = _ha_device.id
+
         @callback
         def _on_device_registry_updated(event: Event) -> None:
+            # Filter to our device only.
+            if event.data.get("device_id") != _tracked_device_id:
+                return
             LOGGER.warning(
                 "RobEye: device-registry event received — action=%r changes=%r",
                 event.data.get("action"),
@@ -176,9 +180,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             )
 
         config_entry.async_on_unload(
-            async_track_device_registry_updated_event(
-                hass, _ha_device.id, _on_device_registry_updated
-            )
+            hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _on_device_registry_updated)
         )
     else:
         LOGGER.warning(
