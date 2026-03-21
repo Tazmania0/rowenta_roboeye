@@ -139,6 +139,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     if _ha_device is not None:
         @callback
         def _on_device_registry_updated(event: Event) -> None:
+            if event.data.get("action") != "update":
+                return
             if "disabled_by" not in event.data.get("changes", {}):
                 return
             device = dr.async_get(hass).async_get_device(
