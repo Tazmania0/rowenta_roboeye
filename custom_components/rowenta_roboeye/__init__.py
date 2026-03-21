@@ -150,6 +150,11 @@ async def _async_initial_dashboard(
 
         if success:
             LOGGER.info("RobEye: dashboard ready (attempt %d)", attempt)
+            # Ensure the panel is visible. This is a no-op on first setup but
+            # is needed on re-enable: the previous disable persisted
+            # show_in_sidebar=False to storage and hid the panel, so we must
+            # restore both the live panel state and the stored value.
+            await dashboard_manager.async_set_sidebar_visible(hass, True)
             return
 
         LOGGER.warning(
@@ -192,13 +197,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # HA sets entry.disabled_by before calling async_unload_entry when a
         # device or entry is disabled — this is the reliable signal that we
-        # should remove the dashboard (not just a reload or HA shutdown).
+        # should hide the dashboard (not just a reload or HA shutdown).
+        # We hide rather than delete so user layout customisations are preserved;
+        # async_setup_entry will show it again when the device is re-enabled.
         if dashboard_manager is not None and entry.disabled_by is not None:
             LOGGER.warning(
-                "RobEye: entry disabled (%s) — deleting dashboard",
+                "RobEye: entry disabled (%s) — hiding dashboard sidebar",
                 entry.disabled_by,
             )
-            await dashboard_manager.async_delete(hass)
+            await dashboard_manager.async_set_sidebar_visible(hass, False)
 
     return unload_ok
 
