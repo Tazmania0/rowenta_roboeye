@@ -148,8 +148,14 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             )
             if device is None:
                 return
+            visible = device.disabled_by is None
+            LOGGER.warning(
+                "RobEye: device %s — updating dashboard sidebar visibility"
+                " (handled by device-registry event listener)",
+                "enabled" if visible else "disabled",
+            )
             hass.async_create_task(
-                dashboard_manager.async_set_sidebar_visible(hass, device.disabled_by is None)
+                dashboard_manager.async_set_sidebar_visible(hass, visible)
             )
 
         config_entry.async_on_unload(
@@ -241,9 +247,29 @@ async def _async_initial_dashboard(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Handle removal of an entry."""
+    # Grab references before platforms are torn down so we can hide the
+    # dashboard sidebar if the device was disabled (HA unloads the config
+    # entry when a device is disabled, which cancels the device-registry
+    # event listener before it can fire — so we must act here instead).
+    coordinator: RobEyeCoordinator | None = hass.data[DOMAIN].get(entry.entry_id)
+    dashboard_manager: RobEyeDashboardManager | None = hass.data[DOMAIN].get(
+        f"{entry.entry_id}_dashboard"
+    )
+
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
         hass.data[DOMAIN].pop(f"{entry.entry_id}_dashboard", None)
+
+        if (
+            coordinator is not None
+            and dashboard_manager is not None
+            and _is_device_disabled(hass, coordinator.device_id)
+        ):
+            LOGGER.debug(
+                "RobEye: device is disabled — hiding dashboard sidebar on entry unload"
+            )
+            await dashboard_manager.async_set_sidebar_visible(hass, False)
+
     return unload_ok
 
 
