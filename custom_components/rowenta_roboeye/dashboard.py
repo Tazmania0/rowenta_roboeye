@@ -33,7 +33,6 @@ Change-detection:
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -448,17 +447,21 @@ class RobEyeDashboardManager:
     async def _async_get_lovelace_store(self, hass: HomeAssistant) -> Any | None:
         """Return the LovelaceStorage object for our dashboard.
 
-        Mirrors _create_map_dashboard() from homeassistant/components/lovelace/__init__.py:
+        HA's global DashboardsCollection is created locally in lovelace/async_setup
+        and is NOT stored in hass.data.  Calling async_create_item() on a *new*
+        DashboardsCollection instance writes to storage but never triggers the
+        global collection's storage_dashboard_changed listener — so the store
+        never appears in hass.data[LOVELACE_DATA].dashboards automatically.
 
-          1. Get hass.data[LOVELACE_DATA] (key = "lovelace")
-          2. If our url_path already in .dashboards → return it directly
-          3. Otherwise: get DashboardsCollection, call async_create_item(), then
-             return hass.data[LOVELACE_DATA].dashboards[DASHBOARD_URL_PATH]
+        Fix: after finding or creating the item in storage we manually construct
+        the LovelaceStorage object and inject it into hass.data, then register
+        the frontend panel — exactly what storage_dashboard_changed does.
         """
         # ── Import lovelace internals ─────────────────────────────────
         try:
             from homeassistant.components.lovelace.dashboard import (
                 DashboardsCollection,
+                LovelaceStorage,
             )
             from homeassistant.components.lovelace.const import LOVELACE_DATA
         except ImportError as err:
@@ -479,13 +482,8 @@ class RobEyeDashboardManager:
             return None
 
         lovelace_dashboards: dict = getattr(lovelace_data, "dashboards", {})
-        _LOGGER.debug(
-            "RobEye dashboard: lovelace_data type=%s, dashboards keys=%s",
-            type(lovelace_data).__name__,
-            list(lovelace_dashboards.keys()),
-        )
 
-        # ── Fast path: our dashboard already registered ───────────────
+        # ── Fast path: our dashboard already registered in hass.data ──
         if DASHBOARD_URL_PATH in lovelace_dashboards:
             _LOGGER.debug(
                 "RobEye dashboard: '%s' already in dashboards dict",
@@ -493,7 +491,7 @@ class RobEyeDashboardManager:
             )
             return lovelace_dashboards[DASHBOARD_URL_PATH]
 
-        # ── Need to create — use DashboardsCollection ─────────────────
+        # ── Load storage to find or create the dashboard item ─────────
         _LOGGER.info(
             "RobEye dashboard: '%s' not found in registry — creating",
             DASHBOARD_URL_PATH,
@@ -508,21 +506,21 @@ class RobEyeDashboardManager:
             )
             return None
 
-        _LOGGER.debug(
-            "RobEye dashboard: DashboardsCollection loaded, items=%s",
-            [item.get(_CONF_URL_PATH) for item in dashboards_collection.async_items()],
+        # Re-check hass.data after async_load — HA may have already registered it
+        # if a reload happened between our two checks.
+        if DASHBOARD_URL_PATH in getattr(lovelace_data, "dashboards", {}):
+            return lovelace_data.dashboards[DASHBOARD_URL_PATH]
+
+        # Find existing item in storage or create a new one
+        item = next(
+            (i for i in dashboards_collection.async_items()
+             if i.get(_CONF_URL_PATH) == DASHBOARD_URL_PATH),
+            None,
         )
 
-        # Check if it's already in the collection (could have been loaded from storage)
-        already = any(
-            item.get(_CONF_URL_PATH) == DASHBOARD_URL_PATH
-            for item in dashboards_collection.async_items()
-        )
-
-
-        if not already:
+        if item is None:
             try:
-                await dashboards_collection.async_create_item({
+                item = await dashboards_collection.async_create_item({
                     _CONF_URL_PATH:        DASHBOARD_URL_PATH,
                     _CONF_TITLE:           DASHBOARD_TITLE,
                     _CONF_ICON:            DASHBOARD_ICON,
@@ -537,33 +535,39 @@ class RobEyeDashboardManager:
                 )
                 return None
 
-        # Yield to event loop so HA's storage_dashboard_changed listener fires.
-        # That listener (lovelace/__init__.py) handles CHANGE_ADDED and adds the
-        # LovelaceStorage object to hass.data[LOVELACE_DATA].dashboards[url_path].
-        # The listener may itself be async and require more than one event-loop
-        # iteration to complete, so we retry up to 10 yields before giving up.
-        store = None
-        for attempt in range(10):
-            await asyncio.sleep(0)
-            lovelace_dashboards = getattr(lovelace_data, "dashboards", {})
-            store = lovelace_dashboards.get(DASHBOARD_URL_PATH)
-            if store is not None:
-                break
-            _LOGGER.debug(
-                "RobEye dashboard: store not ready yet after yield %d/10", attempt + 1
-            )
+        # ── Manually register store — mirrors storage_dashboard_changed ──
+        # The global DashboardsCollection's listener (storage_dashboard_changed)
+        # is the only thing that normally adds LovelaceStorage to hass.data, but
+        # it only fires for the global instance.  We replicate that work here.
+        store = LovelaceStorage(hass, item)
+        lovelace_data.dashboards[DASHBOARD_URL_PATH] = store
+        _LOGGER.info(
+            "RobEye dashboard: LovelaceStorage injected into hass.data — type=%s",
+            type(store).__name__,
+        )
 
-        if store is None:
-            _LOGGER.warning(
-                "RobEye dashboard: '%s' still not in hass.data after 10 yields. "
-                "dashboards keys: %s — will retry next cycle",
-                DASHBOARD_URL_PATH,
-                list(lovelace_dashboards.keys()),
+        # Register the frontend panel so the dashboard appears in the sidebar
+        try:
+            from homeassistant.components import frontend as _frontend
+            _frontend.async_register_built_in_panel(
+                hass,
+                component_name="lovelace",
+                sidebar_title=DASHBOARD_TITLE,
+                sidebar_icon=DASHBOARD_ICON,
+                frontend_url_path=DASHBOARD_URL_PATH,
+                config={"mode": "storage"},
+                require_admin=False,
+                update=False,
             )
-        else:
             _LOGGER.info(
-                "RobEye dashboard: store obtained after %d yield(s) — type=%s",
-                attempt + 1, type(store).__name__,
+                "RobEye dashboard: frontend panel registered for '%s'",
+                DASHBOARD_URL_PATH,
+            )
+        except Exception as err:
+            # Panel may already be registered (e.g. from a previous boot that
+            # persisted the entry).  Log but continue — async_save() still works.
+            _LOGGER.debug(
+                "RobEye dashboard: panel registration skipped: %s", err
             )
 
         return store
