@@ -60,9 +60,12 @@ from .const import (
     API_DEBUG_EXPLORATION,
     API_GET_PERMANENT_STATISTICS,
     API_GET_POINTS_OF_INTEREST,
+    API_GET_PRODUCT_FEATURE_SET,
     API_GET_PROTOCOL_VERSION,
+    API_GET_ROB_POSE,
     API_GET_ROBOT_FLAGS,
     API_GET_ROBOT_ID,
+    API_GET_ROOMS,
     API_GET_SCHEDULE,
     API_GET_SEEN_POLYGON,
     API_GET_SENSOR_STATUS,
@@ -140,6 +143,36 @@ class RobEyeApiClient:
     async def get_live_parameters(self) -> dict[str, Any]:
         """GET /get/live_parameters — real-time position and coverage counters."""
         return await self._get(API_GET_LIVE_PARAMETERS)
+
+    async def get_rob_pose(self) -> dict[str, Any]:
+        """GET /get/rob_pose — real-time robot position for all states.
+
+        Confirmed response (at dock, 2026-03-21):
+            {
+              "map_id":       3,
+              "x1":          -2,
+              "y1":          -3,
+              "heading":      157,
+              "valid":        true,
+              "is_tentative": false,
+              "timestamp":    958459
+            }
+
+        Fields:
+            x1, y1        — position in API units. 1 unit = 2 mm = 0.2 cm.
+            heading       — degrees (0–360), already converted. No 65536-scale here.
+            valid         — false if robot has no position fix.
+            is_tentative  — true if position is a rough initial estimate.
+            map_id        — which map's coordinate system this uses.
+            timestamp     — monotonic uptime counter; unchanged means stale position.
+
+        Works in ALL robot states: docked, idle, cleaning, returning home.
+        Replaces: /debug/localization, /debug/relocalization, /debug/exploration.
+
+        Discovered in Rowenta Robots APK v9.5.1-RC1 (2026-03-21).
+        Confirmed live at dock: x1=-2, y1=-3, heading=157, valid=true.
+        """
+        return await self._get(API_GET_ROB_POSE)
 
     # ── Statistics (polled every 600 s) ───────────────────────────────
 
@@ -285,6 +318,24 @@ class RobEyeApiClient:
     async def get_points_of_interest(self) -> dict[str, Any]:
         """GET /get/points_of_interest — saved POI and charging-dock locations."""
         return await self._get(API_GET_POINTS_OF_INTEREST)
+
+    async def get_rooms(self) -> dict[str, Any]:
+        """GET /get/rooms — named room list (UNCONFIRMED).
+
+        Discovered in APK v9.5.1-RC1 source analysis only.
+        NOT yet confirmed to exist on the physical device.
+        May return 404 or an empty response on current firmware.
+        Do not call this in production polling loops until confirmed live.
+        """
+        return await self._get(API_GET_ROOMS)
+
+    async def get_product_feature_set(self) -> dict[str, Any]:
+        """GET /get/product_feature_set — device-level capability flags.
+
+        Discovered in APK v9.5.1-RC1. Expected to expose deep_clean availability
+        and other per-device features. Format unconfirmed.
+        """
+        return await self._get(API_GET_PRODUCT_FEATURE_SET)
 
     # ── Commands ──────────────────────────────────────────────────────
 

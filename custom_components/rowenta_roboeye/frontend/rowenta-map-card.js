@@ -134,12 +134,11 @@ class RowentaMapCard extends HTMLElement {
     const liveOut         = attrs.live_outline     || [];
     const bounds          = attrs.bounds           || null;
     const isActive        = attrs.is_active        || false;
-    const isLiveMap       = attrs.is_live_map      || false;
     const cleaningGrid    = attrs.cleaning_grid    || null;
     const robotPath       = attrs.robot_path       || [];
     const sessionComplete = attrs.session_complete || false;
-    // is_live=false means stale localization data (robot idle/docked) → dim the icon
-    const robotIsLive     = robot?.is_live         ?? true;
+    // is_tentative=true means rough initial estimate → dim/pulse the icon
+    const robotIsTentative = robot?.is_tentative   ?? false;
 
     const stateColor = mapState === "cleaning"         ? "#4CAF50"
                      : mapState === "exploring"        ? "#9C27B0"
@@ -152,7 +151,7 @@ class RowentaMapCard extends HTMLElement {
 
     const svgHtml = this._buildSvg(
       rooms, avoidanceZones, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
-      cleaningGrid, robotPath, sessionComplete, robotIsLive, isLiveMap
+      cleaningGrid, robotPath, sessionComplete, robotIsTentative
     );
 
     this.shadowRoot.innerHTML = `
@@ -227,7 +226,7 @@ class RowentaMapCard extends HTMLElement {
 
   _buildSvg(rooms, avoidanceZones, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
             cleaningGrid, robotPath, sessionComplete,
-            robotIsLive = true, isLiveMap = false) {
+            robotIsTentative = false) {
     if (!bounds) {
       return `<div class="empty">
         <div style="font-size:40px;opacity:.25">🏠</div>
@@ -448,18 +447,23 @@ class RowentaMapCard extends HTMLElement {
     // ── Layer 7: robot icon — draws on top of everything ───────────
     // All dimensions scale with rf (= robotBodyR / 16) so the robot icon
     // remains proportional to the map on any screen size.
-    // robotIsLive=false → stale/docked position → dimmed grey icon, no pulse.
+    // robotIsTentative=true → rough estimate → dimmed pulsing icon.
     let robotIcon = "";
     if (displayRobot != null) {
       const rx = displayRobot.x - minX;
       const ry = flipY(displayRobot.y) - minY;
-      // heading_deg: 0 = north (SVG -Y), 90 = east (+X) — matches SVG rotate()
+      // heading_deg from /get/rob_pose is already in degrees — use directly.
+      // 0 = North, 90 = East, 180 = South, 270 = West (matches SVG rotate()).
       const headingDeg = displayRobot.heading_deg ?? 0;
-      const activeClass = (isActive && robotIsLive) ? ' class="robot-active"' : "";
-      const robotColor  = robotIsLive ? "#00d4ff" : "#888888";
-      const robotOpacity = robotIsLive ? "1.0" : "0.5";
+      const activeClass = (isActive && !robotIsTentative) ? ' class="robot-active"' : "";
+      const robotColor   = robotIsTentative ? "#888888" : "#00d4ff";
+      const robotOpacity = robotIsTentative ? "0.5" : "1.0";
+      const tentativeAnim = robotIsTentative
+        ? `<animate attributeName="opacity" values="0.3;0.7;0.3" dur="1.5s" repeatCount="indefinite"/>`
+        : "";
       robotIcon = `<g${activeClass} opacity="${robotOpacity}">
-        ${(isActive && robotIsLive) ? `<circle cx="${rx}" cy="${ry}" r="${robotGlowR.toFixed(1)}" fill="${robotColor}" opacity="0.15"/>` : ""}
+        ${tentativeAnim}
+        ${(isActive && !robotIsTentative) ? `<circle cx="${rx}" cy="${ry}" r="${robotGlowR.toFixed(1)}" fill="${robotColor}" opacity="0.15"/>` : ""}
         <!-- Robot body -->
         <circle cx="${rx}" cy="${ry}" r="${robotBodyR.toFixed(1)}"
           fill="#1a2a3a" stroke="${robotColor}" stroke-width="${(3*rf).toFixed(1)}"/>
@@ -473,10 +477,10 @@ class RowentaMapCard extends HTMLElement {
         </g>
         <!-- Centre sensor dot -->
         <circle cx="${rx}" cy="${ry}" r="${(4*rf).toFixed(1)}" fill="white" opacity="0.8"/>
-        ${!robotIsLive ? `<!-- Stale position indicator -->
+        ${robotIsTentative ? `<!-- Tentative position indicator -->
         <text x="${rx}" y="${ry + robotBodyR + (labelFontSize * 0.55)}" text-anchor="middle"
           font-size="${(labelFontSize * 0.45).toFixed(0)}" fill="#888" font-family="sans-serif"
-          opacity="0.8">last known</text>` : ""}
+          opacity="0.8">estimating…</text>` : ""}
       </g>`;
     }
 

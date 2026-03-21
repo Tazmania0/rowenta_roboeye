@@ -20,7 +20,14 @@ PLATFORMS: list[Platform] = [
 ]
 
 # ── Coordinator timing ────────────────────────────────────────────────
-UPDATE_INTERVAL = timedelta(seconds=30)
+UPDATE_INTERVAL_CLEANING = timedelta(seconds=2)   # rob_pose + status during cleaning
+UPDATE_INTERVAL_IDLE     = timedelta(seconds=15)  # status only when idle
+
+# Keep UPDATE_INTERVAL as an alias for the idle interval (used by coordinator init)
+UPDATE_INTERVAL = UPDATE_INTERVAL_IDLE
+
+SCAN_INTERVAL_ROB_POSE   = 2     # s — /get/rob_pose (cleaning only; idle uses 15 s)
+SCAN_INTERVAL_STATUS     = 2     # s — /get/status
 SCAN_INTERVAL_STATISTICS = 600
 SCAN_INTERVAL_AREAS = 300
 SCAN_INTERVAL_ROBOT_INFO = 3600
@@ -48,6 +55,10 @@ API_GET_ROBOT_FLAGS = "/get/robot_flags"
 API_GET_SENSOR_STATUS = "/get/sensor_status"
 API_GET_SENSOR_VALUES = "/get/sensor_values"
 API_GET_LIVE_PARAMETERS = "/get/live_parameters"
+API_GET_ROB_POSE = "/get/rob_pose"
+API_GET_ROOMS = "/get/rooms"
+API_GET_PRODUCT_FEATURE_SET = "/get/product_feature_set"
+API_GET_SAFETY_MCU_FIRMWARE = "/get/safety_mcu_firmware_version"
 API_GET_CLEANING_PARAMETER_SET = "/get/cleaning_parameter_set"
 API_GET_SCHEDULE = "/get/schedule"
 API_GET_COMMAND_RESULT = "/get/command_result"
@@ -117,6 +128,8 @@ DATA_ROBOT_INFO = "robot_info"
 DATA_LIVE_PARAMETERS = "live_parameters"
 DATA_SENSOR_STATUS = "sensor_status"
 DATA_ROBOT_FLAGS = "robot_flags"
+DATA_ROB_POSE = "rob_pose"
+DATA_ROOMS = "rooms"
 DATA_SEEN_POLYGON = "seen_polygon"
 DATA_LIVE_MAP = "live_map"
 DATA_CLEANING_GRID = "cleaning_grid_map"
