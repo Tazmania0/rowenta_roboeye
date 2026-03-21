@@ -171,14 +171,26 @@ async def _async_initial_dashboard(
             attempt, len(_DASHBOARD_RETRY_DELAYS),
         )
 
-    # All retries exhausted — restart HA so the persisted registry entry
-    # is loaded on next boot and the dashboard becomes available.
+    # All retries exhausted — notify the user that a manual restart is needed.
+    # We do NOT restart automatically; that must be user-approved.
     LOGGER.error(
         "RobEye: dashboard could not be created after %d attempts — "
-        "requesting HA restart",
+        "restart required (user action needed)",
         len(_DASHBOARD_RETRY_DELAYS),
     )
-    await hass.services.async_call("homeassistant", "restart")
+    await hass.services.async_call(
+        "persistent_notification",
+        "create",
+        {
+            "title": "Rowenta RobEye — Restart Required",
+            "message": (
+                "The Rowenta dashboard could not be created automatically "
+                f"after {len(_DASHBOARD_RETRY_DELAYS)} attempts.\n\n"
+                "Please **restart Home Assistant** to complete the setup."
+            ),
+            "notification_id": "rowenta_roboeye_restart_required",
+        },
+    )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
