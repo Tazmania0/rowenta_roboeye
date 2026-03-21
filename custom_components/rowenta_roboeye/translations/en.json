@@ -43,6 +43,29 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "dustbin": {
+        "name": "Dustbin",
+        "state": {
+          "on": "Missing",
+          "off": "Present"
+        }
+      },
+      "brush_left": {
+        "name": "Left Brush",
+        "state": {
+          "on": "Stuck",
+          "off": "OK"
+        }
+      },
+      "brush_right": {
+        "name": "Right Brush",
+        "state": {
+          "on": "Stuck",
+          "off": "OK"
+        }
+      }
+    },
     "sensor": {
       "battery_level": {
         "name": "Battery level"

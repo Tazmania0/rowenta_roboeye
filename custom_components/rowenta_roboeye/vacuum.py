@@ -88,6 +88,14 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         super().__init__(coordinator)
         self._attr_unique_id = coordinator.device_id
         self.entity_id = f"vacuum.{coordinator.device_id}"
+        self._error_status: str | None = None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str] | None:
+        """Expose the specific error condition when in ERROR state."""
+        if self._error_status is not None:
+            return {"error": self._error_status}
+        return None
 
     # ── Coordinator update handler ────────────────────────────────────
 
@@ -105,27 +113,32 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         charging = status.get("charging", "")
         sv = self.coordinator.sensor_values_parsed
 
-        # Hardware error: not_ready mode (dustbin missing, brush stuck, etc.)
-        # or sensor values explicitly confirm a hardware fault.
-        _hardware_error = (
-            mode == MODE_NOT_READY
-            or sv.get("gpio__dustbin") == "inactive"
-            or sv.get("gpio__side_brush_left_stuck") == "active"
-            or sv.get("gpio__side_brush_right_stuck") == "active"
-        )
+        # Collect specific hardware fault conditions
+        _error_conditions: list[str] = []
+        if sv.get("gpio__dustbin") == "inactive":
+            _error_conditions.append("Dustbin missing")
+        if sv.get("gpio__side_brush_left_stuck") == "active":
+            _error_conditions.append("Left brush stuck")
+        if sv.get("gpio__side_brush_right_stuck") == "active":
+            _error_conditions.append("Right brush stuck")
+
+        _hardware_error = bool(_error_conditions) or mode == MODE_NOT_READY
 
         if _hardware_error:
             self._attr_activity = VacuumActivity.ERROR
-        elif mode == MODE_CLEANING:
-            self._attr_activity = VacuumActivity.CLEANING
-        elif mode == MODE_READY and charging in (CHARGING_CHARGING, CHARGING_CONNECTED):
-            self._attr_activity = VacuumActivity.DOCKED
-        elif mode == MODE_READY and charging == CHARGING_UNCONNECTED:
-            self._attr_activity = VacuumActivity.PAUSED
-        elif mode == MODE_GO_HOME:
-            self._attr_activity = VacuumActivity.RETURNING
+            self._error_status = ", ".join(_error_conditions) if _error_conditions else "Not ready"
         else:
-            self._attr_activity = VacuumActivity.IDLE
+            self._error_status = None
+            if mode == MODE_CLEANING:
+                self._attr_activity = VacuumActivity.CLEANING
+            elif mode == MODE_READY and charging in (CHARGING_CHARGING, CHARGING_CONNECTED):
+                self._attr_activity = VacuumActivity.DOCKED
+            elif mode == MODE_READY and charging == CHARGING_UNCONNECTED:
+                self._attr_activity = VacuumActivity.PAUSED
+            elif mode == MODE_GO_HOME:
+                self._attr_activity = VacuumActivity.RETURNING
+            else:
+                self._attr_activity = VacuumActivity.IDLE
 
         self.async_write_ha_state()
 
