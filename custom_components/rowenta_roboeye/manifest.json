@@ -12,7 +12,8 @@
   "iot_class": "local_polling",
   "requirements": [],
   "dependencies": [
-    "zeroconf"
+    "zeroconf",
+    "http"
   ],
   "after_dependencies": [
     "frontend",
