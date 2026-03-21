@@ -11,7 +11,6 @@ Key improvements over v1:
 from __future__ import annotations
 
 import json
-import time as _time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -26,7 +25,6 @@ from .const import (
     AREA_TYPE_AVOIDANCE,
     DATA_AREAS,
     DATA_SENSOR_VALUES,
-    DATA_SENSOR_VALUES_PARSED,
     DATA_AREAS_SAVED_MAP,
     DATA_CLEANING_GRID,
     DATA_EXPLORATION,
@@ -51,24 +49,16 @@ from .const import (
     MODE_CLEANING,
     MODE_GO_HOME,
     SCAN_INTERVAL_AREAS,
-    SCAN_INTERVAL_GYRO,
-    SCAN_INTERVAL_IDLE_LOC,
+    SCAN_INTERVAL_MAP_GEOMETRY,
     SCAN_INTERVAL_ROBOT_INFO,
-    SCAN_INTERVAL_SENSOR_HW,
-    SCAN_INTERVAL_SLAM,
-    SCAN_INTERVAL_STATUS,
     SCAN_INTERVAL_STATISTICS,
     SIGNAL_AREAS_UPDATED,
-    UPDATE_INTERVAL_CLEANING,
-    UPDATE_INTERVAL_IDLE,
+    UPDATE_INTERVAL,
 )
 
 
-MAX_PATH_POINTS = 2000
-MIN_MOVE_UNITS  = 5   # ~1 cm threshold before appending a new path point
-# Keep old underscore-prefixed names for any external references
-_MAX_PATH_POINTS = MAX_PATH_POINTS
-_MIN_MOVE_UNITS  = MIN_MOVE_UNITS
+_MAX_PATH_POINTS = 2000
+_MIN_MOVE_UNITS  = 5   # ~1 cm threshold before appending a new path point
 
 
 class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -88,7 +78,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             LOGGER,
             config_entry=config_entry,
             name=DOMAIN,
-            update_interval=UPDATE_INTERVAL_IDLE,
+            update_interval=UPDATE_INTERVAL,
         )
         self.client = client
         self.map_id = map_id
@@ -101,22 +91,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_schedule: datetime | None = None
         self._consecutive_failures: int = 0
 
-        # ── Timing trackers ──────────────────────────────────────────────
-        self._last_slam:          datetime | None = None
-        self._last_sensor_hw:     datetime | None = None
-        self._last_brush_check:   datetime | None = None
-        self._last_status_check:  datetime | None = None
-        self._last_idle_loc:      datetime | None = None
-
-        # ── Dead-reckoning state ─────────────────────────────────────────
-        # Level 1: SLAM anchor — last absolute fix from exploration/relocalization
-        self._slam_anchor:        dict | None = None
-        self._slam_anchor_ts:     float = 0.0
-
-        # Level 2: Odometry accumulator — sum of rel_movements since last anchor
-        self._odom_dx:            float = 0.0
-        self._odom_dy:            float = 0.0
-
         # Track known area IDs so we can detect additions/removals without reload
         self._known_area_ids: set = set()
 
@@ -127,14 +101,16 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._brush_left_notified: bool = False
         self._brush_right_notified: bool = False
 
-        # ── Session lifecycle ────────────────────────────────────────────
-        self._last_mode:          str = ""
-        self._operation_map_id:   str = map_id
-        self._robot_path:         list[tuple[float, float]] = []
-        self._last_session_grid:  dict = {}
-        self._last_session_path:  list = []
+        # Live session map tracking
+        self._operation_map_id: str = map_id  # current session map; changes each new clean
+
+        # Last-session replay state
+        self._robot_path: list[tuple[float, float]] = []
+        self._last_session_grid: dict = {}
+        self._last_session_path: list = []
         self._last_session_outline: list = []
-        self._session_complete:   bool = False
+        self._last_mode: str = ""
+        self._session_complete: bool = False
 
     # ── Device identifier ─────────────────────────────────────────────
 
@@ -158,242 +134,281 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data: dict[str, Any] = dict(self.data or {})
 
         try:
-            # ── Always: status (every coordinator tick) ───────────────────
+            # ── Every 15 s: status ───────────────────────────────────
             data[DATA_STATUS] = await self.client.get_status()
-            mode  = data[DATA_STATUS].get("mode", "")
+
+            # ── Every cycle: sensor values (GPIO, dustbin, brushes) ──
+            try:
+                raw_sv = await self.client.get_sensor_values()
+                data[DATA_SENSOR_VALUES] = raw_sv
+                parsed_sv = _parse_sensor_values(raw_sv)
+                data["sensor_values_parsed"] = parsed_sv
+                # Fire persistent notification when a brush becomes newly stuck
+                from homeassistant.components import persistent_notification
+                for side, descriptor, notified_attr in (
+                    ("Left",  "side_brush_left_stuck",  "_brush_left_notified"),
+                    ("Right", "side_brush_right_stuck", "_brush_right_notified"),
+                ):
+                    stuck = _gpio(parsed_sv, descriptor) == "active"
+                    was_notified = getattr(self, notified_attr)
+                    if stuck and not was_notified:
+                        persistent_notification.async_create(
+                            self.hass,
+                            (
+                                f"\u26a0\ufe0f {side} side brush is stuck or wrapped. "
+                                "Please check and clean it before the next run."
+                            ),
+                            title="Rowenta \u2014 Brush Alert",
+                            notification_id=f"rowenta_brush_{descriptor}",
+                        )
+                        setattr(self, notified_attr, True)
+                    elif not stuck:
+                        setattr(self, notified_attr, False)
+            except CannotConnect:
+                LOGGER.debug("get_sensor_values unavailable, skipping")
+
+            mode = data[DATA_STATUS].get("mode", "")
             is_active = mode in (MODE_CLEANING, MODE_GO_HOME)
 
-            # ── Dynamically adjust coordinator tick rate ──────────────────
-            target_interval = (
-                UPDATE_INTERVAL_CLEANING if is_active else UPDATE_INTERVAL_IDLE
-            )
+            # ── Bug 3: Dynamically adjust polling rate ────────────────
+            target_interval = timedelta(seconds=5 if is_active else 15)
             if self.update_interval != target_interval:
                 self.update_interval = target_interval
-                LOGGER.debug("Coordinator interval → %ds", target_interval.total_seconds())
+                LOGGER.debug("Coordinator interval → %s s", target_interval.seconds)
 
-            # ── Session lifecycle ─────────────────────────────────────────
-            if mode == MODE_CLEANING and self._last_mode != MODE_CLEANING:
-                # Cleaning just started — reset all session state
-                self._slam_anchor        = None
-                self._slam_anchor_ts     = 0.0
-                self._odom_dx            = 0.0
-                self._odom_dy            = 0.0
-                self._robot_path         = []
-                self._last_session_grid  = {}
-                self._last_session_path  = []
-                self._last_session_outline = []
-                self._session_complete   = False
-                self._last_slam          = None
-                LOGGER.debug("Cleaning session started — state reset")
-
+            # ── Session lifecycle tracking ────────────────────────────
             was_cleaning = self._last_mode == MODE_CLEANING
-            now_idle     = not is_active
-            if was_cleaning and now_idle and not self._session_complete:
-                self._last_session_grid    = dict(data.get(DATA_CLEANING_GRID, {}))
+            now_docked   = not is_active and mode not in (MODE_CLEANING, MODE_GO_HOME)
+
+            if mode == MODE_CLEANING and self._last_mode != MODE_CLEANING:
+                self._robot_path = []
+                self._last_session_grid = {}
+                self._last_session_path = []
+                self._last_session_outline = []
+                self._session_complete = False
+                # Force an immediate live-map / position fetch on the first cleaning
+                # tick so the robot icon moves to its real location right away instead
+                # of waiting up to 60 s for the next idle-mode update to expire.
+                self._last_live_map = None
+                LOGGER.debug("New cleaning session — path and grid reset")
+
+            if was_cleaning and now_docked and not self._session_complete:
+                self._last_session_grid    = data.get(DATA_CLEANING_GRID, {})
                 self._last_session_path    = list(self._robot_path)
                 self._last_session_outline = _parse_live_outline(
                     data.get(DATA_SEEN_POLYGON, {})
                 )
-                self._session_complete  = True
-                LOGGER.info("Session complete — %d path points frozen", len(self._robot_path))
+                self._session_complete = True
+                LOGGER.info(
+                    "Cleaning session complete — frozen grid=%s cells, path=%d points",
+                    self._last_session_grid.get("size_x", 0),
+                    len(self._last_session_path),
+                )
+
             self._last_mode = mode
 
-            # ══════════════════════════════════════════════════════════════
-            # CLEANING BUCKETS
-            # ══════════════════════════════════════════════════════════════
-            if is_active:
+            # ── Live-map polling: every cycle when active, every 60 s when idle ──
+            # When cleaning, always fetch position/area on every coordinator tick
+            # so robot position tracks the robot in near-real-time.  When idle
+            # there is no need to hammer the endpoints; 60 s is fine.
+            if is_active or self._last_live_map is None or (
+                now - self._last_live_map
+            ) >= timedelta(seconds=60):
+                live_params: dict[str, Any] = {}
 
-                # ── GYRO BUCKET (every 500 ms): heading + odometry ────────
-                # Runs on every coordinator tick (tick = 500ms during cleaning).
-                # Fetches sensor_values for gyro z-rate + odometry delta only.
-                gyro_due = (self._last_sensor_hw is None or
-                            (now - self._last_sensor_hw).total_seconds() >=
-                            SCAN_INTERVAL_GYRO)
-                if gyro_due:
+                try:
+                    live_params = await self.client.get_live_parameters()
+                    data[DATA_LIVE_PARAMETERS] = live_params
+                except CannotConnect:
+                    LOGGER.debug("get_live_parameters unavailable, skipping")
+
+                # ── Determine which map session is active ─────────────────
+                try:
+                    map_status = await self.client.get_map_status()
+                    data[DATA_MAP_STATUS] = map_status
+                    operation_map_id = str(map_status.get("operation_map_id", self.map_id))
+                except CannotConnect:
+                    operation_map_id = self._operation_map_id
+                is_live_map = (operation_map_id != self.map_id)
+                self._operation_map_id = operation_map_id
+
+                # ── Robot position — choose endpoint based on map session ──
+                robot_position: dict | None = None
+                if is_active and is_live_map:
+                    # New-map session (map 55/56/57…) → /debug/exploration
                     try:
-                        raw_sv = await self.client.get_sensor_values()
-                        parsed = _parse_sensor_values(raw_sv)
-                        data[DATA_SENSOR_VALUES_PARSED] = parsed
-                        self._update_odometry(parsed)
+                        exploration = await self.client.get_exploration()
+                        data[DATA_EXPLORATION] = exploration
+                        robot_position = _extract_exploration_position(exploration)
                     except CannotConnect:
-                        LOGGER.debug("get_sensor_values unavailable")
-                    self._last_sensor_hw = now
-
-                # ── STATUS BUCKET (every 2 s): mode + battery ─────────────
-                status_due = (self._last_status_check is None or
-                              (now - self._last_status_check).total_seconds() >=
-                              SCAN_INTERVAL_STATUS)
-                if status_due:
-                    self._last_status_check = now
-
-                # ── BRUSH STUCK (every 10 s): gpio stuck flags ─────────────
-                brush_due = (self._last_brush_check is None or
-                             (now - self._last_brush_check).total_seconds() >=
-                             SCAN_INTERVAL_SENSOR_HW)
-                if brush_due:
-                    parsed_sv = data.get(DATA_SENSOR_VALUES_PARSED, {})
-                    if parsed_sv:
-                        self._fire_brush_alerts(parsed_sv)
-                    self._last_brush_check = now
-
-                # ── SLAM BUCKET (every 5 s): position + map data ───────────
-                slam_due = (self._last_slam is None or
-                            (now - self._last_slam).total_seconds() >=
-                            SCAN_INTERVAL_SLAM)
-                if slam_due:
-                    # Map session detection
+                        LOGGER.debug("get_exploration unavailable, skipping")
+                elif is_active and not is_live_map:
+                    # Cleaning saved map (map 3) → /debug/relocalization
                     try:
-                        map_status = await self.client.get_map_status()
-                        data[DATA_MAP_STATUS] = map_status
-                        self._operation_map_id = str(
-                            map_status.get("operation_map_id", self.map_id)
-                        )
+                        reloc = await self.client.get_relocalization()
+                        data[DATA_RELOCALIZATION] = reloc
+                        robot_position = _extract_relocalization_position(reloc)
                     except CannotConnect:
-                        LOGGER.debug("get_map_status unavailable")
-
-                    is_live_map = (self._operation_map_id != self.map_id)
-
-                    # SLAM position
-                    new_slam: dict | None = None
-                    if is_live_map:
-                        try:
-                            exploration = await self.client.get_exploration()
-                            data[DATA_EXPLORATION] = exploration
-                            new_slam = _extract_exploration_position(exploration)
-                        except CannotConnect:
-                            LOGGER.debug("get_exploration unavailable")
-                    else:
-                        try:
-                            reloc = await self.client.get_relocalization()
-                            data[DATA_RELOCALIZATION] = reloc
-                            new_slam = _extract_relocalization_position(reloc)
-                        except CannotConnect:
-                            LOGGER.debug("get_relocalization unavailable")
-
-                    if new_slam:
-                        self._set_slam_anchor(new_slam)
-
-                    # Cleaned area polygon
-                    try:
-                        data[DATA_SEEN_POLYGON] = await self.client.get_seen_polygon()
-                    except CannotConnect:
-                        LOGGER.debug("get_seen_polygon unavailable")
-
-                    # Cleaning grid
-                    try:
-                        grid = await self.client.get_cleaning_grid_map()
-                        data[DATA_CLEANING_GRID] = grid
-                    except CannotConnect:
-                        LOGGER.debug("get_cleaning_grid_map unavailable")
-
-                    self._last_slam = now
-
-            # ══════════════════════════════════════════════════════════════
-            # IDLE BUCKET
-            # ══════════════════════════════════════════════════════════════
-            else:
-                # Stale localization — only useful for last-known position display
-                loc_due = (self._last_idle_loc is None or
-                           (now - self._last_idle_loc) >=
-                           timedelta(seconds=SCAN_INTERVAL_IDLE_LOC))
-                if loc_due:
+                        LOGGER.debug("get_relocalization unavailable, skipping")
+                else:
+                    # Idle → /debug/localization (global entry)
                     try:
                         loc = await self.client.get_localization()
-                        idle_pos = _extract_localization_position(loc)
-                        if idle_pos and not self._slam_anchor:
-                            self._slam_anchor = idle_pos
+                        robot_position = _extract_localization_position(loc)
                     except CannotConnect:
-                        LOGGER.debug("get_localization unavailable")
-                    self._last_idle_loc = now
+                        LOGGER.debug("get_localization unavailable, skipping")
 
-            # ── Accumulate robot path ─────────────────────────────────────
-            display_pos = self._get_display_position()
-            if is_active and display_pos:
-                pt = (display_pos["x"], display_pos["y"])
-                if (not self._robot_path or
-                        (pt[0] - self._robot_path[-1][0]) ** 2 +
-                        (pt[1] - self._robot_path[-1][1]) ** 2 >= MIN_MOVE_UNITS ** 2):
-                    self._robot_path.append(pt)
-                    if len(self._robot_path) > MAX_PATH_POINTS:
-                        self._robot_path = self._robot_path[-MAX_PATH_POINTS:]
+                cleaning_grid: dict = {}
+                seen_polygon_raw: dict = {}
+                if is_active:
+                    try:
+                        seen_polygon_raw = await self.client.get_seen_polygon()
+                        data[DATA_SEEN_POLYGON] = seen_polygon_raw
+                    except CannotConnect:
+                        LOGGER.debug("get_seen_polygon unavailable, skipping")
+                    try:
+                        cleaning_grid = await self.client.get_cleaning_grid_map()
+                        data[DATA_CLEANING_GRID] = cleaning_grid
+                    except CannotConnect:
+                        LOGGER.debug("get_cleaning_grid_map unavailable, skipping")
+                else:
+                    data[DATA_SEEN_POLYGON] = {}
+                    data[DATA_CLEANING_GRID] = {}
 
-            # ── Build live_map payload ────────────────────────────────────
-            data[DATA_LIVE_MAP] = _build_live_map_payload(
-                existing         = data.get(DATA_LIVE_MAP, {}),
-                robot_position   = display_pos,
-                seen_polygon_raw = data.get(DATA_SEEN_POLYGON, {}),
-                cleaning_grid    = (data.get(DATA_CLEANING_GRID, {})
-                                    if is_active else self._last_session_grid),
-                robot_path       = list(self._robot_path),
-                session_complete = self._session_complete,
-                is_active        = is_active,
-                is_live_map      = self._operation_map_id != self.map_id,
-                operation_map_id = self._operation_map_id,
-                map_id           = self.map_id,
-            )
+                # ── Accumulate robot path during cleaning ─────────────
+                if is_active and robot_position:
+                    pt: tuple[float, float] = (robot_position["x"], robot_position["y"])
+                    if (
+                        not self._robot_path
+                        or (pt[0] - self._robot_path[-1][0]) ** 2
+                        + (pt[1] - self._robot_path[-1][1]) ** 2
+                        >= _MIN_MOVE_UNITS ** 2
+                    ):
+                        self._robot_path.append(pt)
+                        if len(self._robot_path) > _MAX_PATH_POINTS:
+                            self._robot_path = self._robot_path[-_MAX_PATH_POINTS:]
 
-            # ══════════════════════════════════════════════════════════════
-            # SLOW BUCKETS (both active and idle)
-            # ══════════════════════════════════════════════════════════════
+                data[DATA_LIVE_MAP] = _build_live_map_payload(
+                    existing=data.get(DATA_LIVE_MAP, {}),
+                    live_params=live_params,
+                    robot_position=robot_position,
+                    seen_polygon_raw=seen_polygon_raw,
+                    cleaning_grid=cleaning_grid,
+                    feature_map=data.get(DATA_FEATURE_MAP, {}),
+                    tile_map=data.get(DATA_TILE_MAP, {}),
+                    areas_data=data.get(DATA_AREAS_SAVED_MAP, {}),
+                    seen_poly_saved_map=data.get(DATA_SEEN_POLY_SAVED_MAP, {}),
+                    is_active=is_active,
+                    is_live_map=is_live_map,
+                    map_id=self.map_id,
+                    operation_map_id=operation_map_id,
+                    robot_path=self._robot_path,
+                    last_session_grid=self._last_session_grid,
+                    last_session_path=self._last_session_path,
+                    last_session_outline=self._last_session_outline,
+                    session_complete=self._session_complete,
+                )
 
-            # ── Every 300 s: areas + schedule + sensor status ─────────────
-            areas_due = (self._last_areas is None or
-                         (now - self._last_areas) >=
-                         timedelta(seconds=SCAN_INTERVAL_AREAS))
-            if areas_due:
-                new_areas = await self.client.get_areas(self.map_id)
-                data[DATA_AREAS] = new_areas
-                try:
-                    data[DATA_SCHEDULE] = await self.client.get_schedule()
-                except CannotConnect:
-                    LOGGER.debug("get_schedule unavailable")
+                self._last_live_map = now
+
+            # ── Every 300 s: areas + sensor status ───────────────────
+            if self._last_areas is None or (
+                now - self._last_areas
+            ) >= timedelta(seconds=SCAN_INTERVAL_AREAS):
+                new_areas_blob = await self.client.get_areas(self.map_id)
+                data[DATA_AREAS] = new_areas_blob
+
                 try:
                     data[DATA_SENSOR_STATUS] = await self.client.get_sensor_status()
                 except CannotConnect:
-                    LOGGER.debug("get_sensor_status unavailable")
+                    LOGGER.debug("get_sensor_status unavailable, skipping")
                 try:
                     data[DATA_ROBOT_FLAGS] = await self.client.get_robot_flags()
                 except CannotConnect:
-                    LOGGER.debug("get_robot_flags unavailable")
-                try:
-                    polygons = await self.client.get_n_n_polygons()
-                    floor_plan = _extract_floor_plan(polygons, new_areas)
-                    lm = dict(data.get(DATA_LIVE_MAP, {}))
-                    lm["floor_plan"]        = floor_plan
-                    lm["coordinate_bounds"] = _compute_bounds(floor_plan)
-                    data[DATA_LIVE_MAP] = lm
-                except CannotConnect:
-                    LOGGER.debug("get_n_n_polygons unavailable")
-                self._last_areas = now
-                self._check_for_new_areas(new_areas)
+                    LOGGER.debug("get_robot_flags unavailable, skipping")
 
-            # ── Every 600 s: statistics ───────────────────────────────────
-            stats_due = (self._last_statistics is None or
-                         (now - self._last_statistics) >=
-                         timedelta(seconds=SCAN_INTERVAL_STATISTICS))
-            if stats_due:
+                self._last_areas = now
+                self._check_for_new_areas(new_areas_blob)
+
+            # ── Every 600 s: saved-map geometry (walls, rooms, outline) ──
+            if self._last_map_geometry is None or (
+                now - self._last_map_geometry
+            ) >= timedelta(seconds=SCAN_INTERVAL_MAP_GEOMETRY):
+                try:
+                    data[DATA_FEATURE_MAP] = await self.client.get_feature_map(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_feature_map unavailable, skipping")
+                try:
+                    data[DATA_TILE_MAP] = await self.client.get_tile_map(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_tile_map unavailable, skipping")
+                try:
+                    data[DATA_AREAS_SAVED_MAP] = await self.client.get_areas(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_areas (map geometry) unavailable, skipping")
+                try:
+                    data[DATA_SEEN_POLY_SAVED_MAP] = await self.client.get_seen_polygon(self.map_id)
+                except CannotConnect:
+                    LOGGER.debug("get_seen_polygon (map geometry) unavailable, skipping")
+
+                # Load last-session grid from saved map (also runs on startup)
+                if not is_active:
+                    try:
+                        saved_grid = await self.client.get_cleaning_grid_map(
+                            map_id=self.map_id
+                        )
+                        if saved_grid.get("size_x", 0) > 0:
+                            self._last_session_grid = saved_grid
+                            if not self._session_complete:
+                                self._session_complete = True
+                                LOGGER.info(
+                                    "Loaded last session grid from saved map: %d×%d",
+                                    saved_grid["size_x"],
+                                    saved_grid["size_y"],
+                                )
+                    except CannotConnect:
+                        LOGGER.debug("get_cleaning_grid_map saved map unavailable")
+
+                self._last_map_geometry = now
+
+            # ── Every 600 s: lifetime statistics ─────────────────────
+            if self._last_statistics is None or (
+                now - self._last_statistics
+            ) >= timedelta(seconds=SCAN_INTERVAL_STATISTICS):
                 data[DATA_STATISTICS] = await self.client.get_statistics()
                 try:
                     data[DATA_PERMANENT_STATISTICS] = (
                         await self.client.get_permanent_statistics()
                     )
                 except CannotConnect:
-                    pass
+                    LOGGER.debug("get_permanent_statistics unavailable, skipping")
                 self._last_statistics = now
 
-            # ── Every 3600 s: robot identity ──────────────────────────────
-            info_due = (self._last_robot_info is None or
-                        (now - self._last_robot_info) >=
-                        timedelta(seconds=SCAN_INTERVAL_ROBOT_INFO))
-            if info_due:
-                robot_id    = await self.client.get_robot_id()
-                wifi_status = await self.client.get_wifi_status()
-                protocol    = await self.client.get_protocol_version()
-                data[DATA_ROBOT_INFO] = {
-                    "robot_id":         robot_id,
-                    "wifi_status":      wifi_status,
-                    "protocol_version": protocol,
-                }
+            # ── Every 60 s: schedule ─────────────────────────────────
+            if self._last_schedule is None or (
+                now - self._last_schedule
+            ) >= timedelta(seconds=60):
+                try:
+                    data[DATA_SCHEDULE] = await self.client.get_schedule()
+                except CannotConnect:
+                    LOGGER.debug("get_schedule unavailable, skipping")
+                self._last_schedule = now
+
+            # ── Every 3600 s: robot identity / wifi ──────────────────
+            if self._last_robot_info is None or (
+                now - self._last_robot_info
+            ) >= timedelta(seconds=SCAN_INTERVAL_ROBOT_INFO):
+                robot_info: dict[str, Any] = {}
+                for fetch, key in (
+                    (self.client.get_robot_id, "robot_id"),
+                    (self.client.get_wifi_status, "wifi_status"),
+                    (self.client.get_protocol_version, "protocol_version"),
+                ):
+                    try:
+                        robot_info[key] = await fetch()
+                    except CannotConnect:
+                        LOGGER.debug("%s unavailable, skipping", key)
+                data[DATA_ROBOT_INFO] = robot_info
                 self._last_robot_info = now
 
             self._consecutive_failures = 0
@@ -402,78 +417,12 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except CannotConnect as err:
             self._consecutive_failures += 1
             if self._consecutive_failures >= MAX_POLL_FAILURES:
-                raise UpdateFailed(f"RobEye API unreachable: {err}") from err
-            LOGGER.warning("RobEye poll failed (%d/%d): %s",
-                           self._consecutive_failures, MAX_POLL_FAILURES, err)
-            return data
-
-    # ── Dead-reckoning helpers ────────────────────────────────────────
-
-    def _set_slam_anchor(self, pos: dict) -> None:
-        """Set a new SLAM ground-truth position and reset odometry accumulator."""
-        self._slam_anchor    = pos
-        self._slam_anchor_ts = _time.monotonic()
-        self._odom_dx        = 0.0
-        self._odom_dy        = 0.0
-
-    def _update_odometry(self, parsed: dict) -> None:
-        """Accumulate odometry deltas from sensor_values motion_odometry data.
-
-        Each measurement in the API covers 10ms. API returns the last 5 (50ms).
-        We sum them to get total displacement since this poll.
-        Units: API units (1 unit = 2mm = 0.2cm).
-        """
-        dx = parsed.get("odometry_dx", 0)
-        dy = parsed.get("odometry_dy", 0)
-        if dx != 0 or dy != 0:
-            self._odom_dx += dx
-            self._odom_dy += dy
-
-    def _get_display_position(self) -> dict | None:
-        """Return best current position estimate for UI display.
-
-        Combines the last SLAM anchor with accumulated odometry delta.
-        Falls back to SLAM anchor alone if no odometry available.
-        """
-        if not self._slam_anchor:
-            return None
-        age_s = _time.monotonic() - self._slam_anchor_ts
-        return {
-            "x":           self._slam_anchor["x"] + self._odom_dx,
-            "y":           self._slam_anchor["y"] + self._odom_dy,
-            "heading_deg": self._slam_anchor["heading_deg"],
-            "source":      self._slam_anchor.get("source", "slam"),
-            "is_live":     True,
-            "slam_age_s":  round(age_s, 1),
-        }
-
-    # ── Brush alert helper ────────────────────────────────────────────
-
-    def _fire_brush_alerts(self, parsed: dict) -> None:
-        """Fire persistent HA notification when a brush becomes stuck.
-        Clears the notification when the brush is no longer stuck.
-        """
-        for side, descriptor in [
-            ("Left",  "side_brush_left_stuck"),
-            ("Right", "side_brush_right_stuck"),
-        ]:
-            stuck = parsed.get(f"gpio__{descriptor}") == "active"
-            attr  = f"_brush_{descriptor}_notified"
-            was   = getattr(self, attr, False)
-
-            if stuck and not was:
-                self.hass.components.persistent_notification.async_create(
-                    f"\u26a0\ufe0f {side} side brush is stuck or wrapped on the "
-                    "Rowenta Xplorer 120. Please check and clean it.",
-                    title="Rowenta \u2014 Brush Alert",
-                    notification_id=f"rowenta_brush_{descriptor}",
+                LOGGER.warning(
+                    "Rowenta RobEye: %d consecutive poll failures — "
+                    "check connectivity or update IP via Options Flow",
+                    self._consecutive_failures,
                 )
-                setattr(self, attr, True)
-            elif not stuck and was:
-                self.hass.components.persistent_notification.async_dismiss(
-                    notification_id=f"rowenta_brush_{descriptor}",
-                )
-                setattr(self, attr, False)
+            raise UpdateFailed(f"RobEye API error: {err}") from err
 
     # ── Dynamic area discovery ────────────────────────────────────────
 
@@ -550,7 +499,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def sensor_values_parsed(self) -> dict[str, Any]:
-        return (self.data or {}).get(DATA_SENSOR_VALUES_PARSED, {})
+        return (self.data or {}).get("sensor_values_parsed", {})
 
     @property
     def schedule(self) -> dict[str, Any]:
@@ -586,58 +535,25 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 # ── Sensor-values helpers ─────────────────────────────────────────────
 
 def _parse_sensor_values(raw: dict) -> dict:
-    """Flatten /get/sensor_values into a simple key→value dict.
+    """Flatten sensor_values into a simple dtype__descriptor → value dict.
 
-    Confirmed device_descriptors from real device 2026-03-20.
-    Keys produced:
-      gpio__<descriptor>           → "active" | "inactive"
-        descriptors: bumper_left, bumper_right, dock, dustbin,
-                     drop_1..4, side_brush_left_stuck,
-                     side_brush_right_stuck, wheel_switch_left/right
-      current_sensor__<descriptor> → int (mA)
-        descriptors: battery, fan, main_brush,
-                     side_brush_left, side_brush_right,
-                     wheel_left, wheel_right
-      voltage_sensor__<descriptor> → int (mV)
-        descriptors: battery, input
-      gyro_x, gyro_y, gyro_z       → int (raw angular rate)
-      odometry_dx, odometry_dy     → int (sum of rel_movement[0]/[1])
-      odometry_measurements        → list of raw measurement dicts
+    GPIO entries carry value='active'|'inactive'.
+    current_sensor entries carry current (mA integer).
+    voltage_sensor entries carry voltage (mV integer).
     """
     result: dict = {}
     for device in raw.get("sensor_data", []):
         dtype = device.get("device_type", "")
         for entry in device.get("sensor_data", []):
-            desc    = entry.get("device_descriptor", "")
-            payload = entry.get("payload", {})
-            data    = payload.get("data", {})
-
-            if dtype == "gpio":
-                result[f"gpio__{desc}"] = data.get("value", "inactive")
-
-            elif dtype == "current_sensor":
-                result[f"current_sensor__{desc}"] = data.get("current")
-
-            elif dtype == "voltage_sensor":
-                result[f"voltage_sensor__{desc}"] = data.get("voltage")
-
-            elif dtype == "gyroscope":
-                meas = data.get("measurements", [{}])
-                if meas:
-                    result["gyro_x"] = meas[-1].get("x", 0)
-                    result["gyro_y"] = meas[-1].get("y", 0)
-                    result["gyro_z"] = meas[-1].get("z", 0)
-
-            elif dtype == "motion_odometry":
-                measurements = data.get("measurements", [])
-                result["odometry_measurements"] = measurements
-                result["odometry_dx"] = sum(
-                    m.get("rel_movement", [0, 0, 0])[0] for m in measurements
-                )
-                result["odometry_dy"] = sum(
-                    m.get("rel_movement", [0, 0, 0])[1] for m in measurements
-                )
-
+            desc = entry.get("device_descriptor", "")
+            data = entry.get("payload", {}).get("data", {})
+            key = f"{dtype}__{desc}"
+            if "value" in data:
+                result[key] = data["value"]
+            elif "current" in data:
+                result[key] = data["current"]
+            elif "voltage" in data:
+                result[key] = data["voltage"]
     return result
 
 
@@ -649,93 +565,6 @@ def _gpio(parsed: dict, descriptor: str) -> str:
 def _current_ma(parsed: dict, descriptor: str) -> int | None:
     """Return the current-sensor reading in mA, or None if unavailable."""
     return parsed.get(f"current_sensor__{descriptor}")
-
-
-def _extract_floor_plan(polygons: dict, areas: dict) -> dict:
-    """Extract static floor plan from /get/n_n_polygons + /get/areas.
-
-    Returns a dict with rooms, avoidance_zones, walls, dock, outline —
-    the parts that change only every 300s (areas poll interval).
-    """
-    room_areas, avoidance_areas = _classify_areas(areas.get("areas", []))
-
-    rooms: list[dict] = []
-    for idx, area in enumerate(room_areas):
-        try:
-            meta = json.loads(area.get("area_meta_data", "{}") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            meta = {}
-        name = meta.get("name") or f"Room {area.get('id', idx)}"
-        raw_pts = area.get("points", [])
-        pts = [[p["x"], p["y"]] for p in raw_pts]
-        rooms.append({
-            "id":         area.get("id"),
-            "name":       name,
-            "room_type":  area.get("room_type", "none"),
-            "area_state": area.get("area_state", "inactive"),
-            "polygon":    pts,
-            "color":      _ROOM_COLORS[idx % len(_ROOM_COLORS)],
-            "redundant":  not _is_real_room(area),
-            "area_m2":    _calc_area_m2(raw_pts),
-        })
-
-    avoidance_zones: list[dict] = []
-    for area in avoidance_areas:
-        raw_pts = area.get("points", [])
-        avoidance_zones.append({
-            "id":      area.get("id"),
-            "polygon": [[p["x"], p["y"]] for p in raw_pts],
-        })
-
-    # Walls and dock from n_n_polygons map data (same structure as feature_map)
-    map_data = polygons.get("map", {})
-    walls = [
-        [ln["x1"], ln["y1"], ln["x2"], ln["y2"]]
-        for ln in map_data.get("lines", [])
-    ]
-    dock_raw = map_data.get("docking_pose") or {}
-    dock: dict | None = None
-    if dock_raw and str(dock_raw.get("valid", "")).lower() in ("true", "1", True):
-        dock = {
-            "x":           dock_raw["x"],
-            "y":           dock_raw["y"],
-            "heading_deg": round(dock_raw.get("heading", 0) / _HEADING_SCALE, 1),
-        }
-
-    # Outline from n_n_polygons polygon list
-    outline: list = []
-    for poly in (polygons.get("polygons") or []):
-        segs = poly.get("segments", [])
-        if segs:
-            outline = [[s["x1"], s["y1"]] for s in segs]
-            outline.append([segs[-1]["x2"], segs[-1]["y2"]])
-            break
-
-    return {
-        "rooms":           rooms,
-        "avoidance_zones": avoidance_zones,
-        "walls":           walls,
-        "dock":            dock,
-        "outline":         outline,
-    }
-
-
-def _compute_bounds(floor_plan: dict) -> dict:
-    """Compute coordinate bounds from a floor plan dict."""
-    all_pts: list = []
-    for r in floor_plan.get("rooms", []):
-        all_pts.extend(r.get("polygon", []))
-    for z in floor_plan.get("avoidance_zones", []):
-        all_pts.extend(z.get("polygon", []))
-    all_pts.extend(floor_plan.get("outline", []))
-    if floor_plan.get("dock"):
-        d = floor_plan["dock"]
-        all_pts.append([d["x"], d["y"]])
-    if not all_pts:
-        return {"min_x": -800, "max_x": 2400, "min_y": -1300, "max_y": 1400}
-    xs = [p[0] for p in all_pts]
-    ys = [p[1] for p in all_pts]
-    return {"min_x": min(xs), "max_x": max(xs), "min_y": min(ys), "max_y": max(ys)}
 
 
 # ── Live-map helpers ──────────────────────────────────────────────────
@@ -914,127 +743,112 @@ def _classify_areas(areas: list[dict]) -> tuple[list[dict], list[dict]]:
 
 def _build_live_map_payload(
     existing: dict[str, Any],
-    robot_position: dict | None = None,
-    seen_polygon_raw: dict[str, Any] | None = None,
-    cleaning_grid: dict[str, Any] | None = None,
-    is_active: bool = False,
-    is_live_map: bool = False,
-    map_id: str = "",
-    operation_map_id: str = "",
-    robot_path: list | None = None,
-    session_complete: bool = False,
-    # Legacy params kept for backward compatibility with existing tests:
-    live_params: dict[str, Any] | None = None,
-    feature_map: dict[str, Any] | None = None,
-    tile_map: dict[str, Any] | None = None,
-    areas_data: dict[str, Any] | None = None,
-    seen_poly_saved_map: dict[str, Any] | None = None,
-    last_session_grid: dict | None = None,
-    last_session_path: list | None = None,
-    last_session_outline: list | None = None,
+    live_params: dict[str, Any],
+    robot_position: dict | None,
+    seen_polygon_raw: dict[str, Any],
+    cleaning_grid: dict[str, Any],
+    feature_map: dict[str, Any],
+    tile_map: dict[str, Any],
+    areas_data: dict[str, Any],
+    seen_poly_saved_map: dict[str, Any],
+    is_active: bool,
+    is_live_map: bool,
+    map_id: str,
+    operation_map_id: str,
+    robot_path: list,
+    last_session_grid: dict,
+    last_session_path: list,
+    last_session_outline: list,
+    session_complete: bool,
 ) -> dict[str, Any]:
     """Compose the live_map attribute dict for the SVG card sensor.
 
     Schema (used by rowenta-map-card.js):
       map_id, is_active, rooms, outline, walls, dock, robot,
       live_outline, bounds, scale
-
-    Static floor plan data (rooms, walls, dock, outline) is carried forward
-    from `existing` when not provided via legacy params. The areas_due block
-    populates these via _extract_floor_plan / _compute_bounds.
     """
-    if seen_polygon_raw is None:
-        seen_polygon_raw = {}
-    if cleaning_grid is None:
-        cleaning_grid = {}
-    if robot_path is None:
-        robot_path = []
+    # ── Classify areas: rooms vs avoidance zones ──────────────────────
+    room_areas, avoidance_areas = _classify_areas(areas_data.get("areas", []))
 
-    # ── Rooms and avoidance zones ─────────────────────────────────────
-    if areas_data is not None:
-        # Legacy path: explicit areas_data provided (used by tests)
-        room_areas, avoidance_areas = _classify_areas(areas_data.get("areas", []))
-        rooms: list[dict[str, Any]] = []
-        for idx, area in enumerate(room_areas):
-            try:
-                meta = json.loads(area.get("area_meta_data", "{}") or "{}")
-            except (json.JSONDecodeError, TypeError):
-                meta = {}
-            name = meta.get("name") or f"Room {area.get('id', idx)}"
-            raw_pts = area.get("points", [])
-            pts = [[p["x"], p["y"]] for p in raw_pts]
-            rooms.append({
-                "id": area.get("id"),
-                "name": name,
-                "room_type": area.get("room_type", "none"),
-                "area_state": area.get("area_state", "inactive"),
-                "polygon": pts,
-                "color": _ROOM_COLORS[idx % len(_ROOM_COLORS)],
-                "redundant": not _is_real_room(area),
-                "area_m2": _calc_area_m2(raw_pts),
-            })
-        avoidance_zones: list[dict[str, Any]] = []
-        for area in avoidance_areas:
-            raw_pts = area.get("points", [])
-            avoidance_zones.append({
-                "id": area.get("id"),
-                "polygon": [[p["x"], p["y"]] for p in raw_pts],
-            })
-    else:
-        # New path: carry forward from existing floor plan data
-        rooms = list(existing.get("rooms", []))
-        avoidance_zones = list(existing.get("avoidance_zones", []))
+    # ── Rooms (from /get/areas?map_id) ───────────────────────────────
+    rooms: list[dict[str, Any]] = []
+    for idx, area in enumerate(room_areas):
+        try:
+            meta = json.loads(area.get("area_meta_data", "{}") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+        name = meta.get("name") or f"Room {area.get('id', idx)}"
+        raw_pts = area.get("points", [])
+        pts = [[p["x"], p["y"]] for p in raw_pts]
+        redundant = not _is_real_room(area)
+        rooms.append({
+            "id": area.get("id"),
+            "name": name,
+            "room_type": area.get("room_type", "none"),
+            "area_state": area.get("area_state", "inactive"),
+            "polygon": pts,
+            "color": _ROOM_COLORS[idx % len(_ROOM_COLORS)],
+            "redundant": redundant,
+            "area_m2": _calc_area_m2(raw_pts),
+        })
 
-    # ── Outline ───────────────────────────────────────────────────────
-    if seen_poly_saved_map is not None:
-        outline: list[list[int]] = []
-        sp_polygons = (
-            seen_poly_saved_map.get("seen_polygon", {}).get("polygons")
-            or seen_poly_saved_map.get("polygons")
-            or []
-        )
-        for poly in sp_polygons:
-            segs = poly.get("segments", [])
-            if segs:
-                outline = [[s["x1"], s["y1"]] for s in segs]
-                outline.append([segs[-1]["x2"], segs[-1]["y2"]])
-                break
-        if not outline and tile_map:
-            outline = [[p["x"], p["y"]] for p in (tile_map or {}).get("outline", [])]
-    else:
-        outline = list(existing.get("outline", []))
+    # ── Avoidance zones (area_state="blocking" / area_type="to_be_cleaned") ──
+    avoidance_zones: list[dict[str, Any]] = []
+    for area in avoidance_areas:
+        raw_pts = area.get("points", [])
+        pts = [[p["x"], p["y"]] for p in raw_pts]
+        avoidance_zones.append({
+            "id": area.get("id"),
+            "polygon": pts,
+        })
 
-    # ── Walls ─────────────────────────────────────────────────────────
-    if feature_map is not None:
-        walls = [
-            [ln["x1"], ln["y1"], ln["x2"], ln["y2"]]
-            for ln in feature_map.get("map", {}).get("lines", [])
-        ]
-    else:
-        walls = list(existing.get("walls", []))
+    # ── Outline (saved-map boundary from /get/seen_polygon?map_id) ───
+    outline: list[list[int]] = []
+    sp_polygons = (
+        seen_poly_saved_map.get("seen_polygon", {}).get("polygons")
+        or seen_poly_saved_map.get("polygons")
+        or []
+    )
+    for poly in sp_polygons:
+        segs = poly.get("segments", [])
+        if segs:
+            outline = [[s["x1"], s["y1"]] for s in segs]
+            outline.append([segs[-1]["x2"], segs[-1]["y2"]])
+            break
 
-    # ── Dock ──────────────────────────────────────────────────────────
-    if feature_map is not None or tile_map is not None:
-        dock_raw = (
-            (feature_map or {}).get("map", {}).get("docking_pose")
-            or (tile_map or {}).get("map", {}).get("docking_pose")
-            or {}
-        )
-        dock: dict[str, Any] | None = None
-        if dock_raw and str(dock_raw.get("valid", "")).lower() in ("true", "1", True):
-            dock = {
-                "x": dock_raw["x"],
-                "y": dock_raw["y"],
-                "heading_deg": round(dock_raw.get("heading", 0) / _HEADING_SCALE, 1),
-            }
-    else:
-        dock = existing.get("dock")
+    # Fallback: tile_map outline polygon
+    if not outline:
+        outline = [[p["x"], p["y"]] for p in tile_map.get("outline", [])]
+
+    # ── Walls (from /get/feature_map?map_id) ─────────────────────────
+    walls = [
+        [ln["x1"], ln["y1"], ln["x2"], ln["y2"]]
+        for ln in feature_map.get("map", {}).get("lines", [])
+    ]
+
+    # ── Dock ─────────────────────────────────────────────────────────
+    dock_raw = (
+        feature_map.get("map", {}).get("docking_pose")
+        or tile_map.get("map", {}).get("docking_pose")
+        or {}
+    )
+    dock: dict[str, Any] | None = None
+    if dock_raw and str(dock_raw.get("valid", "")).lower() in ("true", "1", True):
+        dock = {
+            "x": dock_raw["x"],
+            "y": dock_raw["y"],
+            "heading_deg": round(dock_raw.get("heading", 0) / _HEADING_SCALE, 1),
+        }
 
     # ── Robot live position ───────────────────────────────────────────
+    # Pre-extracted by _extract_relocalization_position / _extract_exploration_position
+    # / _extract_localization_position based on which endpoint was polled.
+    # robot_position already contains {x, y, heading_deg, source, is_live}.
     robot: dict[str, Any] | None = robot_position
 
-    # When idle, override stale localization with dock position so the robot
-    # icon shows at the charger rather than at the last cleaning position.
+    # When idle, /debug/localization returns the last position from the previous
+    # cleaning run (not the dock position).  Override with the known dock position
+    # so the robot icon shows at the charger while it is not cleaning.
     if not is_active and dock and (robot is None or not robot.get("is_live", True)):
         robot = {**dock, "source": "dock", "is_live": False}
 
@@ -1042,28 +856,17 @@ def _build_live_map_payload(
     if is_active:
         live_outline: list[list[int]] = _parse_live_outline(seen_polygon_raw)
     elif session_complete:
-        live_outline = list(last_session_outline or existing.get("live_outline", []))
+        live_outline = list(last_session_outline)
     else:
         live_outline = []
 
-    # ── Display grid and path ─────────────────────────────────────────
-    # In the new design, the caller pre-selects active vs session grid/path.
-    # In the legacy path (tests), use last_session_* when not active.
+    # ── Select display grid and path (live during cleaning, frozen after) ──
     if is_active:
-        display_grid = (
-            cleaning_grid
-            if isinstance(cleaning_grid, dict) and cleaning_grid.get("size_x", 0) > 0
-            else {}
-        )
+        display_grid = cleaning_grid if isinstance(cleaning_grid, dict) and cleaning_grid.get("size_x", 0) > 0 else {}
         display_path = list(robot_path)
-    elif last_session_grid is not None:
-        # Legacy path: explicit session data provided
-        display_grid = last_session_grid
-        display_path = list(last_session_path or [])
     else:
-        # New path: cleaning_grid and robot_path already pre-selected by caller
-        display_grid = cleaning_grid if isinstance(cleaning_grid, dict) else {}
-        display_path = list(robot_path)
+        display_grid = last_session_grid
+        display_path = last_session_path
 
     # ── Bounding box ─────────────────────────────────────────────────
     all_pts: list[list[int]] = (
@@ -1073,8 +876,9 @@ def _build_live_map_payload(
         + live_outline
         + ([[dock["x"], dock["y"]]] if dock else [])
     )
+    # Include grid extents in bounds
     g = display_grid
-    if isinstance(g, dict) and g.get("size_x", 0) > 0:
+    if g.get("size_x", 0) > 0:
         gx0 = g["lower_left_x"]
         gy0 = g["lower_left_y"]
         gx1 = gx0 + g["size_x"] * g["resolution"]
@@ -1092,20 +896,20 @@ def _build_live_map_payload(
         bounds = existing.get("bounds", {"min_x": -800, "max_x": 2400, "min_y": -1300, "max_y": 1400})
 
     return {
-        "map_id":           map_id or existing.get("map_id", ""),
-        "is_active":        is_active,
-        "is_live_map":      is_live_map,
-        "operation_map_id": operation_map_id or existing.get("operation_map_id", ""),
-        "rooms":            rooms,
-        "avoidance_zones":  avoidance_zones,
-        "outline":          outline,
-        "walls":            walls,
-        "dock":             dock,
-        "robot":            robot,
-        "live_outline":     live_outline,
-        "bounds":           bounds,
-        "scale":            "mm",  # 1 API unit = 2 mm
-        "cleaning_grid":    display_grid,
-        "robot_path":       display_path,
+        "map_id": map_id,
+        "is_active": is_active,
+        "is_live_map": is_live_map,
+        "operation_map_id": operation_map_id,
+        "rooms": rooms,
+        "avoidance_zones": avoidance_zones,
+        "outline": outline,
+        "walls": walls,
+        "dock": dock,
+        "robot": robot,
+        "live_outline": live_outline,
+        "bounds": bounds,
+        "scale": "mm",  # 1 API unit = 2 mm
+        "cleaning_grid": display_grid,
+        "robot_path": display_path,
         "session_complete": session_complete,
     }
