@@ -8,7 +8,6 @@ import asyncio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant, CoreState, EVENT_HOMEASSISTANT_STARTED, callback
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.typing import ConfigType
@@ -43,8 +42,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     host: str = config_entry.data[CONF_HOST]
     map_id: str = config_entry.data[CONF_MAP_ID]
 
-    session = async_get_clientsession(hass)
-    client = RobEyeApiClient(host=host, session=session)
+    client = RobEyeApiClient(host=host)
 
     coordinator = RobEyeCoordinator(
         hass=hass,

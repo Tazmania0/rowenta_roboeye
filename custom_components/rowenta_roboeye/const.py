@@ -20,7 +20,7 @@ PLATFORMS: list[Platform] = [
 ]
 
 # ── Coordinator timing ────────────────────────────────────────────────
-UPDATE_INTERVAL = timedelta(seconds=15)
+UPDATE_INTERVAL = timedelta(seconds=30)
 SCAN_INTERVAL_STATISTICS = 600
 SCAN_INTERVAL_AREAS = 300
 SCAN_INTERVAL_ROBOT_INFO = 3600
