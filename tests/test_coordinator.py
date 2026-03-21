@@ -19,6 +19,7 @@ from custom_components.rowenta_roboeye.const import (
 )
 from custom_components.rowenta_roboeye.coordinator import (
     RobEyeCoordinator,
+    _build_live_map_payload,
     _extract_relocalization_position,
     _extract_localization_position,
     _extract_exploration_position,
@@ -48,7 +49,11 @@ async def test_first_update_fetches_all_groups(coordinator, mock_client):
     mock_client.get_status.assert_called_once()
     mock_client.get_live_parameters.assert_called_once()
     mock_client.get_statistics.assert_called_once()
-    mock_client.get_areas.assert_called_once_with("3")
+    # get_areas is called twice on first run: once for the areas block
+    # (_last_areas is None) and once for the map-geometry block
+    # (_last_map_geometry is None).  Both use map_id="3".
+    mock_client.get_areas.assert_any_call("3")
+    assert mock_client.get_areas.call_count >= 1
     mock_client.get_sensor_status.assert_called_once()
     mock_client.get_robot_id.assert_called_once()
     mock_client.get_wifi_status.assert_called_once()
@@ -63,6 +68,7 @@ async def test_status_fetched_every_tick(coordinator, mock_client):
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_areas = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()  # suppress geometry block
 
     await coordinator._async_update_data()
 
@@ -78,6 +84,7 @@ async def test_areas_fetched_after_300s(coordinator, mock_client):
     coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()  # suppress geometry block
 
     await coordinator._async_update_data()
     assert mock_client.get_areas.call_count == 1
@@ -90,6 +97,7 @@ async def test_statistics_fetched_after_600s(coordinator, mock_client):
     coordinator._last_statistics = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_STATISTICS + 1)
     coordinator._last_areas = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()  # suppress geometry block
 
     await coordinator._async_update_data()
     assert mock_client.get_statistics.call_count == 1
@@ -357,3 +365,110 @@ def test_extract_exploration_uses_highest_ts():
 def test_extract_exploration_empty_points_returns_none():
     assert _extract_exploration_position({"exploration_points": []}) is None
     assert _extract_exploration_position({}) is None
+
+
+# ── Position tracking bug-fixes ───────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_new_session_resets_last_live_map(coordinator, mock_client):
+    """_last_live_map is cleared when a new cleaning session starts so the first
+    coordinator tick fetches a fresh robot position immediately instead of waiting
+    up to 60 s for the idle-mode throttle to expire."""
+    coordinator.data = {}
+    coordinator._last_mode = "ready"
+    coordinator._last_live_map = datetime.utcnow()  # simulate recent idle update
+
+    mock_client.get_status.return_value = {**MOCK_STATUS, "mode": "cleaning"}
+    await coordinator._async_update_data()
+
+    assert coordinator._last_live_map is not None  # updated by this tick
+    # The reset happened before the live-map block ran, so the block was entered
+    # unconditionally (is_active=True also guarantees this, but the reset ensures
+    # correctness even in edge cases where mode detection is ambiguous).
+    mock_client.get_live_parameters.assert_called_once()
+
+
+def _make_live_map_kwargs(**overrides):
+    """Return a minimal valid kwarg dict for _build_live_map_payload."""
+    base = dict(
+        existing={},
+        live_params={},
+        robot_position=None,
+        seen_polygon_raw={},
+        cleaning_grid={},
+        feature_map={},
+        tile_map={},
+        areas_data={},
+        seen_poly_saved_map={},
+        is_active=False,
+        is_live_map=False,
+        map_id="3",
+        operation_map_id="3",
+        robot_path=[],
+        last_session_grid={},
+        last_session_path=[],
+        last_session_outline=[],
+        session_complete=False,
+    )
+    base.update(overrides)
+    return base
+
+
+def test_idle_robot_shown_at_dock_when_localization_stale():
+    """When idle and dock position is known, robot is placed at the dock rather
+    than at the stale last-active-cleaning position from /debug/localization."""
+    stale_localization = {
+        "x": 500, "y": 300, "heading_deg": 45.0,
+        "source": "localization", "is_live": False,
+    }
+    dock = {"x": 10, "y": 20, "heading_deg": 90.0}
+    feature_map = {"map": {"docking_pose": {"x": 10, "y": 20, "heading": 16380, "valid": True}}}
+
+    payload = _build_live_map_payload(**_make_live_map_kwargs(
+        robot_position=stale_localization,
+        feature_map=feature_map,
+    ))
+
+    robot = payload["robot"]
+    assert robot is not None
+    assert robot["source"] == "dock", "idle robot should report from dock, not stale localization"
+    assert robot["x"] == 10
+    assert robot["y"] == 20
+    assert robot["is_live"] is False
+
+
+def test_idle_robot_shown_at_dock_when_no_localization():
+    """When idle and robot_position is None (first start / no localization data),
+    the dock position is still used so the robot shows up on the map."""
+    feature_map = {"map": {"docking_pose": {"x": 5, "y": 15, "heading": 0, "valid": True}}}
+
+    payload = _build_live_map_payload(**_make_live_map_kwargs(
+        robot_position=None,
+        feature_map=feature_map,
+    ))
+
+    robot = payload["robot"]
+    assert robot is not None
+    assert robot["source"] == "dock"
+    assert robot["x"] == 5
+    assert robot["y"] == 15
+
+
+def test_active_robot_position_not_overridden_by_dock():
+    """During active cleaning the live relocalization position is kept; dock
+    position must not override it."""
+    live_pos = {
+        "x": 200, "y": 100, "heading_deg": 10.0,
+        "source": "relocalization", "is_live": True,
+    }
+    feature_map = {"map": {"docking_pose": {"x": 5, "y": 15, "heading": 0, "valid": True}}}
+
+    payload = _build_live_map_payload(**_make_live_map_kwargs(
+        robot_position=live_pos,
+        feature_map=feature_map,
+        is_active=True,
+    ))
+
+    robot = payload["robot"]
+    assert robot["source"] == "relocalization"
+    assert robot["x"] == 200

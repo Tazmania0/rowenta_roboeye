@@ -82,6 +82,8 @@ MOCK_EXPLORATION = {"exploration_points": [
      "rob_pose": [-861, 352, -6298]},
 ]}
 
+MOCK_SENSOR_VALUES = {"sensor_data": []}
+
 MOCK_CLEANING_GRID = {
     "map_id": 3,
     "lower_left_x": -823,
@@ -114,6 +116,11 @@ def mock_client():
     client.get_protocol_version.return_value = dict(MOCK_PROTOCOL_VERSION)
     client.get_live_parameters.return_value = dict(MOCK_LIVE_PARAMETERS)
     client.get_sensor_status.return_value = dict(MOCK_SENSOR_STATUS)
+    client.get_sensor_values.return_value = dict(MOCK_SENSOR_VALUES)
+    client.get_seen_polygon.return_value = {}
+    client.get_feature_map.return_value = {}
+    client.get_tile_map.return_value = {}
+    client.get_schedule.return_value = {}
     client.get_robot_flags.return_value = dict(MOCK_ROBOT_FLAGS)
     client.get_cleaning_grid_map.return_value = dict(MOCK_CLEANING_GRID)
     client.get_map_status.return_value = dict(MOCK_MAP_STATUS)
