@@ -3,7 +3,7 @@
 Key improvements over v1:
 - Tracks known_area_ids and fires SIGNAL_AREAS_UPDATED when the room set
   changes so platforms can add new entities WITHOUT a full reload.
-- Adaptive live-map polling: 5 s during cleaning, 60 s when idle.
+- Adaptive live-map polling: every coordinator tick during cleaning, 60 s when idle.
 - Exposes structured live_map data (floor_plan, cleaned_area, robot_position)
   for the Phase-2 SVG card via sensor.xplorer120_live_map.
 """
@@ -173,11 +173,13 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             self._last_mode = mode
 
-            # ── Adaptive live-map polling: 5 s active / 60 s idle ────
-            live_map_interval = 5 if is_active else 60
-            if self._last_live_map is None or (
+            # ── Live-map polling: every cycle when active, every 60 s when idle ──
+            # When cleaning, always fetch position/area on every coordinator tick
+            # so robot position tracks the robot in near-real-time.  When idle
+            # there is no need to hammer the endpoints; 60 s is fine.
+            if is_active or self._last_live_map is None or (
                 now - self._last_live_map
-            ) >= timedelta(seconds=live_map_interval):
+            ) >= timedelta(seconds=60):
                 live_params: dict[str, Any] = {}
 
                 try:
