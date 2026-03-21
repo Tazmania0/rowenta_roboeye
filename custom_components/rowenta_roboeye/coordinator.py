@@ -197,7 +197,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.update_interval = target_interval
                 LOGGER.debug(
                     "Coordinator interval → %s",
-                    "2s" if is_active else "15s",
+                    "5s" if is_active else "15s",
                 )
 
             # ── Session lifecycle tracking ────────────────────────────
