@@ -415,13 +415,26 @@ class RobEyeDashboardManager:
             return False
 
     async def async_delete(self, hass: HomeAssistant) -> None:
-        """Remove the dashboard from the Lovelace registry."""
+        """Remove the dashboard from the Lovelace registry.
+
+        Mirrors what storage_dashboard_changed (removal branch) does in
+        homeassistant/components/lovelace/__init__.py:
+          1. Delete from persistent storage via DashboardsCollection
+          2. Remove LovelaceStorage from hass.data["lovelace"].dashboards
+          3. Unregister the frontend panel so it disappears from the sidebar
+
+        Creating a local DashboardsCollection instance only updates on-disk
+        storage — it does NOT fire the global storage_dashboard_changed
+        listener, so steps 2 and 3 must be performed explicitly.
+        """
         try:
             from homeassistant.components.lovelace.dashboard import DashboardsCollection
+            from homeassistant.components.lovelace.const import LOVELACE_DATA
         except ImportError as err:
             _LOGGER.warning("RobEye dashboard: cannot import lovelace internals: %s", err)
             return
 
+        # Step 1 — Remove from persistent storage
         dashboards_collection = DashboardsCollection(hass)
         try:
             await dashboards_collection.async_load()
@@ -434,15 +447,43 @@ class RobEyeDashboardManager:
              if i.get(_CONF_URL_PATH) == DASHBOARD_URL_PATH),
             None,
         )
-        if item is None:
-            _LOGGER.debug("RobEye dashboard: '%s' not found in registry — nothing to delete", DASHBOARD_URL_PATH)
-            return
+        if item is not None:
+            try:
+                await dashboards_collection.async_delete_item(item["id"])
+                _LOGGER.info("RobEye dashboard: deleted '%s' from storage", DASHBOARD_URL_PATH)
+            except Exception as err:
+                _LOGGER.warning("RobEye dashboard: async_delete_item() failed: %s", err)
+        else:
+            _LOGGER.debug(
+                "RobEye dashboard: '%s' not found in storage — skipping delete",
+                DASHBOARD_URL_PATH,
+            )
 
+        # Step 2 — Remove from the in-memory lovelace dashboards dict
+        # This is what storage_dashboard_changed (removal) normally does via
+        # the global DashboardsCollection listener.
+        lovelace_data = hass.data.get(LOVELACE_DATA)
+        if lovelace_data is not None:
+            lovelace_dashboards: dict = getattr(lovelace_data, "dashboards", {})
+            if DASHBOARD_URL_PATH in lovelace_dashboards:
+                lovelace_dashboards.pop(DASHBOARD_URL_PATH, None)
+                _LOGGER.info(
+                    "RobEye dashboard: removed '%s' from hass.data lovelace dashboards",
+                    DASHBOARD_URL_PATH,
+                )
+
+        # Step 3 — Unregister the frontend panel so the sidebar entry disappears
         try:
-            await dashboards_collection.async_delete_item(item["id"])
-            _LOGGER.info("RobEye dashboard: deleted '%s'", DASHBOARD_URL_PATH)
+            from homeassistant.components import frontend as _frontend
+            _frontend.async_remove_panel(hass, DASHBOARD_URL_PATH, warn_if_unknown=False)
+            _LOGGER.info(
+                "RobEye dashboard: frontend panel '%s' unregistered",
+                DASHBOARD_URL_PATH,
+            )
         except Exception as err:
-            _LOGGER.warning("RobEye dashboard: async_delete_item() failed: %s", err)
+            _LOGGER.debug("RobEye dashboard: panel removal skipped: %s", err)
+
+        self._last_hash = None  # Reset so a future re-add starts fresh
 
     async def _async_get_lovelace_store(self, hass: HomeAssistant) -> Any | None:
         """Return the LovelaceStorage object for our dashboard.
