@@ -8,9 +8,9 @@ RowentaBrushLeftStuckSensor  — BinarySensorDeviceClass.PROBLEM
 RowentaBrushRightStuckSensor — BinarySensorDeviceClass.PROBLEM
     On when side_brush_right_stuck GPIO reads 'active' (brush stuck).
     Off when brush is free (OK).
-RowentaDustbinSensor         — BinarySensorDeviceClass.PROBLEM
-    On (Problem) when dustbin GPIO reads 'inactive' (dustbin is missing).
-    Off when dustbin is present.
+RowentaDustbinSensor         — no device class (uses translation states: Missing/Present)
+    On (Missing) when dustbin GPIO reads 'inactive' (dustbin is missing).
+    Off (Present) when dustbin is present.
 
 All three are EntityCategory.DIAGNOSTIC and read from
 coordinator.data["sensor_values_parsed"], which is populated every 300 s
@@ -100,12 +100,14 @@ class RowentaBrushRightStuckSensor(RobEyeEntity, BinarySensorEntity):
 class RowentaDustbinSensor(RobEyeEntity, BinarySensorEntity):
     """Binary sensor: dustbin present or missing.
 
-    is_on = True  → dustbin is missing (GPIO 'inactive') → PROBLEM
-    is_on = False → dustbin is present (GPIO 'active')   → OK
+    is_on = True  → dustbin is missing (GPIO 'inactive') → state: Missing
+    is_on = False → dustbin is present (GPIO 'active')   → state: Present
+
+    No device_class so HA uses the translation strings (Missing / Present)
+    rather than the built-in PROBLEM class labels (Problem / OK).
+    Icon is defined per-state in icons.json.
     """
 
-    _attr_device_class = BinarySensorDeviceClass.PROBLEM
-    _attr_icon = "mdi:delete-alert"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_translation_key = "dustbin"
 
