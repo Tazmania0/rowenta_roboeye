@@ -83,6 +83,7 @@ STRATEGY_DEEP = "2"
 MODE_CLEANING = "cleaning"
 MODE_READY = "ready"
 MODE_GO_HOME = "go_home"
+MODE_NOT_READY = "not_ready"
 
 # ── API charging strings ──────────────────────────────────────────────
 CHARGING_CHARGING = "charging"

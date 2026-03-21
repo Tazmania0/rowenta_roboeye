@@ -30,6 +30,7 @@ from .const import (
     LOGGER,
     MODE_CLEANING,
     MODE_GO_HOME,
+    MODE_NOT_READY,
     MODE_READY,
     SERVICE_CLEAN_ROOM,
 )
@@ -102,8 +103,20 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         # State machine
         mode = status.get("mode", "")
         charging = status.get("charging", "")
+        sv = self.coordinator.sensor_values_parsed
 
-        if mode == MODE_CLEANING:
+        # Hardware error: not_ready mode (dustbin missing, brush stuck, etc.)
+        # or sensor values explicitly confirm a hardware fault.
+        _hardware_error = (
+            mode == MODE_NOT_READY
+            or sv.get("gpio__dustbin") == "inactive"
+            or sv.get("gpio__side_brush_left_stuck") == "active"
+            or sv.get("gpio__side_brush_right_stuck") == "active"
+        )
+
+        if _hardware_error:
+            self._attr_activity = VacuumActivity.ERROR
+        elif mode == MODE_CLEANING:
             self._attr_activity = VacuumActivity.CLEANING
         elif mode == MODE_READY and charging in (CHARGING_CHARGING, CHARGING_CONNECTED):
             self._attr_activity = VacuumActivity.DOCKED
