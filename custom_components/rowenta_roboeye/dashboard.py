@@ -362,6 +362,7 @@ class RobEyeDashboardManager:
 
     def __init__(self) -> None:
         self._last_hash: str | None = None
+        self._sidebar_hidden: bool = False
 
     def invalidate(self) -> None:
         """Force a save on the next async_update() call (e.g. after room change)."""
@@ -426,6 +427,8 @@ class RobEyeDashboardManager:
             _LOGGER.warning("RobEye dashboard: cannot import frontend: %s", err)
             return
 
+        self._sidebar_hidden = not visible
+
         if visible:
             try:
                 _frontend.async_register_built_in_panel(
@@ -443,7 +446,7 @@ class RobEyeDashboardManager:
                 _LOGGER.warning("RobEye dashboard: failed to show sidebar: %s", err)
         else:
             try:
-                _frontend.async_remove_panel(hass, DASHBOARD_URL_PATH, warn_if_unknown=False)
+                _frontend.async_remove_panel(hass, DASHBOARD_URL_PATH)
                 _LOGGER.info("RobEye dashboard: sidebar hidden — device disabled")
             except Exception as err:
                 _LOGGER.debug("RobEye dashboard: panel removal skipped: %s", err)
@@ -509,7 +512,7 @@ class RobEyeDashboardManager:
         # Step 3 — Unregister the frontend panel so the sidebar entry disappears
         try:
             from homeassistant.components import frontend as _frontend
-            _frontend.async_remove_panel(hass, DASHBOARD_URL_PATH, warn_if_unknown=False)
+            _frontend.async_remove_panel(hass, DASHBOARD_URL_PATH)
             _LOGGER.info(
                 "RobEye dashboard: frontend panel '%s' unregistered",
                 DASHBOARD_URL_PATH,
@@ -621,29 +624,32 @@ class RobEyeDashboardManager:
             type(store).__name__,
         )
 
-        # Register the frontend panel so the dashboard appears in the sidebar
-        try:
-            from homeassistant.components import frontend as _frontend
-            _frontend.async_register_built_in_panel(
-                hass,
-                component_name="lovelace",
-                sidebar_title=DASHBOARD_TITLE,
-                sidebar_icon=DASHBOARD_ICON,
-                frontend_url_path=DASHBOARD_URL_PATH,
-                config={"mode": "storage"},
-                require_admin=False,
-                update=False,
-            )
-            _LOGGER.info(
-                "RobEye dashboard: frontend panel registered for '%s'",
-                DASHBOARD_URL_PATH,
-            )
-        except Exception as err:
-            # Panel may already be registered (e.g. from a previous boot that
-            # persisted the entry).  Log but continue — async_save() still works.
-            _LOGGER.debug(
-                "RobEye dashboard: panel registration skipped: %s", err
-            )
+        # Register the frontend panel so the dashboard appears in the sidebar,
+        # but only when the device is not disabled — _sidebar_hidden is set by
+        # set_sidebar_visible() before we reach this path on a re-create.
+        if not self._sidebar_hidden:
+            try:
+                from homeassistant.components import frontend as _frontend
+                _frontend.async_register_built_in_panel(
+                    hass,
+                    component_name="lovelace",
+                    sidebar_title=DASHBOARD_TITLE,
+                    sidebar_icon=DASHBOARD_ICON,
+                    frontend_url_path=DASHBOARD_URL_PATH,
+                    config={"mode": "storage"},
+                    require_admin=False,
+                    update=False,
+                )
+                _LOGGER.info(
+                    "RobEye dashboard: frontend panel registered for '%s'",
+                    DASHBOARD_URL_PATH,
+                )
+            except Exception as err:
+                # Panel may already be registered (e.g. from a previous boot that
+                # persisted the entry).  Log but continue — async_save() still works.
+                _LOGGER.debug(
+                    "RobEye dashboard: panel registration skipped: %s", err
+                )
 
         return store
 
