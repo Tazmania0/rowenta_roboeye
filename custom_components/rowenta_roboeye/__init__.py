@@ -129,7 +129,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     # Hide/show dashboard sidebar when the device is disabled/enabled in HA
     @callback
     def _on_device_registry_updated(event: Event) -> None:
-        if event.data.get("action") != "updated":
+        if event.data.get("action") != "update":
             return
         if "disabled_by" not in event.data.get("changes", {}):
             return
