@@ -35,6 +35,7 @@ from .const import (
     DATA_MAP_STATUS,
     DATA_PERMANENT_STATISTICS,
     DATA_RELOCALIZATION,
+    DATA_ROB_POSE,
     DATA_ROBOT_FLAGS,
     DATA_SCHEDULE,
     DATA_ROBOT_INFO,
@@ -55,6 +56,8 @@ from .const import (
     SCAN_INTERVAL_STATISTICS,
     SIGNAL_AREAS_UPDATED,
     UPDATE_INTERVAL,
+    UPDATE_INTERVAL_CLEANING,
+    UPDATE_INTERVAL_IDLE,
 )
 
 
@@ -112,6 +115,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_session_outline: list = []
         self._last_mode: str = ""
         self._session_complete: bool = False
+        self._last_rob_pose_ts: int = 0   # last seen /get/rob_pose timestamp value
 
     # ── Device identifier ─────────────────────────────────────────────
 
@@ -187,11 +191,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             mode = data[DATA_STATUS].get("mode", "")
             is_active = mode in (MODE_CLEANING, MODE_GO_HOME)
 
-            # ── Bug 3: Dynamically adjust polling rate ────────────────
-            target_interval = timedelta(seconds=10 if is_active else 30)
+            # ── Dynamically adjust polling rate ───────────────────────
+            target_interval = UPDATE_INTERVAL_CLEANING if is_active else UPDATE_INTERVAL_IDLE
             if self.update_interval != target_interval:
                 self.update_interval = target_interval
-                LOGGER.debug("Coordinator interval → %s s", target_interval.seconds)
+                LOGGER.debug(
+                    "Coordinator interval → %s",
+                    "2s" if is_active else "15s",
+                )
 
             # ── Session lifecycle tracking ────────────────────────────
             was_cleaning = self._last_mode == MODE_CLEANING
@@ -203,11 +210,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._last_session_path = []
                 self._last_session_outline = []
                 self._session_complete = False
-                # Force an immediate live-map / position fetch on the first cleaning
-                # tick so the robot icon moves to its real location right away instead
-                # of waiting up to 60 s for the next idle-mode update to expire.
                 self._last_live_map = None
-                LOGGER.debug("New cleaning session — path and grid reset")
+                self._last_rob_pose_ts = 0
+                LOGGER.debug("Cleaning session started — state reset")
 
             if was_cleaning and now_docked and not self._session_complete:
                 self._last_session_grid    = data.get(DATA_CLEANING_GRID, {})
@@ -224,74 +229,61 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             self._last_mode = mode
 
-            # ── Live-map polling: every cycle when active, every 60 s when idle ──
-            # Skipped entirely when the live_map sensor entity is disabled so the
-            # robot's embedded HTTP server is not burdened with position/grid calls
-            # that serve no purpose without the map card.
+            # ── Live-map polling ──────────────────────────────────────
+            # Skipped entirely when the live_map sensor entity is disabled.
             if self._is_live_map_enabled():
                 if is_active or self._last_live_map is None or (
                     now - self._last_live_map
                 ) >= timedelta(seconds=60):
-                    live_params: dict[str, Any] = {}
 
-                    try:
-                        live_params = await self.client.get_live_parameters()
-                        data[DATA_LIVE_PARAMETERS] = live_params
-                    except CannotConnect:
-                        LOGGER.debug("get_live_parameters unavailable, skipping")
-
-                    # ── Determine which map session is active ─────────────────
-                    try:
-                        map_status = await self.client.get_map_status()
-                        data[DATA_MAP_STATUS] = map_status
-                        operation_map_id = str(map_status.get("operation_map_id", self.map_id))
-                    except CannotConnect:
-                        operation_map_id = self._operation_map_id
-                    is_live_map = (operation_map_id != self.map_id)
-                    self._operation_map_id = operation_map_id
-
-                    # ── Robot position — choose endpoint based on map session ──
+                    # ── POSITION BUCKET — /get/rob_pose (all states) ──────
                     robot_position: dict | None = None
-                    if is_active and is_live_map:
-                        # New-map session (map 55/56/57…) → /debug/exploration
-                        try:
-                            exploration = await self.client.get_exploration()
-                            data[DATA_EXPLORATION] = exploration
-                            robot_position = _extract_exploration_position(exploration)
-                        except CannotConnect:
-                            LOGGER.debug("get_exploration unavailable, skipping")
-                    elif is_active and not is_live_map:
-                        # Cleaning saved map (map 3) → /debug/relocalization
-                        try:
-                            reloc = await self.client.get_relocalization()
-                            data[DATA_RELOCALIZATION] = reloc
-                            robot_position = _extract_relocalization_position(reloc)
-                        except CannotConnect:
-                            LOGGER.debug("get_relocalization unavailable, skipping")
-                    else:
-                        # Idle → /debug/localization (global entry)
-                        try:
-                            loc = await self.client.get_localization()
-                            robot_position = _extract_localization_position(loc)
-                        except CannotConnect:
-                            LOGGER.debug("get_localization unavailable, skipping")
+                    try:
+                        rob_pose_raw = await self.client.get_rob_pose()
+                        data[DATA_ROB_POSE] = rob_pose_raw
+                        robot_position = _extract_rob_pose(rob_pose_raw)
+                    except CannotConnect:
+                        LOGGER.debug("get_rob_pose unavailable")
+                        cached = data.get(DATA_ROB_POSE)
+                        if cached:
+                            robot_position = _extract_rob_pose(cached)
 
-                    cleaning_grid: dict = {}
+                    # Staleness detection using timestamp field
+                    if robot_position and robot_position.get("timestamp"):
+                        new_ts = robot_position["timestamp"]
+                        if new_ts == self._last_rob_pose_ts and is_active:
+                            LOGGER.debug(
+                                "rob_pose timestamp unchanged (%d) — position may be stale",
+                                new_ts,
+                            )
+                        self._last_rob_pose_ts = new_ts
+
+                    # ── LIVE MAP POLYGON BUCKET — every 5 s when cleaning ─
                     seen_polygon_raw: dict = {}
-                    if is_active:
+                    cleaning_grid: dict = {}
+
+                    live_map_due = is_active and (
+                        self._last_live_map is None
+                        or (now - self._last_live_map).total_seconds() >= 5
+                    )
+
+                    if live_map_due:
                         try:
                             seen_polygon_raw = await self.client.get_seen_polygon()
                             data[DATA_SEEN_POLYGON] = seen_polygon_raw
                         except CannotConnect:
-                            LOGGER.debug("get_seen_polygon unavailable, skipping")
+                            LOGGER.debug("get_seen_polygon unavailable")
+                            seen_polygon_raw = data.get(DATA_SEEN_POLYGON, {})
+
                         try:
                             cleaning_grid = await self.client.get_cleaning_grid_map()
                             data[DATA_CLEANING_GRID] = cleaning_grid
                         except CannotConnect:
-                            LOGGER.debug("get_cleaning_grid_map unavailable, skipping")
+                            LOGGER.debug("get_cleaning_grid_map unavailable")
+                            cleaning_grid = data.get(DATA_CLEANING_GRID, {})
                     else:
-                        data[DATA_SEEN_POLYGON] = {}
-                        data[DATA_CLEANING_GRID] = {}
+                        seen_polygon_raw = data.get(DATA_SEEN_POLYGON, {})
+                        cleaning_grid = data.get(DATA_CLEANING_GRID, {})
 
                     # ── Accumulate robot path during cleaning ─────────────
                     if is_active and robot_position:
@@ -308,7 +300,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                     data[DATA_LIVE_MAP] = _build_live_map_payload(
                         existing=data.get(DATA_LIVE_MAP, {}),
-                        live_params=live_params,
                         robot_position=robot_position,
                         seen_polygon_raw=seen_polygon_raw,
                         cleaning_grid=cleaning_grid,
@@ -317,9 +308,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         areas_data=data.get(DATA_AREAS_SAVED_MAP, {}),
                         seen_poly_saved_map=data.get(DATA_SEEN_POLY_SAVED_MAP, {}),
                         is_active=is_active,
-                        is_live_map=is_live_map,
                         map_id=self.map_id,
-                        operation_map_id=operation_map_id,
                         robot_path=self._robot_path,
                         last_session_grid=self._last_session_grid,
                         last_session_path=self._last_session_path,
@@ -690,6 +679,33 @@ def _extract_exploration_position(exploration: dict) -> dict | None:
     }
 
 
+def _extract_rob_pose(rob_pose: dict) -> dict | None:
+    """Extract robot position from /get/rob_pose response.
+
+    Returns None if valid=False (robot has no position fix).
+    heading is already in degrees — no scale conversion required.
+
+    Confirmed fields (2026-03-21 live at dock):
+        x1=-2, y1=-3, heading=157, valid=true, is_tentative=false
+
+    Coordinate system: API units. 1 unit = 2 mm = 0.2 cm.
+    Dock is at approximately (90, 13) API units.
+    """
+    if not rob_pose.get("valid", False):
+        return None
+
+    return {
+        "x":           rob_pose["x1"],
+        "y":           rob_pose["y1"],
+        "heading_deg": rob_pose["heading"],       # already degrees, no conversion
+        "is_tentative": rob_pose.get("is_tentative", False),
+        "timestamp":   rob_pose.get("timestamp"), # monotonic counter for staleness
+        "map_id":      rob_pose.get("map_id"),
+        "source":      "rob_pose",
+        "is_live":     True,
+    }
+
+
 def _is_real_room(area: dict) -> bool:
     """Return True if this area is a real named room, not a redundant auto-segment.
 
@@ -765,7 +781,6 @@ def _classify_areas(areas: list[dict]) -> tuple[list[dict], list[dict]]:
 
 def _build_live_map_payload(
     existing: dict[str, Any],
-    live_params: dict[str, Any],
     robot_position: dict | None,
     seen_polygon_raw: dict[str, Any],
     cleaning_grid: dict[str, Any],
@@ -774,9 +789,7 @@ def _build_live_map_payload(
     areas_data: dict[str, Any],
     seen_poly_saved_map: dict[str, Any],
     is_active: bool,
-    is_live_map: bool,
     map_id: str,
-    operation_map_id: str,
     robot_path: list,
     last_session_grid: dict,
     last_session_path: list,
@@ -784,6 +797,9 @@ def _build_live_map_payload(
     session_complete: bool,
 ) -> dict[str, Any]:
     """Compose the live_map attribute dict for the SVG card sensor.
+
+    robot_position comes from /get/rob_pose — valid in all states.
+    is_tentative flag on robot_position drives dimmed rendering in the card.
 
     Schema (used by rowenta-map-card.js):
       map_id, is_active, rooms, outline, walls, dock, robot,
@@ -863,16 +879,23 @@ def _build_live_map_payload(
         }
 
     # ── Robot live position ───────────────────────────────────────────
-    # Pre-extracted by _extract_relocalization_position / _extract_exploration_position
-    # / _extract_localization_position based on which endpoint was polled.
-    # robot_position already contains {x, y, heading_deg, source, is_live}.
-    robot: dict[str, Any] | None = robot_position
-
-    # When idle, /debug/localization returns the last position from the previous
-    # cleaning run (not the dock position).  Override with the known dock position
-    # so the robot icon shows at the charger while it is not cleaning.
-    if not is_active and dock and (robot is None or not robot.get("is_live", True)):
-        robot = {**dock, "source": "dock", "is_live": False}
+    # From /get/rob_pose — valid in all states (docked, idle, cleaning, returning).
+    # is_tentative=True means rough initial estimate → show dimmed in card.
+    # When valid=False, _extract_rob_pose returns None; keep last known position.
+    if robot_position:
+        robot: dict[str, Any] | None = {
+            "x":           robot_position["x"],
+            "y":           robot_position["y"],
+            "heading_deg": robot_position["heading_deg"],
+            "is_tentative": robot_position.get("is_tentative", False),
+            "source":      robot_position.get("source", "rob_pose"),
+            "is_live":     robot_position.get("is_live", True),
+        }
+    elif not is_active:
+        # No valid rob_pose — keep last known position from previous tick
+        robot = existing.get("robot")
+    else:
+        robot = None
 
     # ── Live / session outline ────────────────────────────────────────
     if is_active:
@@ -920,8 +943,6 @@ def _build_live_map_payload(
     return {
         "map_id": map_id,
         "is_active": is_active,
-        "is_live_map": is_live_map,
-        "operation_map_id": operation_map_id,
         "rooms": rooms,
         "avoidance_zones": avoidance_zones,
         "outline": outline,

@@ -10,6 +10,7 @@ from custom_components.rowenta_roboeye.api import CannotConnect
 from custom_components.rowenta_roboeye.const import (
     DATA_AREAS,
     DATA_LIVE_PARAMETERS,
+    DATA_ROB_POSE,
     DATA_ROBOT_INFO,
     DATA_STATISTICS,
     DATA_STATUS,
@@ -20,23 +21,25 @@ from custom_components.rowenta_roboeye.const import (
 from custom_components.rowenta_roboeye.coordinator import (
     RobEyeCoordinator,
     _build_live_map_payload,
-    _extract_relocalization_position,
-    _extract_localization_position,
-    _extract_exploration_position,
+    _extract_rob_pose,
 )
 
-from .conftest import MOCK_AREAS, MOCK_CLEANING_GRID, MOCK_STATISTICS, MOCK_STATUS
+from .conftest import MOCK_AREAS, MOCK_CLEANING_GRID, MOCK_ROB_POSE, MOCK_STATISTICS, MOCK_STATUS
 
 
 @pytest.fixture
 def coordinator(mock_client, mock_config_entry):
     hass = MagicMock()
-    return RobEyeCoordinator(
+    coord = RobEyeCoordinator(
         hass=hass,
         config_entry=mock_config_entry,
         client=mock_client,
         map_id="3",
     )
+    # Ensure live_map polling is always enabled in tests
+    # (the entity registry lookup fails with a MagicMock hass)
+    coord._is_live_map_enabled = lambda: True
+    return coord
 
 
 # ── First update — all resource groups must be fetched ────────────────
@@ -47,7 +50,7 @@ async def test_first_update_fetches_all_groups(coordinator, mock_client):
     await coordinator._async_update_data()
 
     mock_client.get_status.assert_called_once()
-    mock_client.get_live_parameters.assert_called_once()
+    mock_client.get_rob_pose.assert_called_once()
     mock_client.get_statistics.assert_called_once()
     # get_areas is called twice on first run: once for the areas block
     # (_last_areas is None) and once for the map-geometry block
@@ -118,6 +121,15 @@ async def test_robot_info_fetched_after_3600s(coordinator, mock_client):
 
 
 # ── Graceful degradation — optional endpoints ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_rob_pose_failure_is_non_fatal(coordinator, mock_client):
+    coordinator.data = {}
+    mock_client.get_rob_pose.side_effect = CannotConnect("not available")
+    # Should not raise — rob_pose is best-effort
+    await coordinator._async_update_data()
+    assert DATA_STATUS in coordinator.data
+
 
 @pytest.mark.asyncio
 async def test_live_parameters_failure_is_non_fatal(coordinator, mock_client):
@@ -284,115 +296,96 @@ def test_last_session_grid_property_default(coordinator):
     assert coordinator.last_session_grid == {}
 
 
-# ── Position extraction helpers ───────────────────────────────────────
+# ── rob_pose extraction helper ────────────────────────────────────────
 
-def test_extract_relocalization_uses_last_continuous():
-    """Uses the LAST 'continuous' entry (highest rtc_time = most recent)."""
-    data = {"localization_algo_input": [
-        {"localization_type": "continuous",
-         "rob_pose": [-139, -48, 4012],
-         "rtc_time": {"year": 2026, "month": 3, "day": 18}},
-        {"localization_type": "continuous",
-         "rob_pose": [-661, 235, -6269],   # ← last entry, should be used
-         "rtc_time": {"year": 2026, "month": 3, "day": 18}},
-    ]}
-    pos = _extract_relocalization_position(data)
+def test_extract_rob_pose_valid():
+    """Confirmed live response at dock (2026-03-21)."""
+    data = {
+        "map_id": 3,
+        "x1": -2,
+        "y1": -3,
+        "heading": 157,
+        "valid": True,
+        "is_tentative": False,
+        "timestamp": 958459,
+    }
+    pos = _extract_rob_pose(data)
     assert pos is not None
-    assert pos["x"] == -661
-    assert pos["y"] == 235
-    assert pos["source"] == "relocalization"
+    assert pos["x"] == -2
+    assert pos["y"] == -3
+    assert pos["heading_deg"] == 157  # already degrees — no conversion
+    assert pos["is_tentative"] is False
+    assert pos["timestamp"] == 958459
+    assert pos["map_id"] == 3
+    assert pos["source"] == "rob_pose"
     assert pos["is_live"] is True
-    assert abs(pos["heading_deg"] - (-34.4)) < 0.2
 
 
-def test_extract_relocalization_no_continuous_returns_none():
-    data = {"localization_algo_input": [
-        {"localization_type": "global", "rob_pose": [0, 0, 0]},
-    ]}
-    assert _extract_relocalization_position(data) is None
+def test_extract_rob_pose_invalid_returns_none():
+    """When valid=False the robot has no position fix — return None."""
+    data = {"x1": 0, "y1": 0, "heading": 0, "valid": False}
+    assert _extract_rob_pose(data) is None
 
 
-def test_extract_relocalization_empty_returns_none():
-    assert _extract_relocalization_position({}) is None
+def test_extract_rob_pose_missing_valid_returns_none():
+    """Missing valid field treated as False."""
+    data = {"x1": 10, "y1": 20, "heading": 90}
+    assert _extract_rob_pose(data) is None
 
 
-def test_extract_localization_prefers_global():
-    """Prefers 'global' over 'startpoint' when both present."""
-    data = {"localization_algo_input": [
-        {"localization_type": "startpoint", "rob_pose": [-66, 16, 1488]},
-        {"localization_type": "global",     "rob_pose": [-6, -9, 5295]},
-    ]}
-    pos = _extract_localization_position(data)
+def test_extract_rob_pose_tentative():
+    """is_tentative=True is preserved in the output."""
+    data = {
+        "x1": 5, "y1": 10, "heading": 45,
+        "valid": True, "is_tentative": True, "timestamp": 100,
+    }
+    pos = _extract_rob_pose(data)
     assert pos is not None
-    assert pos["x"] == -6
-    assert pos["y"] == -9
-    assert pos["is_live"] is False
-    assert pos["source"] == "localization"
-
-
-def test_extract_localization_falls_back_to_startpoint():
-    data = {"localization_algo_input": [
-        {"localization_type": "startpoint", "rob_pose": [-66, 16, 1488]},
-    ]}
-    pos = _extract_localization_position(data)
-    assert pos is not None
-    assert pos["x"] == -66
-    assert pos["is_live"] is False
-
-
-def test_extract_localization_empty_returns_none():
-    assert _extract_localization_position({}) is None
-
-
-def test_extract_exploration_uses_highest_ts():
-    """Uses entry with highest 'ts' value (most recent navigation decision)."""
-    data = {"exploration_points": [
-        {"ts": 474766129, "type": "smsu_fail_plan",
-         "rob_pose": [-8, 3, 1832]},
-        {"ts": 474811434, "type": "smsu_no_nearby_expl_points",
-         "rob_pose": [-861, 352, -6298]},   # ← highest ts
-    ]}
-    pos = _extract_exploration_position(data)
-    assert pos is not None
-    assert pos["x"] == -861
-    assert pos["y"] == 352
-    assert pos["ts"] == 474811434
-    assert pos["source"] == "exploration"
+    assert pos["is_tentative"] is True
     assert pos["is_live"] is True
-    assert pos["event_type"] == "smsu_no_nearby_expl_points"
 
 
-def test_extract_exploration_empty_points_returns_none():
-    assert _extract_exploration_position({"exploration_points": []}) is None
-    assert _extract_exploration_position({}) is None
+def test_extract_rob_pose_heading_no_conversion():
+    """heading is already in degrees — must not be divided by 65536/360."""
+    data = {"x1": 0, "y1": 0, "heading": 270, "valid": True}
+    pos = _extract_rob_pose(data)
+    assert pos is not None
+    assert pos["heading_deg"] == 270  # exactly 270, not 270 / 181.6
 
 
-# ── Position tracking bug-fixes ───────────────────────────────────────
+def test_extract_rob_pose_empty_returns_none():
+    assert _extract_rob_pose({}) is None
+
+
+# ── Position tracking ─────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_new_session_resets_last_live_map(coordinator, mock_client):
-    """_last_live_map is cleared when a new cleaning session starts so the first
-    coordinator tick fetches a fresh robot position immediately instead of waiting
-    up to 60 s for the idle-mode throttle to expire."""
+    """_last_live_map is cleared when a new cleaning session starts."""
     coordinator.data = {}
     coordinator._last_mode = "ready"
-    coordinator._last_live_map = datetime.utcnow()  # simulate recent idle update
+    coordinator._last_live_map = datetime.utcnow()
 
     mock_client.get_status.return_value = {**MOCK_STATUS, "mode": "cleaning"}
     await coordinator._async_update_data()
 
     assert coordinator._last_live_map is not None  # updated by this tick
-    # The reset happened before the live-map block ran, so the block was entered
-    # unconditionally (is_active=True also guarantees this, but the reset ensures
-    # correctness even in edge cases where mode detection is ambiguous).
-    mock_client.get_live_parameters.assert_called_once()
+    mock_client.get_rob_pose.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_rob_pose_stored_in_data(coordinator, mock_client):
+    """After a successful tick, DATA_ROB_POSE is present in coordinator.data."""
+    coordinator.data = {}
+    await coordinator._async_update_data()
+    assert DATA_ROB_POSE in coordinator.data
+    assert coordinator.data[DATA_ROB_POSE]["x1"] == -2
 
 
 def _make_live_map_kwargs(**overrides):
     """Return a minimal valid kwarg dict for _build_live_map_payload."""
     base = dict(
         existing={},
-        live_params={},
         robot_position=None,
         seen_polygon_raw={},
         cleaning_grid={},
@@ -401,9 +394,7 @@ def _make_live_map_kwargs(**overrides):
         areas_data={},
         seen_poly_saved_map={},
         is_active=False,
-        is_live_map=False,
         map_id="3",
-        operation_map_id="3",
         robot_path=[],
         last_session_grid={},
         last_session_path=[],
@@ -414,61 +405,48 @@ def _make_live_map_kwargs(**overrides):
     return base
 
 
-def test_idle_robot_shown_at_dock_when_localization_stale():
-    """When idle and dock position is known, robot is placed at the dock rather
-    than at the stale last-active-cleaning position from /debug/localization."""
-    stale_localization = {
-        "x": 500, "y": 300, "heading_deg": 45.0,
-        "source": "localization", "is_live": False,
-    }
-    dock = {"x": 10, "y": 20, "heading_deg": 90.0}
-    feature_map = {"map": {"docking_pose": {"x": 10, "y": 20, "heading": 16380, "valid": True}}}
-
-    payload = _build_live_map_payload(**_make_live_map_kwargs(
-        robot_position=stale_localization,
-        feature_map=feature_map,
-    ))
-
-    robot = payload["robot"]
-    assert robot is not None
-    assert robot["source"] == "dock", "idle robot should report from dock, not stale localization"
-    assert robot["x"] == 10
-    assert robot["y"] == 20
-    assert robot["is_live"] is False
-
-
-def test_idle_robot_shown_at_dock_when_no_localization():
-    """When idle and robot_position is None (first start / no localization data),
-    the dock position is still used so the robot shows up on the map."""
-    feature_map = {"map": {"docking_pose": {"x": 5, "y": 15, "heading": 0, "valid": True}}}
-
-    payload = _build_live_map_payload(**_make_live_map_kwargs(
-        robot_position=None,
-        feature_map=feature_map,
-    ))
-
-    robot = payload["robot"]
-    assert robot is not None
-    assert robot["source"] == "dock"
-    assert robot["x"] == 5
-    assert robot["y"] == 15
-
-
-def test_active_robot_position_not_overridden_by_dock():
-    """During active cleaning the live relocalization position is kept; dock
-    position must not override it."""
+def test_active_robot_position_in_payload():
+    """During active cleaning the rob_pose position is placed in robot."""
     live_pos = {
         "x": 200, "y": 100, "heading_deg": 10.0,
-        "source": "relocalization", "is_live": True,
+        "source": "rob_pose", "is_live": True, "is_tentative": False,
     }
-    feature_map = {"map": {"docking_pose": {"x": 5, "y": 15, "heading": 0, "valid": True}}}
 
     payload = _build_live_map_payload(**_make_live_map_kwargs(
         robot_position=live_pos,
-        feature_map=feature_map,
         is_active=True,
     ))
 
     robot = payload["robot"]
-    assert robot["source"] == "relocalization"
+    assert robot is not None
     assert robot["x"] == 200
+    assert robot["y"] == 100
+    assert robot["heading_deg"] == 10.0
+    assert robot["is_tentative"] is False
+
+
+def test_tentative_position_propagated_to_payload():
+    """is_tentative flag from rob_pose is forwarded to the robot dict."""
+    live_pos = {
+        "x": 5, "y": 10, "heading_deg": 45.0,
+        "source": "rob_pose", "is_live": True, "is_tentative": True,
+    }
+
+    payload = _build_live_map_payload(**_make_live_map_kwargs(
+        robot_position=live_pos,
+        is_active=True,
+    ))
+
+    assert payload["robot"]["is_tentative"] is True
+
+
+def test_no_robot_position_when_invalid_and_idle():
+    """When robot_position is None and idle, existing robot is preserved."""
+    existing_robot = {"x": 50, "y": 30, "heading_deg": 90.0, "is_tentative": False}
+    payload = _build_live_map_payload(**_make_live_map_kwargs(
+        existing={"robot": existing_robot},
+        robot_position=None,
+        is_active=False,
+    ))
+    # existing robot from previous tick should be kept
+    assert payload["robot"] == existing_robot
