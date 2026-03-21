@@ -3,7 +3,7 @@
 // replay (cleaning grid + robot trail) from _build_live_map_payload() schema.
 // v2.6.0: avoidance zones rendered as hatched red overlay.
 
-const VERSION = "2.6.0";
+const VERSION = "2.7.0";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -73,10 +73,18 @@ class RowentaMapCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._hass    = null;
-    this._config  = {};
-    this._frozen  = false;
-    this._lastAttrs = null;
+    this._hass        = null;
+    this._config      = {};
+    this._frozen      = false;
+    this._lastAttrs   = null;
+    this._lastChanged = null;
+    // Cached attributes for efficient re-render
+    this._robot        = null;
+    this._cleanedArea  = [];
+    this._robotPath    = [];
+    this._cleaningGrid = {};
+    this._sessionDone  = false;
+    this._isActive     = false;
   }
 
   setConfig(config) {
@@ -97,8 +105,24 @@ class RowentaMapCard extends HTMLElement {
   }
 
   set hass(hass) {
+    const stateObj = hass.states[this._config?.entity];
+    if (!stateObj) { this._hass = hass; return; }
+
+    // Only re-render when data actually changed
+    const changed = stateObj.last_changed !== this._lastChanged;
+    this._lastChanged = stateObj.last_changed;
     this._hass = hass;
-    if (this._frozen) return;
+    if (!changed || this._frozen) return;
+
+    // Parse attributes
+    const attr = stateObj.attributes ?? {};
+    this._robot        = attr.robot_position ?? null;
+    this._cleanedArea  = attr.cleaned_area   ?? [];
+    this._robotPath    = attr.robot_path     ?? [];
+    this._cleaningGrid = attr.cleaning_grid  ?? {};
+    this._sessionDone  = attr.session_complete ?? false;
+    this._isActive     = attr.is_active      ?? false;
+
     try { this._render(); }
     catch (err) {
       console.error("rowenta-map-card:", err);
@@ -455,10 +479,14 @@ class RowentaMapCard extends HTMLElement {
       const ry = flipY(displayRobot.y) - minY;
       // heading_deg: 0 = north (SVG -Y), 90 = east (+X) — matches SVG rotate()
       const headingDeg = displayRobot.heading_deg ?? 0;
-      const activeClass = (isActive && robotIsLive) ? ' class="robot-active"' : "";
-      const robotColor  = robotIsLive ? "#00d4ff" : "#888888";
+      const activeClass  = (isActive && robotIsLive) ? ' class="robot-active"' : "";
+      const robotColor   = robotIsLive ? "#00d4ff" : "#888888";
       const robotOpacity = robotIsLive ? "1.0" : "0.5";
-      robotIcon = `<g${activeClass} opacity="${robotOpacity}">
+      // CSS transition interpolates position visually between data pushes.
+      // Duration slightly under poll interval to avoid visible lag.
+      const transition = robotIsLive ? "transform 0.45s linear" : "none";
+      robotIcon = `<g${activeClass} opacity="${robotOpacity}"
+        style="transition:${transition}">
         ${(isActive && robotIsLive) ? `<circle cx="${rx}" cy="${ry}" r="${robotGlowR.toFixed(1)}" fill="${robotColor}" opacity="0.15"/>` : ""}
         <!-- Robot body -->
         <circle cx="${rx}" cy="${ry}" r="${robotBodyR.toFixed(1)}"
