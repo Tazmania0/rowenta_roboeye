@@ -363,10 +363,18 @@ class RobEyeDashboardManager:
     def __init__(self) -> None:
         self._last_hash: str | None = None
         self._sidebar_hidden: bool = False
+        # True on a fresh manager instance so that, if the dashboard already
+        # has stored content (e.g. from a previous run with user customizations),
+        # we skip the first async_save() and leave the stored content intact.
+        # Set to False after the first successful update, or when invalidate()
+        # is called (e.g. room change), so that structural changes are always
+        # written.
+        self._preserve_existing: bool = True
 
     def invalidate(self) -> None:
         """Force a save on the next async_update() call (e.g. after room change)."""
         self._last_hash = None
+        self._preserve_existing = False  # room change must be written even if content exists
 
     async def async_update(
         self,
@@ -401,7 +409,34 @@ class RobEyeDashboardManager:
             _LOGGER.debug("RobEye dashboard: config unchanged, skipping save")
             return True
 
-        # Step 3: save config
+        # Step 3: on the very first call for a fresh manager instance, check
+        # whether the dashboard already has stored content (e.g. customer
+        # customizations persisted from a previous run).  If content exists,
+        # record the hash of what *we* would have written and return without
+        # overwriting — preserving the user's layout.
+        #
+        # _preserve_existing is reset to False by invalidate() (room change)
+        # so that structural updates are never silently skipped.
+        if self._last_hash is None and self._preserve_existing:
+            self._preserve_existing = False  # only attempt once per manager lifetime
+            try:
+                existing = await lovelace_store.async_load()
+                if existing and existing.get("views"):
+                    self._last_hash = new_hash
+                    _LOGGER.info(
+                        "RobEye dashboard: existing content preserved — skipping overwrite"
+                    )
+                    return True
+            except Exception as err:
+                _LOGGER.debug(
+                    "RobEye dashboard: could not load existing content (%s) — will overwrite",
+                    err,
+                )
+            # Fall through: no existing content, or load failed → write fresh config
+
+        self._preserve_existing = False  # clear for all non-first-call paths
+
+        # Step 4: save config
         try:
             await lovelace_store.async_save(config)
             self._last_hash = new_hash
