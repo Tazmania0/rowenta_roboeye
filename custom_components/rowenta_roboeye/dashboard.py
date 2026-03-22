@@ -363,7 +363,6 @@ class RobEyeDashboardManager:
     def __init__(self) -> None:
         self._last_hash: str | None = None
         self._sidebar_hidden: bool = False
-        self._initialized: bool = False
 
     def invalidate(self) -> None:
         """Force a save on the next async_update() call (e.g. after room change)."""
@@ -396,24 +395,6 @@ class RobEyeDashboardManager:
             # lovelace not ready yet (HA still starting up) — will retry next cycle
             _LOGGER.debug("RobEye dashboard: lovelace store not ready, will retry")
             return False
-
-        # Step 1b: on first run of a fresh manager, if the dashboard already
-        # has saved content, adopt the generated hash so we don't overwrite
-        # user customizations.  invalidate() only resets _last_hash (not
-        # _initialized), so legitimate room-change updates still go through.
-        if not self._initialized:
-            self._initialized = True
-            try:
-                existing_config = await lovelace_store.async_load(False)
-                if existing_config:
-                    self._last_hash = new_hash
-                    _LOGGER.info(
-                        "RobEye dashboard: existing content found, "
-                        "preserving customizations"
-                    )
-                    return True
-            except Exception:
-                pass  # Fall through to normal save
 
         # Step 2: skip save if config is identical AND dashboard exists
         if new_hash == self._last_hash:
