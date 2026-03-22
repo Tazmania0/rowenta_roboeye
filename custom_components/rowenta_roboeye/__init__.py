@@ -128,11 +128,6 @@ async def _async_initial_dashboard(
     delays between attempts.  If all attempts fail, requests an HA restart
     as a last resort so the next boot picks up the persisted registry entry.
     """
-    # If the device was previously disabled (dashboard hidden, not deleted),
-    # make the dashboard visible again before regenerating its content.
-    # This is a no-op when the dashboard does not exist yet (fresh install).
-    await dashboard_manager.async_set_sidebar_visible(hass, True)
-
     for attempt, delay in enumerate(_DASHBOARD_RETRY_DELAYS, start=1):
         if delay:
             await asyncio.sleep(delay)
@@ -197,16 +192,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # HA sets entry.disabled_by before calling async_unload_entry when a
         # device or entry is disabled — this is the reliable signal that we
-        # should hide the dashboard (not just a reload or HA shutdown).
-        # We hide rather than delete so that any customer customisations made
-        # to the dashboard are preserved and restored when the device is
-        # re-enabled.
+        # should remove the dashboard (not just a reload or HA shutdown).
         if dashboard_manager is not None and entry.disabled_by is not None:
-            LOGGER.info(
-                "RobEye: entry disabled (%s) — hiding dashboard to preserve customizations",
+            LOGGER.warning(
+                "RobEye: entry disabled (%s) — deleting dashboard",
                 entry.disabled_by,
             )
-            await dashboard_manager.async_set_sidebar_visible(hass, False)
+            await dashboard_manager.async_delete(hass)
 
     return unload_ok
 
