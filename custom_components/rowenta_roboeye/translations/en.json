@@ -155,6 +155,9 @@
           "high": "High",
           "silent": "Silent"
         }
+      },
+      "active_map": {
+        "name": "Active map"
       }
     },
     "switch": {

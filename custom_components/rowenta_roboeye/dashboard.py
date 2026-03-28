@@ -237,7 +237,8 @@ def _build_config(
                 "type": "entities",
                 "title": "Current Floor",
                 "entities": [
-                    {"entity": f"sensor.{_d}_active_map", "name": "Active Map"},
+                    {"entity": f"sensor.{_d}_active_map",  "name": "Active Map"},
+                    {"entity": f"select.{_d}_active_map",  "name": "Switch Map"},
                 ],
             }] if _available(hass, f"sensor.{_d}_active_map") else []),
         ],
