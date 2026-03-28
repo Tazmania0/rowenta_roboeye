@@ -109,6 +109,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Live session map tracking
         self._operation_map_id: str = map_id  # current session map; changes each new clean
         self._last_active_map_id: str = map_id  # tracks floor changes
+        self._manual_map_id: str | None = None  # user override via Select entity
 
         # Last-session replay state
         self._robot_path: list[tuple[float, float]] = []
@@ -138,7 +139,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def active_map_id(self) -> str:
-        """Runtime map ID from /get/map_status, falls back to setup-time map_id."""
+        """Runtime map ID: manual override > /get/map_status > setup-time map_id."""
+        if self._manual_map_id is not None:
+            return self._manual_map_id
         map_status = (self.data or {}).get(DATA_MAP_STATUS, {})
         active = str(map_status.get("active_map_id", "")).strip()
         return active if active else self.map_id
@@ -162,6 +165,27 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elif isinstance(m, (int, str)):
                 result.append({"map_id": str(m), "name": f"Map {m}"})
         return result
+
+    # ── Active map switching ──────────────────────────────────────────
+
+    async def async_set_active_map(self, map_id: str) -> None:
+        """Override the active map and force-reload all map-dependent data."""
+        self._manual_map_id = map_id
+        self._last_active_map_id = map_id
+        self._last_areas = None
+        self._last_map_geometry = None
+        self._known_area_ids = set()
+        self._robot_path = []
+        self._last_session_grid = {}
+        self._last_session_path = []
+        self._last_session_outline = []
+        self._session_complete = False
+        dashboard_manager = self.hass.data.get(DOMAIN, {}).get(
+            f"{self.config_entry.entry_id}_dashboard"
+        )
+        if dashboard_manager:
+            dashboard_manager.invalidate()
+        await self.async_request_refresh()
 
     # ── Entity state helpers ───────────────────────────────────────────
 
@@ -435,6 +459,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         new_active_map,
                     )
                     self._last_active_map_id = new_active_map
+                    self._manual_map_id = None   # robot changed floors — clear user override
                     self._last_areas = None
                     self._last_map_geometry = None
                     self._known_area_ids = set()
