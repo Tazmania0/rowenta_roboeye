@@ -55,7 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     # One manager per config entry — holds hash + dashboard object reference.
     # Stored in hass.data so async_remove_entry can call async_delete() on it.
-    dashboard_manager = RobEyeDashboardManager()
+    dashboard_manager = RobEyeDashboardManager(device_id=coordinator.device_id)
     hass.data[DOMAIN][f"{config_entry.entry_id}_dashboard"] = dashboard_manager
 
     # Launch dashboard creation in the background so setup returns immediately.
@@ -76,6 +76,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 coordinator.robot_info,
                 manager=dashboard_manager,
                 device_id=coordinator.device_id,
+                active_map_id=coordinator.active_map_id,
             )
         )
 
@@ -95,6 +96,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 coordinator.robot_info,
                 manager=dashboard_manager,
                 device_id=coordinator.device_id,
+                active_map_id=coordinator.active_map_id,
             )
         )
 
@@ -146,6 +148,7 @@ async def _async_initial_dashboard(
             coordinator.robot_info,
             manager=dashboard_manager,
             device_id=coordinator.device_id,
+            active_map_id=coordinator.active_map_id,
         )
 
         if success:

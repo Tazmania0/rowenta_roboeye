@@ -46,7 +46,6 @@ DASHBOARD_TITLE    = "Rowenta Xplorer 120"
 DASHBOARD_URL_PATH = "rowenta-xplorer120"   # contains hyphen — valid without ALLOW_SINGLE_WORD
 DASHBOARD_ICON     = "mdi:robot-vacuum"
 _DEV               = "rowenta_xplorer_120"
-E_SCHEDULE         = f"sensor.{_DEV}_schedule"
 
 # HA lovelace constants (avoid importing from lovelace to stay compatible)
 _LOVELACE_DATA_KEY = "lovelace"          # hass.data key for LovelaceData
@@ -73,8 +72,14 @@ def _available(hass: HomeAssistant, entity_id: str) -> bool:
 
 # ── Config builder ────────────────────────────────────────────────────
 
-def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: str = _DEV) -> dict[str, Any]:
+def _build_config(
+    hass: HomeAssistant,
+    rooms: list[dict[str, Any]],
+    device_id: str = _DEV,
+    active_map_id: str = "",
+) -> dict[str, Any]:
     _d = device_id
+    _m = f"map{active_map_id}_" if active_map_id else ""
     # Entity IDs — all use device_id prefix, suffixes match slugified translation names
     e_vacuum            = f"vacuum.{_d}"
     e_battery           = f"sensor.{_d}_battery_level"
@@ -227,6 +232,13 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
                     "\n{% endif %}"
                 ),
             },
+            *([{
+                "type": "entities",
+                "title": "Current Floor",
+                "entities": [
+                    {"entity": f"sensor.{_d}_active_map", "name": "Active Map"},
+                ],
+            }] if _available(hass, f"sensor.{_d}_active_map") else []),
         ],
     }
 
@@ -239,38 +251,38 @@ def _build_config(hass: HomeAssistant, rooms: list[dict[str, Any]], device_id: s
             "icon": "mdi:door",
             "entities": [
                 {
-                    "entity": f"select.{device_id}_room_{rid}_fan_speed",
+                    "entity": f"select.{device_id}_{_m}room_{rid}_fan_speed",
                     "name": "Fan Speed",
                     "icon": "mdi:speedometer",
                 },
                 {
-                    "entity": f"button.{device_id}_clean_room_{rid}",
+                    "entity": f"button.{device_id}_{_m}clean_room_{rid}",
                     "name": "▶  Start Cleaning",
                     "icon": "mdi:broom",
                 },
                 {
-                    "entity": f"switch.{device_id}_room_{rid}_deep_clean",
+                    "entity": f"switch.{device_id}_{_m}room_{rid}_deep_clean",
                     "name": "Deep clean this room",
                     "icon": "mdi:robot-vacuum-variant",
                 },
                 {"type": "divider"},
                 {
-                    "entity": f"sensor.{device_id}_room_{rid}_last_cleaned",
+                    "entity": f"sensor.{device_id}_{_m}room_{rid}_last_cleaned",
                     "name": "Last Cleaned",
                     "icon": "mdi:calendar-clock",
                 },
                 {
-                    "entity": f"sensor.{device_id}_room_{rid}_cleanings",
+                    "entity": f"sensor.{device_id}_{_m}room_{rid}_cleanings",
                     "name": "Times Cleaned",
                     "icon": "mdi:counter",
                 },
                 {
-                    "entity": f"sensor.{device_id}_room_{rid}_area",
+                    "entity": f"sensor.{device_id}_{_m}room_{rid}_area",
                     "name": "Room Area",
                     "icon": "mdi:texture-box",
                 },
                 {
-                    "entity": f"sensor.{device_id}_room_{rid}_avg_clean_time",
+                    "entity": f"sensor.{device_id}_{_m}room_{rid}_avg_clean_time",
                     "name": "Avg Duration",
                     "icon": "mdi:timer-outline",
                 },
@@ -358,11 +370,22 @@ class RobEyeDashboardManager:
 
     One instance lives in __init__.py for the lifetime of the config entry.
     Tracks last-saved config hash to avoid spurious saves/notifications.
+
+    For multi-device support, each manager stores its own url_path and title.
+    The default device_id (_DEV) keeps backward-compatible dashboard URL.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, device_id: str = _DEV) -> None:
         self._last_hash: str | None = None
         self._sidebar_hidden: bool = False
+        # Per-device dashboard identity
+        if device_id == _DEV or not device_id:
+            self._url_path = DASHBOARD_URL_PATH
+            self._title = DASHBOARD_TITLE
+        else:
+            slug = device_id.replace("_", "-").replace(" ", "-").lower()
+            self._url_path = f"rowenta-{slug}"
+            self._title = f"Rowenta {device_id}"
 
     def invalidate(self) -> None:
         """Force a save on the next async_update() call (e.g. after room change)."""
@@ -373,6 +396,7 @@ class RobEyeDashboardManager:
         hass: HomeAssistant,
         areas: list[dict[str, Any]],
         device_id: str = _DEV,
+        active_map_id: str = "",
     ) -> bool:
         """Create or update the dashboard only when config has changed.
 
@@ -380,7 +404,7 @@ class RobEyeDashboardManager:
         False if the lovelace store is not yet available or save failed.
         """
         rooms = _extract_rooms(areas)
-        config = _build_config(hass, rooms, device_id)
+        config = _build_config(hass, rooms, device_id, active_map_id=active_map_id)
         new_hash = _config_hash(config)
 
         _LOGGER.debug(
@@ -436,9 +460,9 @@ class RobEyeDashboardManager:
             _frontend.async_register_built_in_panel(
                 hass,
                 component_name="lovelace",
-                sidebar_title=DASHBOARD_TITLE,
+                sidebar_title=self._title,
                 sidebar_icon=DASHBOARD_ICON,
-                frontend_url_path=DASHBOARD_URL_PATH,
+                frontend_url_path=self._url_path,
                 config={"mode": "storage"},
                 require_admin=False,
                 update=True,
@@ -470,7 +494,7 @@ class RobEyeDashboardManager:
 
         item = next(
             (i for i in dashboards_collection.async_items()
-             if i.get(_CONF_URL_PATH) == DASHBOARD_URL_PATH),
+             if i.get(_CONF_URL_PATH) == self._url_path),
             None,
         )
         if item is None:
@@ -520,19 +544,19 @@ class RobEyeDashboardManager:
 
         item = next(
             (i for i in dashboards_collection.async_items()
-             if i.get(_CONF_URL_PATH) == DASHBOARD_URL_PATH),
+             if i.get(_CONF_URL_PATH) == self._url_path),
             None,
         )
         if item is not None:
             try:
                 await dashboards_collection.async_delete_item(item["id"])
-                _LOGGER.info("RobEye dashboard: deleted '%s' from storage", DASHBOARD_URL_PATH)
+                _LOGGER.info("RobEye dashboard: deleted '%s' from storage", self._url_path)
             except Exception as err:
                 _LOGGER.warning("RobEye dashboard: async_delete_item() failed: %s", err)
         else:
             _LOGGER.debug(
                 "RobEye dashboard: '%s' not found in storage — skipping delete",
-                DASHBOARD_URL_PATH,
+                self._url_path,
             )
 
         # Step 2 — Remove from the in-memory lovelace dashboards dict
@@ -541,20 +565,20 @@ class RobEyeDashboardManager:
         lovelace_data = hass.data.get(LOVELACE_DATA)
         if lovelace_data is not None:
             lovelace_dashboards: dict = getattr(lovelace_data, "dashboards", {})
-            if DASHBOARD_URL_PATH in lovelace_dashboards:
-                lovelace_dashboards.pop(DASHBOARD_URL_PATH, None)
+            if self._url_path in lovelace_dashboards:
+                lovelace_dashboards.pop(self._url_path, None)
                 _LOGGER.info(
                     "RobEye dashboard: removed '%s' from hass.data lovelace dashboards",
-                    DASHBOARD_URL_PATH,
+                    self._url_path,
                 )
 
         # Step 3 — Unregister the frontend panel so the sidebar entry disappears
         try:
             from homeassistant.components import frontend as _frontend
-            _frontend.async_remove_panel(hass, DASHBOARD_URL_PATH)
+            _frontend.async_remove_panel(hass, self._url_path)
             _LOGGER.info(
                 "RobEye dashboard: frontend panel '%s' unregistered",
-                DASHBOARD_URL_PATH,
+                self._url_path,
             )
         except Exception as err:
             _LOGGER.debug("RobEye dashboard: panel removal skipped: %s", err)
@@ -601,17 +625,17 @@ class RobEyeDashboardManager:
         lovelace_dashboards: dict = getattr(lovelace_data, "dashboards", {})
 
         # ── Fast path: our dashboard already registered in hass.data ──
-        if DASHBOARD_URL_PATH in lovelace_dashboards:
+        if self._url_path in lovelace_dashboards:
             _LOGGER.debug(
                 "RobEye dashboard: '%s' already in dashboards dict",
-                DASHBOARD_URL_PATH,
+                self._url_path,
             )
-            return lovelace_dashboards[DASHBOARD_URL_PATH]
+            return lovelace_dashboards[self._url_path]
 
         # ── Load storage to find or create the dashboard item ─────────
         _LOGGER.info(
             "RobEye dashboard: '%s' not found in registry — creating",
-            DASHBOARD_URL_PATH,
+            self._url_path,
         )
 
         dashboards_collection = DashboardsCollection(hass)
@@ -625,21 +649,21 @@ class RobEyeDashboardManager:
 
         # Re-check hass.data after async_load — HA may have already registered it
         # if a reload happened between our two checks.
-        if DASHBOARD_URL_PATH in getattr(lovelace_data, "dashboards", {}):
-            return lovelace_data.dashboards[DASHBOARD_URL_PATH]
+        if self._url_path in getattr(lovelace_data, "dashboards", {}):
+            return lovelace_data.dashboards[self._url_path]
 
         # Find existing item in storage or create a new one
         item = next(
             (i for i in dashboards_collection.async_items()
-             if i.get(_CONF_URL_PATH) == DASHBOARD_URL_PATH),
+             if i.get(_CONF_URL_PATH) == self._url_path),
             None,
         )
 
         if item is None:
             try:
                 item = await dashboards_collection.async_create_item({
-                    _CONF_URL_PATH:        DASHBOARD_URL_PATH,
-                    _CONF_TITLE:           DASHBOARD_TITLE,
+                    _CONF_URL_PATH:        self._url_path,
+                    _CONF_TITLE:           self._title,
                     _CONF_ICON:            DASHBOARD_ICON,
                     _CONF_REQUIRE_ADMIN:   False,
                     _CONF_SHOW_IN_SIDEBAR: True,
@@ -657,7 +681,7 @@ class RobEyeDashboardManager:
         # is the only thing that normally adds LovelaceStorage to hass.data, but
         # it only fires for the global instance.  We replicate that work here.
         store = LovelaceStorage(hass, item)
-        lovelace_data.dashboards[DASHBOARD_URL_PATH] = store
+        lovelace_data.dashboards[self._url_path] = store
         _LOGGER.info(
             "RobEye dashboard: LovelaceStorage injected into hass.data — type=%s",
             type(store).__name__,
@@ -672,16 +696,16 @@ class RobEyeDashboardManager:
                 _frontend.async_register_built_in_panel(
                     hass,
                     component_name="lovelace",
-                    sidebar_title=DASHBOARD_TITLE,
+                    sidebar_title=self._title,
                     sidebar_icon=DASHBOARD_ICON,
-                    frontend_url_path=DASHBOARD_URL_PATH,
+                    frontend_url_path=self._url_path,
                     config={"mode": "storage"},
                     require_admin=False,
                     update=False,
                 )
                 _LOGGER.info(
                     "RobEye dashboard: frontend panel registered for '%s'",
-                    DASHBOARD_URL_PATH,
+                    self._url_path,
                 )
             except Exception as err:
                 # Panel may already be registered (e.g. from a previous boot that
@@ -721,11 +745,12 @@ async def async_create_dashboard(
     robot_info: dict[str, Any] | None = None,
     manager: "RobEyeDashboardManager | None" = None,
     device_id: str = _DEV,
+    active_map_id: str = "",
 ) -> bool:
     """Create or update the dashboard. Idempotent — safe to call repeatedly.
 
     Returns True if the dashboard was saved (or was already up-to-date),
     False if the lovelace store was not available or the save failed.
     """
-    _mgr = manager or RobEyeDashboardManager()
-    return await _mgr.async_update(hass, areas, device_id)
+    _mgr = manager or RobEyeDashboardManager(device_id=device_id)
+    return await _mgr.async_update(hass, areas, device_id, active_map_id=active_map_id)

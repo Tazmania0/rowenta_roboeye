@@ -24,7 +24,7 @@ from custom_components.rowenta_roboeye.coordinator import (
     _extract_rob_pose,
 )
 
-from .conftest import MOCK_AREAS, MOCK_CLEANING_GRID, MOCK_ROB_POSE, MOCK_STATISTICS, MOCK_STATUS
+from .conftest import MOCK_AREAS, MOCK_CLEANING_GRID, MOCK_MAP_STATUS, MOCK_MAPS, MOCK_ROB_POSE, MOCK_STATISTICS, MOCK_STATUS
 
 
 @pytest.fixture
@@ -450,3 +450,89 @@ def test_no_robot_position_when_invalid_and_idle():
     ))
     # existing robot from previous tick should be kept
     assert payload["robot"] == existing_robot
+
+
+# ── Multi-map support ────────────────────────────────────────────────
+
+def test_active_map_id_falls_back_to_configured(coordinator):
+    """active_map_id returns setup-time map_id when map_status not yet fetched."""
+    coordinator.data = {}
+    assert coordinator.active_map_id == "3"
+
+
+def test_active_map_id_from_map_status(coordinator):
+    """active_map_id reflects /get/map_status active_map_id."""
+    coordinator.data = {"map_status": {"active_map_id": 4, "operation_map_id": 4}}
+    assert coordinator.active_map_id == "4"
+
+
+def test_active_map_id_strips_whitespace(coordinator):
+    coordinator.data = {"map_status": {"active_map_id": " 5 "}}
+    assert coordinator.active_map_id == "5"
+
+
+def test_active_map_id_falls_back_on_empty_string(coordinator):
+    coordinator.data = {"map_status": {"active_map_id": ""}}
+    assert coordinator.active_map_id == "3"  # setup-time map_id
+
+
+def test_available_maps_parses_dict_entries(coordinator):
+    coordinator.data = {"maps": dict(MOCK_MAPS)}
+    maps = coordinator.available_maps
+    assert len(maps) == 2
+    assert maps[0] == {"map_id": "3", "name": "Ground Floor"}
+    assert maps[1] == {"map_id": "4", "name": "First Floor"}
+
+
+def test_available_maps_handles_int_entries(coordinator):
+    coordinator.data = {"maps": {"maps": [3, 4]}}
+    maps = coordinator.available_maps
+    assert maps == [{"map_id": "3", "name": "Map 3"}, {"map_id": "4", "name": "Map 4"}]
+
+
+def test_available_maps_empty_when_no_data(coordinator):
+    coordinator.data = {}
+    assert coordinator.available_maps == []
+
+
+@pytest.mark.asyncio
+async def test_floor_change_resets_areas(coordinator, mock_client):
+    """When active_map_id changes, area tracking state is reset."""
+    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
+    coordinator._last_active_map_id = "3"
+    coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+    coordinator._known_area_ids = {3, 11}
+    coordinator._robot_path = [(0.0, 0.0)]
+    coordinator._session_complete = True
+
+    # Simulate floor change: map_status now returns map 4
+    mock_client.get_map_status.return_value = {"active_map_id": 4, "operation_map_id": 4}
+
+    await coordinator._async_update_data()
+
+    assert coordinator._last_active_map_id == "4"
+    # _last_areas is reset to None then immediately re-set by the areas bucket
+    # but _last_map_geometry stays None to force geometry reload on next tick
+    assert coordinator._last_map_geometry is None  # force geometry reload
+    assert coordinator._robot_path == []  # reset
+    assert coordinator._session_complete is False  # reset
+
+
+@pytest.mark.asyncio
+async def test_maps_and_map_status_fetched_in_areas_bucket(coordinator, mock_client):
+    """get_maps and get_map_status are called in the 300s areas bucket."""
+    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
+    coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+
+    await coordinator._async_update_data()
+
+    mock_client.get_maps.assert_called_once()
+    mock_client.get_map_status.assert_called_once()
+    assert "maps" in coordinator.data
+    assert "map_status" in coordinator.data

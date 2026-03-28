@@ -63,6 +63,7 @@ MOCK_LIVE_PARAMETERS = {"area_cleaned": 50000, "cleaning_time": 720}
 MOCK_SENSOR_STATUS = {"cliff_sensor": "ok", "bump_sensor": "ok", "wheel_drop": "ok"}
 MOCK_ROBOT_FLAGS = {"has_mop": False, "has_camera": True}
 MOCK_MAP_STATUS = {"operation_map_id": 3, "active_map_id": 3}
+MOCK_MAPS = {"maps": [{"map_id": 3, "name": "Ground Floor"}, {"map_id": 4, "name": "First Floor"}]}
 
 MOCK_LOCALIZATION = {"localization_algo_input": [
     {"localization_type": "global",
@@ -135,6 +136,7 @@ def mock_client():
     client.get_robot_flags.return_value = dict(MOCK_ROBOT_FLAGS)
     client.get_cleaning_grid_map.return_value = dict(MOCK_CLEANING_GRID)
     client.get_map_status.return_value = dict(MOCK_MAP_STATUS)
+    client.get_maps.return_value = dict(MOCK_MAPS)
     client.get_localization.return_value = dict(MOCK_LOCALIZATION)
     client.get_relocalization.return_value = dict(MOCK_RELOCALIZATION)
     client.get_exploration.return_value = dict(MOCK_EXPLORATION)

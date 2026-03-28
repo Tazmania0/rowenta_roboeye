@@ -129,6 +129,9 @@
       },
       "side_brush_right_current_ma": {
         "name": "Right brush current"
+      },
+      "active_map": {
+        "name": "Active map"
       }
     },
     "select": {
