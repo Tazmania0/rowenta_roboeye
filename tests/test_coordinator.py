@@ -536,3 +536,80 @@ async def test_maps_and_map_status_fetched_in_areas_bucket(coordinator, mock_cli
     mock_client.get_map_status.assert_called_once()
     assert "maps" in coordinator.data
     assert "map_status" in coordinator.data
+
+
+# ── Manual map override (async_set_active_map) ────────────────────────
+
+def test_active_map_id_manual_override_wins(coordinator):
+    """_manual_map_id takes priority over /get/map_status."""
+    coordinator.data = {"map_status": {"active_map_id": 3, "operation_map_id": 3}}
+    coordinator._manual_map_id = "57"
+    assert coordinator.active_map_id == "57"
+
+
+def test_active_map_id_no_override_uses_api(coordinator):
+    """Without override, active_map_id falls through to /get/map_status."""
+    coordinator.data = {"map_status": {"active_map_id": 4, "operation_map_id": 4}}
+    coordinator._manual_map_id = None
+    assert coordinator.active_map_id == "4"
+
+
+@pytest.mark.asyncio
+async def test_async_set_active_map_updates_state(coordinator):
+    """async_set_active_map sets override, resets area/geometry timestamps."""
+    coordinator.data = {}
+    coordinator._last_areas = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+    coordinator._known_area_ids = {3, 11}
+    coordinator._robot_path = [(1.0, 2.0)]
+    coordinator._session_complete = True
+    coordinator.async_request_refresh = AsyncMock()
+
+    await coordinator.async_set_active_map("57")
+
+    assert coordinator._manual_map_id == "57"
+    assert coordinator._last_active_map_id == "57"
+    assert coordinator._last_areas is None
+    assert coordinator._last_map_geometry is None
+    assert coordinator._known_area_ids == set()
+    assert coordinator._robot_path == []
+    assert coordinator._session_complete is False
+    coordinator.async_request_refresh.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_set_active_map_invalidates_dashboard(coordinator):
+    """async_set_active_map calls dashboard_manager.invalidate() when present."""
+    coordinator.data = {}
+    coordinator.async_request_refresh = AsyncMock()
+
+    dashboard_manager = MagicMock()
+    coordinator.hass.data = {
+        "rowenta_roboeye": {
+            f"{coordinator.config_entry.entry_id}_dashboard": dashboard_manager
+        }
+    }
+
+    await coordinator.async_set_active_map("4")
+
+    dashboard_manager.invalidate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_floor_change_clears_manual_override(coordinator, mock_client):
+    """When the robot changes floors, _manual_map_id is cleared."""
+    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
+    coordinator._manual_map_id = "57"          # user had manually selected map 57
+    coordinator._last_active_map_id = "3"
+    coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+
+    # Robot reports map 4 as active
+    mock_client.get_map_status.return_value = {"active_map_id": 4, "operation_map_id": 4}
+
+    await coordinator._async_update_data()
+
+    assert coordinator._manual_map_id is None   # cleared by floor-change detection
+    assert coordinator._last_active_map_id == "4"
