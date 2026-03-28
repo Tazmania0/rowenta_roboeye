@@ -77,6 +77,7 @@ def _build_config(
     rooms: list[dict[str, Any]],
     device_id: str = _DEV,
     active_map_id: str = "",
+    title: str = DASHBOARD_TITLE,
 ) -> dict[str, Any]:
     _d = device_id
     _m = f"map{active_map_id}_" if active_map_id else ""
@@ -358,7 +359,7 @@ def _build_config(
         views.append(view_map)
 
     return {
-        "title": DASHBOARD_TITLE,
+        "title": title,
         "views": views,
     }
 
@@ -375,17 +376,23 @@ class RobEyeDashboardManager:
     The default device_id (_DEV) keeps backward-compatible dashboard URL.
     """
 
-    def __init__(self, device_id: str = _DEV) -> None:
+    def __init__(self, device_id: str = _DEV, friendly_name: str | None = None) -> None:
         self._last_hash: str | None = None
         self._sidebar_hidden: bool = False
-        # Per-device dashboard identity
+        # Per-device dashboard identity — URL path is always derived from device_id
+        # for stability (renames don't create orphaned dashboards).
         if device_id == _DEV or not device_id:
             self._url_path = DASHBOARD_URL_PATH
-            self._title = DASHBOARD_TITLE
         else:
             slug = device_id.replace("_", "-").replace(" ", "-").lower()
             self._url_path = f"rowenta-{slug}"
-            self._title = f"Rowenta {device_id}"
+        # Title uses the friendly name if provided, otherwise fall back to defaults.
+        if friendly_name:
+            self._title = friendly_name
+        elif device_id == _DEV or not device_id:
+            self._title = DASHBOARD_TITLE
+        else:
+            self._title = DASHBOARD_TITLE
 
     def invalidate(self) -> None:
         """Force a save on the next async_update() call (e.g. after room change)."""
@@ -397,6 +404,7 @@ class RobEyeDashboardManager:
         areas: list[dict[str, Any]],
         device_id: str = _DEV,
         active_map_id: str = "",
+        friendly_name: str | None = None,
     ) -> bool:
         """Create or update the dashboard only when config has changed.
 
@@ -404,7 +412,8 @@ class RobEyeDashboardManager:
         False if the lovelace store is not yet available or save failed.
         """
         rooms = _extract_rooms(areas)
-        config = _build_config(hass, rooms, device_id, active_map_id=active_map_id)
+        title = friendly_name or self._title
+        config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title)
         new_hash = _config_hash(config)
 
         _LOGGER.debug(
@@ -746,11 +755,12 @@ async def async_create_dashboard(
     manager: "RobEyeDashboardManager | None" = None,
     device_id: str = _DEV,
     active_map_id: str = "",
+    friendly_name: str | None = None,
 ) -> bool:
     """Create or update the dashboard. Idempotent — safe to call repeatedly.
 
     Returns True if the dashboard was saved (or was already up-to-date),
     False if the lovelace store was not available or the save failed.
     """
-    _mgr = manager or RobEyeDashboardManager(device_id=device_id)
-    return await _mgr.async_update(hass, areas, device_id, active_map_id=active_map_id)
+    _mgr = manager or RobEyeDashboardManager(device_id=device_id, friendly_name=friendly_name)
+    return await _mgr.async_update(hass, areas, device_id, active_map_id=active_map_id, friendly_name=friendly_name)

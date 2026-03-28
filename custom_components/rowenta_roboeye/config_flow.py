@@ -13,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .api import CannotConnect, RobEyeApiClient
-from .const import CONF_HOSTNAME, CONF_MAP_ID, DEFAULT_MAP_ID, DOMAIN, LOGGER
+from .const import CONF_HOSTNAME, CONF_MAP_ID, CONF_NAME, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER
 
 
 class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -40,6 +40,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             host: str = user_input[CONF_HOST].strip()
             map_id: str = user_input[CONF_MAP_ID].strip()
+            name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
 
             try:
                 await self._test_connection(host)
@@ -53,11 +54,12 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(host)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
-                    title=f"Rowenta Xplorer 120 ({host})",
+                    title=f"{name} ({host})",
                     data={
                         CONF_HOST: host,
                         CONF_HOSTNAME: host,
                         CONF_MAP_ID: map_id,
+                        CONF_NAME: name,
                     },
                 )
 
@@ -67,6 +69,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_HOST): cv.string,
                     vol.Required(CONF_MAP_ID, default=DEFAULT_MAP_ID): cv.string,
+                    vol.Optional(CONF_NAME, default=DEFAULT_DEVICE_NAME): cv.string,
                 }
             ),
             errors=errors,
@@ -111,23 +114,30 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_zeroconf_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """One-click confirmation for the auto-discovered device."""
+        """Confirmation step for the auto-discovered device — lets user set a name."""
         if user_input is None:
             return self.async_show_form(
                 step_id="zeroconf_confirm",
                 description_placeholders={"host": self._host},
+                data_schema=vol.Schema(
+                    {
+                        vol.Optional(CONF_NAME, default=DEFAULT_DEVICE_NAME): cv.string,
+                    }
+                ),
             )
+        name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
         return self.async_create_entry(
-            title=f"Rowenta Xplorer 120 ({self._host})",
+            title=f"{name} ({self._host})",
             data={
                 CONF_HOST: self._host,
                 CONF_HOSTNAME: self._hostname,
                 CONF_MAP_ID: self._map_id,
+                CONF_NAME: name,
             },
         )
 
     # ------------------------------------------------------------------
-    # Options flow — lets user update IP and map_id without re-adding
+    # Options flow — lets user update IP, map_id, and name without re-adding
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -146,7 +156,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class RobEyeOptionsFlow(OptionsFlow):
-    """Allow updating IP address and map ID without removing the integration."""
+    """Allow updating IP address, map ID, and name without removing the integration."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialise options flow."""
@@ -160,10 +170,12 @@ class RobEyeOptionsFlow(OptionsFlow):
 
         current_host = self._config_entry.data.get(CONF_HOST, "")
         current_map_id = self._config_entry.data.get(CONF_MAP_ID, DEFAULT_MAP_ID)
+        current_name = self._config_entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
 
         if user_input is not None:
             host: str = user_input[CONF_HOST].strip()
             map_id: str = user_input[CONF_MAP_ID].strip()
+            name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
             try:
                 client = RobEyeApiClient(host=host)
                 await client.test_connection()
@@ -173,11 +185,12 @@ class RobEyeOptionsFlow(OptionsFlow):
                 errors["base"] = "unknown"
             else:
                 return self.async_create_entry(
-                    title="",
+                    title=f"{name} ({host})",
                     data={
                         CONF_HOST: host,
                         CONF_HOSTNAME: self._config_entry.data.get(CONF_HOSTNAME, host),
                         CONF_MAP_ID: map_id,
+                        CONF_NAME: name,
                     },
                 )
 
@@ -187,6 +200,7 @@ class RobEyeOptionsFlow(OptionsFlow):
                 {
                     vol.Required(CONF_HOST, default=current_host): cv.string,
                     vol.Required(CONF_MAP_ID, default=current_map_id): cv.string,
+                    vol.Optional(CONF_NAME, default=current_name): cv.string,
                 }
             ),
             errors=errors,
