@@ -10,7 +10,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
-from .const import CONF_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, VERSION
+from .const import CONF_MAP_ID, CONF_NAME, DEFAULT_DEVICE_NAME, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, VERSION
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
@@ -38,6 +38,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     """Set up Rowenta RobEye from a config entry."""
     host: str = config_entry.data[CONF_HOST]
     map_id: str = config_entry.data[CONF_MAP_ID]
+    friendly_name: str = config_entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
 
     client = RobEyeApiClient(host=host)
 
@@ -55,13 +56,13 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     # One manager per config entry — holds hash + dashboard object reference.
     # Stored in hass.data so async_remove_entry can call async_delete() on it.
-    dashboard_manager = RobEyeDashboardManager(device_id=coordinator.device_id)
+    dashboard_manager = RobEyeDashboardManager(device_id=coordinator.device_id, friendly_name=friendly_name)
     hass.data[DOMAIN][f"{config_entry.entry_id}_dashboard"] = dashboard_manager
 
     # Launch dashboard creation in the background so setup returns immediately.
     # The helper retries with increasing delays; last resort: request HA restart.
     hass.async_create_task(
-        _async_initial_dashboard(hass, config_entry, coordinator, dashboard_manager),
+        _async_initial_dashboard(hass, config_entry, coordinator, dashboard_manager, friendly_name),
         eager_start=False,
     )
 
@@ -77,6 +78,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 manager=dashboard_manager,
                 device_id=coordinator.device_id,
                 active_map_id=coordinator.active_map_id,
+                friendly_name=friendly_name,
             )
         )
 
@@ -97,6 +99,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 manager=dashboard_manager,
                 device_id=coordinator.device_id,
                 active_map_id=coordinator.active_map_id,
+                friendly_name=friendly_name,
             )
         )
 
@@ -123,6 +126,7 @@ async def _async_initial_dashboard(
     config_entry: ConfigEntry,
     coordinator: RobEyeCoordinator,
     dashboard_manager: RobEyeDashboardManager,
+    friendly_name: str = DEFAULT_DEVICE_NAME,
 ) -> None:
     """Create the dashboard in the background with retries.
 
@@ -149,6 +153,7 @@ async def _async_initial_dashboard(
             manager=dashboard_manager,
             device_id=coordinator.device_id,
             active_map_id=coordinator.active_map_id,
+            friendly_name=friendly_name,
         )
 
         if success:

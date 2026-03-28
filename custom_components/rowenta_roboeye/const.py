@@ -36,6 +36,8 @@ SCAN_INTERVAL_ROBOT_INFO = 3600
 # ── Config entry keys ─────────────────────────────────────────────────
 CONF_MAP_ID = "map_id"
 CONF_HOSTNAME = "hostname"
+CONF_NAME = "name"
+DEFAULT_DEVICE_NAME = "Rowenta Xplorer 120"
 
 # ── API transport ─────────────────────────────────────────────────────
 DEFAULT_PORT = 8080
