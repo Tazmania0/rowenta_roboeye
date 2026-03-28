@@ -180,9 +180,16 @@ ha_helpers = _make_module(
 )
 ha_helpers.config_validation = MagicMock()
 ha_helpers.entity_registry = MagicMock()
+class _RestoreEntityStub:
+    """Stub RestoreEntity that is safe to subclass without breaking property access."""
+    async def async_get_last_state(self):
+        return None
+    async def async_added_to_hass(self):
+        pass
+
 ha_helpers.restore_state = _make_module(
     "homeassistant.helpers.restore_state",
-    RestoreEntity=MagicMock,
+    RestoreEntity=_RestoreEntityStub,
 )
 ha_helpers.service_info = _make_module("homeassistant.helpers.service_info")
 ha_helpers.service_info.zeroconf = _make_module(
