@@ -30,7 +30,10 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     coordinator: RobEyeCoordinator = hass.data[DOMAIN][config_entry.entry_id]
-    entities: list[SelectEntity] = [RobEyeCleaningModeSelect(coordinator)]
+    entities: list[SelectEntity] = [
+        RobEyeCleaningModeSelect(coordinator),
+        RobEyeActiveMapSelect(coordinator),
+    ]
 
     known_ids: set = set()
     room_selects, new_ids = _build_room_select_entities(
@@ -174,3 +177,48 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
             return
         self._selected = option
         self.async_write_ha_state()
+
+
+# ── Active map select ─────────────────────────────────────────────────
+
+class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
+    """Selects the floor map whose areas and geometry the integration loads."""
+
+    _attr_translation_key = "active_map"
+    _attr_icon = "mdi:map"
+
+    def __init__(self, coordinator: RobEyeCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"active_map_{coordinator.device_id}"
+        self.entity_id = f"select.{coordinator.device_id}_active_map"
+        self._name_to_id: dict[str, str] = {}
+
+    def _build_options(self) -> list[str]:
+        maps = self.coordinator.available_maps
+        self._name_to_id = {m["name"]: m["map_id"] for m in maps}
+        opts = list(self._name_to_id.keys())
+        return opts if opts else [self.coordinator.active_map_id]
+
+    @property
+    def options(self) -> list[str]:
+        return self._build_options()
+
+    @property
+    def current_option(self) -> str | None:
+        active_id = self.coordinator.active_map_id
+        for name, map_id in self._name_to_id.items():
+            if map_id == active_id:
+                return name
+        return active_id or None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last_state := await self.async_get_last_state()) is not None:
+            state = last_state.state
+            if state not in ("unknown", "unavailable"):
+                map_id = self._name_to_id.get(state, state)
+                self.coordinator._manual_map_id = map_id
+
+    async def async_select_option(self, option: str) -> None:
+        map_id = self._name_to_id.get(option, option)
+        await self.coordinator.async_set_active_map(map_id)
