@@ -33,6 +33,7 @@ from .const import (
     DATA_LIVE_MAP,
     DATA_LIVE_PARAMETERS,
     DATA_MAP_STATUS,
+    DATA_MAPS,
     DATA_PERMANENT_STATISTICS,
     DATA_RELOCALIZATION,
     DATA_ROB_POSE,
@@ -107,6 +108,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Live session map tracking
         self._operation_map_id: str = map_id  # current session map; changes each new clean
+        self._last_active_map_id: str = map_id  # tracks floor changes
 
         # Last-session replay state
         self._robot_path: list[tuple[float, float]] = []
@@ -131,6 +133,35 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if serial:
             return str(serial).lower().replace("-", "_").replace(" ", "_")
         return self.config_entry.entry_id.lower()
+
+    # ── Active map tracking ─────────────────────────────────────────────
+
+    @property
+    def active_map_id(self) -> str:
+        """Runtime map ID from /get/map_status, falls back to setup-time map_id."""
+        map_status = (self.data or {}).get(DATA_MAP_STATUS, {})
+        active = str(map_status.get("active_map_id", "")).strip()
+        return active if active else self.map_id
+
+    @property
+    def available_maps(self) -> list[dict]:
+        """List of all saved maps from /get/maps."""
+        raw = (self.data or {}).get(DATA_MAPS, {})
+        maps_list = raw.get("maps", []) if isinstance(raw, dict) else []
+        result = []
+        for m in maps_list:
+            if isinstance(m, dict):
+                result.append({
+                    "map_id": str(m.get("map_id", m.get("id", ""))),
+                    "name": str(
+                        m.get("name")
+                        or m.get("map_name")
+                        or f"Map {m.get('map_id', '?')}"
+                    ),
+                })
+            elif isinstance(m, (int, str)):
+                result.append({"map_id": str(m), "name": f"Map {m}"})
+        return result
 
     # ── Entity state helpers ───────────────────────────────────────────
 
@@ -239,19 +270,19 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ) >= timedelta(seconds=SCAN_INTERVAL_MAP_GEOMETRY)
             ):
                 try:
-                    data[DATA_FEATURE_MAP] = await self.client.get_feature_map(self.map_id)
+                    data[DATA_FEATURE_MAP] = await self.client.get_feature_map(self.active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_feature_map unavailable, skipping")
                 try:
-                    data[DATA_TILE_MAP] = await self.client.get_tile_map(self.map_id)
+                    data[DATA_TILE_MAP] = await self.client.get_tile_map(self.active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_tile_map unavailable, skipping")
                 try:
-                    data[DATA_AREAS_SAVED_MAP] = await self.client.get_areas(self.map_id)
+                    data[DATA_AREAS_SAVED_MAP] = await self.client.get_areas(self.active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_areas (map geometry) unavailable, skipping")
                 try:
-                    data[DATA_SEEN_POLY_SAVED_MAP] = await self.client.get_seen_polygon(self.map_id)
+                    data[DATA_SEEN_POLY_SAVED_MAP] = await self.client.get_seen_polygon(self.active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_seen_polygon (map geometry) unavailable, skipping")
 
@@ -259,7 +290,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if not is_active:
                     try:
                         saved_grid = await self.client.get_cleaning_grid_map(
-                            map_id=self.map_id
+                            map_id=self.active_map_id
                         )
                         if saved_grid.get("size_x", 0) > 0:
                             self._last_session_grid = saved_grid
@@ -354,7 +385,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         areas_data=data.get(DATA_AREAS_SAVED_MAP, {}),
                         seen_poly_saved_map=data.get(DATA_SEEN_POLY_SAVED_MAP, {}),
                         is_active=is_active,
-                        map_id=self.map_id,
+                        map_id=self.active_map_id,
                         robot_path=self._robot_path,
                         last_session_grid=self._last_session_grid,
                         last_session_path=self._last_session_path,
@@ -368,7 +399,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._last_areas is None or (
                 now - self._last_areas
             ) >= timedelta(seconds=SCAN_INTERVAL_AREAS):
-                new_areas_blob = await self.client.get_areas(self.map_id)
+                new_areas_blob = await self.client.get_areas(self.active_map_id)
                 data[DATA_AREAS] = new_areas_blob
 
                 try:
@@ -379,6 +410,44 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     data[DATA_ROBOT_FLAGS] = await self.client.get_robot_flags()
                 except CannotConnect:
                     LOGGER.debug("get_robot_flags unavailable, skipping")
+
+                # Fetch available maps list
+                try:
+                    data[DATA_MAPS] = await self.client.get_maps()
+                except CannotConnect:
+                    LOGGER.debug("get_maps unavailable, skipping")
+
+                # Fetch active map status — drives active_map_id property
+                try:
+                    data[DATA_MAP_STATUS] = await self.client.get_map_status()
+                except CannotConnect:
+                    LOGGER.debug("get_map_status unavailable, skipping")
+
+                # Detect active map change (floor switch) — reset area/session state
+                new_active_map = (
+                    str((data.get(DATA_MAP_STATUS) or {}).get("active_map_id", "")).strip()
+                    or self.map_id
+                )
+                if new_active_map != self._last_active_map_id:
+                    LOGGER.info(
+                        "Active map changed: %s -> %s — reloading areas",
+                        self._last_active_map_id,
+                        new_active_map,
+                    )
+                    self._last_active_map_id = new_active_map
+                    self._last_areas = None
+                    self._last_map_geometry = None
+                    self._known_area_ids = set()
+                    self._robot_path = []
+                    self._last_session_grid = {}
+                    self._last_session_path = []
+                    self._last_session_outline = []
+                    self._session_complete = False
+                    dashboard_manager = self.hass.data.get(DOMAIN, {}).get(
+                        f"{self.config_entry.entry_id}_dashboard"
+                    )
+                    if dashboard_manager:
+                        dashboard_manager.invalidate()
 
                 self._last_areas = now
                 self._check_for_new_areas(new_areas_blob)

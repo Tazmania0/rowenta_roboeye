@@ -152,9 +152,10 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         super().__init__(coordinator)
         self._area_id = area_id
         self._room_name = room_name
-        self._attr_unique_id = f"room_fan_speed_{area_id}_{coordinator.device_id}"
+        _map = coordinator.active_map_id
+        self._attr_unique_id = f"room_fan_speed_map{_map}_{area_id}_{coordinator.device_id}"
         self._attr_name = f"{room_name} Fan Speed"
-        self.entity_id = f"select.{coordinator.device_id}_room_{area_id}_fan_speed"
+        self.entity_id = f"select.{coordinator.device_id}_map{_map}_room_{area_id}_fan_speed"
         self._selected: str = "normal"
 
     @property

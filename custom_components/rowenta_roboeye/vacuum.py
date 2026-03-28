@@ -22,7 +22,6 @@ from .const import (
     CHARGING_CHARGING,
     CHARGING_CONNECTED,
     CHARGING_UNCONNECTED,
-    CONF_MAP_ID,
     DOMAIN,
     FAN_SPEED_MAP,
     FAN_SPEED_REVERSE_MAP,
@@ -191,7 +190,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         """
         LOGGER.debug("clean_room: room_ids=%s fan_speed=%s", room_ids, fan_speed)
         area_ids_str = ",".join(str(r) for r in room_ids)
-        map_id: str = self.coordinator.config_entry.data[CONF_MAP_ID]
+        map_id: str = self.coordinator.active_map_id
 
         if fan_speed is not None:
             raw = FAN_SPEED_REVERSE_MAP.get(fan_speed, "2")

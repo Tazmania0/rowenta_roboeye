@@ -85,10 +85,22 @@ ha_core = _make_module(
 )
 
 # homeassistant.config_entries
+class _ConfigFlowMeta(type):
+    """Metaclass that accepts keyword args like `domain=...`."""
+    def __new__(mcs, name, bases, namespace, **kwargs):
+        return super().__new__(mcs, name, bases, namespace)
+    def __init_subclass__(cls, **kwargs):
+        pass
+
+class _ConfigFlowBase(metaclass=_ConfigFlowMeta):
+    """Stub ConfigFlow that accepts domain= keyword."""
+    pass
+
 ha_ce = _make_module(
     "homeassistant.config_entries",
     ConfigEntry=MagicMock,
-    ConfigFlow=MagicMock,
+    ConfigEntryState=MagicMock(),
+    ConfigFlow=_ConfigFlowBase,
     ConfigFlowResult=MagicMock,
     OptionsFlow=MagicMock,
 )
@@ -99,14 +111,26 @@ ha_const = _make_module(
     Platform=MagicMock(),
     CONF_HOST="host",
     EntityCategory=MagicMock(),
+    PERCENTAGE="%",
+    SIGNAL_STRENGTH_DECIBELS_MILLIWATT="dBm",
+    UnitOfArea=MagicMock(),
+    UnitOfLength=MagicMock(),
+    UnitOfTime=MagicMock(),
 )
+
+class _CoordinatorEntityBase:
+    """Stub CoordinatorEntity that is subscriptable."""
+    def __class_getitem__(cls, item):
+        return cls
+    def __init__(self, coordinator=None, *a, **kw):
+        self.coordinator = coordinator
 
 # homeassistant.helpers.update_coordinator
 ha_uc = _make_module(
     "homeassistant.helpers.update_coordinator",
     DataUpdateCoordinator=DataUpdateCoordinator,
     UpdateFailed=UpdateFailed,
-    CoordinatorEntity=MagicMock,
+    CoordinatorEntity=_CoordinatorEntityBase,
 )
 
 # homeassistant.helpers.dispatcher
@@ -175,15 +199,53 @@ ha_http = _make_module(
 
 # homeassistant.components.*
 ha_components = types.ModuleType("homeassistant.components")
+
+# Stub base classes that get subclassed — must be real classes, not MagicMock
+class _StubEntity:
+    """Base for stub entity classes that can be subclassed."""
+    _attr_has_entity_name = False
+    _attr_unique_id = None
+    _attr_name = None
+    _attr_icon = None
+    _attr_device_info = None
+    _attr_extra_state_attributes = None
+    _attr_native_value = None
+    _attr_native_unit_of_measurement = None
+    _attr_entity_category = None
+    entity_id = None
+    def __init__(self, *a, **kw): pass
+
+from dataclasses import dataclass as _dataclass, field as _field
+
+@_dataclass(frozen=True, kw_only=True)
+class _StubSensorEntityDescription:
+    """Stub SensorEntityDescription usable as dataclass base."""
+    key: str = ""
+    translation_key: str = ""
+    icon: str = ""
+    native_unit_of_measurement: str | None = None
+    device_class: object = None
+    entity_category: object = None
+    entity_registry_enabled_default: bool = True
+    state_class: object = None
+    suggested_display_precision: int | None = None
+
 for _comp in ("binary_sensor", "sensor", "switch", "select", "vacuum", "button"):
     _m = _make_module(f"homeassistant.components.{_comp}")
+    # Set MagicMock instances for enum-like constants
     for _cls in (
-        "BinarySensorEntity", "SensorEntity", "SwitchEntity",
-        "SelectEntity", "StateVacuumEntity", "ButtonEntity",
         "BinarySensorDeviceClass", "SensorDeviceClass", "SensorStateClass",
-        "VacuumEntityFeature",
+        "VacuumEntityFeature", "VacuumActivity",
     ):
-        setattr(_m, _cls, MagicMock)
+        setattr(_m, _cls, MagicMock())
+    # Set real stub classes for entity bases that get subclassed
+    setattr(_m, "BinarySensorEntity", _StubEntity)
+    setattr(_m, "SensorEntity", _StubEntity)
+    setattr(_m, "SwitchEntity", _StubEntity)
+    setattr(_m, "SelectEntity", _StubEntity)
+    setattr(_m, "StateVacuumEntity", _StubEntity)
+    setattr(_m, "ButtonEntity", _StubEntity)
+    setattr(_m, "SensorEntityDescription", _StubSensorEntityDescription)
     setattr(ha_components, _comp, _m)
     sys.modules[f"homeassistant.components.{_comp}"] = _m
 

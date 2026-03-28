@@ -8,6 +8,7 @@ import pytest
 from custom_components.rowenta_roboeye.sensor import (
     RobEyeStaticSensor,
     _format_date,
+    _resolve_active_map_name,
     _safe_round,
     _build_room_sensors,
     STATUS_SENSORS,
@@ -20,6 +21,8 @@ from custom_components.rowenta_roboeye.sensor import (
 from .conftest import (
     MOCK_AREAS,
     MOCK_LIVE_PARAMETERS,
+    MOCK_MAPS,
+    MOCK_MAP_STATUS,
     MOCK_ROBOT_ID,
     MOCK_SENSOR_STATUS,
     MOCK_STATISTICS,
@@ -269,3 +272,66 @@ def test_live_map_state_session_complete():
 def test_live_map_state_idle():
     s = _make_live_map_sensor(mode="ready", session_complete=False)
     assert s.native_value == "idle"
+
+
+# ── Active map sensor ────────────────────────────────────────────────
+
+def test_active_map_sensor_exists():
+    desc = next((d for d in STATUS_SENSORS if d.key == "active_map"), None)
+    assert desc is not None
+    assert desc.icon == "mdi:layers"
+
+
+def test_active_map_sensor_shows_map_name():
+    coord = _make_coordinator()
+    coord.active_map_id = "3"
+    coord.available_maps = [
+        {"map_id": "3", "name": "Ground Floor"},
+        {"map_id": "4", "name": "First Floor"},
+    ]
+    result = _resolve_active_map_name(coord)
+    assert result == "Ground Floor (map 3)"
+
+
+def test_active_map_sensor_falls_back_when_no_name():
+    coord = _make_coordinator()
+    coord.active_map_id = "4"
+    coord.available_maps = []
+    result = _resolve_active_map_name(coord)
+    assert result == "Map 4"
+
+
+def test_active_map_sensor_none_when_empty_id():
+    coord = _make_coordinator()
+    coord.active_map_id = ""
+    result = _resolve_active_map_name(coord)
+    assert result is None
+
+
+# ── Map-prefixed room sensors ────────────────────────────────────────
+
+def test_room_sensors_include_map_prefix():
+    coord = _make_coordinator()
+    coord.active_map_id = "3"
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+    sensors = _build_room_sensors(
+        coord, entry, area_id=3, room_name="Bedroom", map_id="3"
+    )
+    assert len(sensors) == 4
+    for s in sensors:
+        assert "map3_" in s._attr_unique_id, f"Missing map prefix in {s._attr_unique_id}"
+
+
+def test_room_sensors_entity_id_includes_map_prefix():
+    coord = _make_coordinator()
+    coord.device_id = "test_dev"
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+    sensors = _build_room_sensors(
+        coord, entry, area_id=11, room_name="Kitchen",
+        device_id="test_dev", map_id="4",
+    )
+    entity_ids = [s.entity_id for s in sensors]
+    for eid in entity_ids:
+        assert "_map4_room_" in eid, f"Missing map prefix in entity_id: {eid}"
