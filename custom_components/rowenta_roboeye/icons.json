@@ -79,6 +79,9 @@
     "select": {
       "cleaning_mode": {
         "default": "mdi:speedometer"
+      },
+      "active_map": {
+        "default": "mdi:map"
       }
     },
     "button": {
