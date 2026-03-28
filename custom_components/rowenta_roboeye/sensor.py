@@ -79,6 +79,19 @@ _SENSOR_ENTITY_ID_SUFFIX: dict[str, str] = {
 }
 
 
+# ── Helpers ───────────────────────────────────────────────────────────
+
+def _resolve_active_map_name(coordinator: RobEyeCoordinator) -> str | None:
+    """Return human-readable name of the currently active map."""
+    active_id = coordinator.active_map_id
+    if not active_id:
+        return None
+    for m in coordinator.available_maps:
+        if m["map_id"] == active_id:
+            return f"{m['name']} (map {active_id})"
+    return f"Map {active_id}"
+
+
 # ── Sensor catalogues ─────────────────────────────────────────────────
 
 STATUS_SENSORS: tuple[RobEyeSensorDescription, ...] = (
@@ -113,6 +126,14 @@ STATUS_SENSORS: tuple[RobEyeSensorDescription, ...] = (
         value_fn=lambda c: FAN_SPEED_MAP.get(
             str(c.status.get("cleaning_parameter_set", "")), "unknown"
         ),
+    ),
+    RobEyeSensorDescription(
+        key="active_map",
+        translation_key="active_map",
+        icon="mdi:layers",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=True,
+        value_fn=_resolve_active_map_name,
     ),
 )
 
@@ -558,7 +579,10 @@ def _build_room_sensor_entities(
         if not room_name:
             continue
         new_entities.extend(
-            _build_room_sensors(coordinator, config_entry, area_id, room_name, coordinator.device_id)
+            _build_room_sensors(
+                coordinator, config_entry, area_id, room_name,
+                coordinator.device_id, map_id=coordinator.active_map_id,
+            )
         )
         new_ids.add(area_id)
 
@@ -571,6 +595,7 @@ def _build_room_sensors(
     area_id: int | str,
     room_name: str,
     device_id: str | None = None,
+    map_id: str = "",
 ) -> list[RobEyeRoomSensor]:
     """Return the four per-room sensor entities for a discovered area."""
 
@@ -581,50 +606,51 @@ def _build_room_sensors(
         return {}
 
     _dev = device_id or coordinator.device_id
+    _m = f"map{map_id}_" if map_id else ""
     return [
         RobEyeRoomSensor(
             coordinator=coordinator,
             config_entry=config_entry,
             area_id=area_id,
-            unique_suffix="cleanings",
+            unique_suffix=f"{_m}cleanings",
             display_name=f"{room_name} Cleanings",
             icon="mdi:counter",
             value_fn=lambda c: _stats(c).get("cleaning_counter"),
-            forced_entity_id=f"sensor.{_dev}_room_{area_id}_cleanings",
+            forced_entity_id=f"sensor.{_dev}_{_m}room_{area_id}_cleanings",
         ),
         RobEyeRoomSensor(
             coordinator=coordinator,
             config_entry=config_entry,
             area_id=area_id,
-            unique_suffix="area",
+            unique_suffix=f"{_m}area",
             display_name=f"{room_name} Area",
             native_unit=UnitOfArea.SQUARE_METERS,
             icon="mdi:texture-box",
             value_fn=lambda c: round(_stats(c).get("area_size", 0) / 500_000, 2),  # API = 0.5 mm² units
-            forced_entity_id=f"sensor.{_dev}_room_{area_id}_area",
+            forced_entity_id=f"sensor.{_dev}_{_m}room_{area_id}_area",
         ),
         RobEyeRoomSensor(
             coordinator=coordinator,
             config_entry=config_entry,
             area_id=area_id,
-            unique_suffix="avg_time",
+            unique_suffix=f"{_m}avg_time",
             display_name=f"{room_name} Avg Clean Time",
             native_unit=UnitOfTime.MINUTES,
             icon="mdi:timer-outline",
             value_fn=lambda c: round(
                 _stats(c).get("average_cleaning_time", 0) / 60_000, 1
             ),
-            forced_entity_id=f"sensor.{_dev}_room_{area_id}_avg_clean_time",
+            forced_entity_id=f"sensor.{_dev}_{_m}room_{area_id}_avg_clean_time",
         ),
         RobEyeRoomSensor(
             coordinator=coordinator,
             config_entry=config_entry,
             area_id=area_id,
-            unique_suffix="last_cleaned",
+            unique_suffix=f"{_m}last_cleaned",
             display_name=f"{room_name} Last Cleaned",
             icon="mdi:calendar-clock",
             value_fn=lambda c: _format_date(_stats(c).get("last_cleaned", {})),
-            forced_entity_id=f"sensor.{_dev}_room_{area_id}_last_cleaned",
+            forced_entity_id=f"sensor.{_dev}_{_m}room_{area_id}_last_cleaned",
         ),
     ]
 

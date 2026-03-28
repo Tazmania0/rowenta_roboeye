@@ -71,6 +71,9 @@
       },
       "sensor_wheel_drop_status": {
         "default": "mdi:alert-circle-outline"
+      },
+      "active_map": {
+        "default": "mdi:layers"
       }
     },
     "select": {

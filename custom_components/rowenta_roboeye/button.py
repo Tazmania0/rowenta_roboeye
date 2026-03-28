@@ -14,7 +14,6 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import (
-    CONF_MAP_ID,
     DOMAIN,
     FAN_SPEED_MAP,
     FAN_SPEED_REVERSE_MAP,
@@ -164,20 +163,21 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
     ) -> None:
         super().__init__(coordinator)
         self._area_id = area_id
-        self._attr_unique_id = f"clean_room_{area_id}_{coordinator.device_id}"
+        _map = coordinator.active_map_id
+        self._attr_unique_id = f"clean_room_map{_map}_{area_id}_{coordinator.device_id}"
         self._attr_name = f"Clean {room_name}"
         self._attr_icon = "mdi:broom"
         _dev = coordinator.device_id
-        self.entity_id = f"button.{_dev}_clean_room_{area_id}"
-        self._fan_speed_select_id = f"select.{_dev}_room_{area_id}_fan_speed"
+        self.entity_id = f"button.{_dev}_map{_map}_clean_room_{area_id}"
+        self._fan_speed_select_id = f"select.{_dev}_map{_map}_room_{area_id}_fan_speed"
         # Per-room deep clean switch entity id
-        self._deep_clean_switch_id = f"switch.{_dev}_room_{area_id}_deep_clean"
+        self._deep_clean_switch_id = f"switch.{_dev}_map{_map}_room_{area_id}_deep_clean"
 
     async def async_press(self) -> None:
         LOGGER.debug("button: clean room %s", self._area_id)
         fan_speed_label = self._get_room_fan_speed()
         raw = FAN_SPEED_REVERSE_MAP.get(fan_speed_label, "2")
-        map_id: str = self.coordinator.config_entry.data[CONF_MAP_ID]
+        map_id: str = self.coordinator.active_map_id
         # Per-room switch overrides global deep clean; global is the fallback
         room_switch = self.coordinator.hass.states.get(self._deep_clean_switch_id)
         deep_clean = (
