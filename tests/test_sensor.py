@@ -113,7 +113,7 @@ def test_total_distance_metres():
 
 def test_total_cleaning_time_hours():
     desc = next(d for d in STATISTICS_SENSORS if d.key == "total_cleaning_time")
-    assert _sensor(desc).native_value == 10.0  # 36000 s ÷ 3600
+    assert _sensor(desc).native_value == 600.0  # 36000 min ÷ 60
 
 
 def test_total_area_sq_metres():
