@@ -183,7 +183,7 @@ STATISTICS_SENSORS: tuple[RobEyeSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         suggested_display_precision=1,
         value_fn=lambda c: round(
-            c.statistics.get("total_cleaning_time", 0) / 60, 1
+            c.statistics.get("total_cleaning_time", 0) / 3600, 1
         ),
     ),
     RobEyeSensorDescription(
@@ -347,6 +347,14 @@ async def async_setup_entry(
     @callback
     def _async_on_areas_updated() -> None:
         """Called by the coordinator when the area set changes."""
+        current_area_ids = {a.get("id") for a in coordinator.areas if a.get("id") is not None}
+
+        # Re-enable any entities for this map that were previously disabled by us
+        # (e.g. due to a transient API response or a map switch cycle).
+        _async_reenable_room_entities(
+            hass, config_entry, coordinator, "sensor", current_area_ids
+        )
+
         new_entities, new_area_ids = _build_room_sensor_entities(
             coordinator, config_entry, coordinator.areas, known_ids
         )
@@ -356,7 +364,6 @@ async def async_setup_entry(
             known_ids.update(new_area_ids)
 
         # Disable entities for areas that have disappeared from the current map
-        current_area_ids = {a.get("id") for a in coordinator.areas if a.get("id") is not None}
         _async_remove_stale_room_entities(
             hass, config_entry, coordinator, "sensor", current_area_ids
         )
@@ -655,6 +662,56 @@ def _build_room_sensors(
             forced_entity_id=f"sensor.{_dev}_{_m}room_{area_id}_last_cleaned",
         ),
     ]
+
+
+def _async_reenable_room_entities(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    coordinator: RobEyeCoordinator,
+    platform: str,
+    current_area_ids: set,
+) -> None:
+    """Re-enable integration-disabled room entities whose area has returned to the current map.
+
+    This is the inverse of _async_remove_stale_room_entities.  When a room area
+    disappears transiently (flaky API response, robot map edit) and its entity was
+    disabled by this integration, restore it once the area is present again.
+    User-disabled entities (disabled_by=USER) are intentionally left alone.
+    """
+    active_map_id = coordinator.active_map_id
+    ent_reg = er.async_get(hass)
+    entries = er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)
+    for entry in entries:
+        if entry.domain != platform:
+            continue
+        if not entry.unique_id.startswith("room_"):
+            continue
+        if entry.disabled_by != er.RegistryEntryDisabler.INTEGRATION:
+            continue  # Only restore what we disabled; leave user-disabled alone
+        parts = entry.unique_id.split("_")
+        if len(parts) < 3:
+            continue
+        try:
+            area_id_str = parts[1]
+            entity_map_id = parts[2][3:] if parts[2].startswith("map") else ""
+            # Only process entities belonging to the current active map
+            if entity_map_id and entity_map_id != active_map_id:
+                continue
+            matches = (
+                int(area_id_str) in current_area_ids
+                or area_id_str in current_area_ids
+                or area_id_str in {str(x) for x in current_area_ids}
+            )
+            if matches:
+                LOGGER.info(
+                    "RobEye: re-enabling room entity %s (area %s returned to map %s)",
+                    entry.entity_id,
+                    area_id_str,
+                    active_map_id,
+                )
+                ent_reg.async_update_entity(entry.entity_id, disabled_by=None)
+        except (ValueError, IndexError):
+            pass
 
 
 def _async_remove_stale_room_entities(

@@ -1,12 +1,14 @@
 """Unit tests for sensor entities — unit conversions, room discovery, new sensors."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from custom_components.rowenta_roboeye.sensor import (
     RobEyeStaticSensor,
+    _async_reenable_room_entities,
+    _async_remove_stale_room_entities,
     _format_date,
     _resolve_active_map_name,
     _safe_round,
@@ -17,6 +19,7 @@ from custom_components.rowenta_roboeye.sensor import (
     LIVE_SENSORS,
     SENSOR_HEALTH_SENSORS,
 )
+from homeassistant.helpers import entity_registry as _er
 
 from .conftest import (
     MOCK_AREAS,
@@ -335,3 +338,150 @@ def test_room_sensors_entity_id_includes_map_prefix():
     entity_ids = [s.entity_id for s in sensors]
     for eid in entity_ids:
         assert "_map4_room_" in eid, f"Missing map prefix in entity_id: {eid}"
+
+
+# ── _async_reenable_room_entities ─────────────────────────────────────
+
+def _make_registry_entry(
+    domain="sensor",
+    unique_id="room_3_map3_cleanings_dev",
+    entity_id="sensor.dev_map3_room_3_cleanings",
+    disabled_by=None,
+):
+    entry = MagicMock()
+    entry.domain = domain
+    entry.unique_id = unique_id
+    entry.entity_id = entity_id
+    entry.disabled_by = disabled_by
+    return entry
+
+
+def _call_reenable(entries, active_map_id, current_area_ids):
+    """Helper: run _async_reenable_room_entities with mocked entity registry."""
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "entry1"
+    coordinator = MagicMock()
+    coordinator.active_map_id = active_map_id
+
+    mock_ent_reg = MagicMock()
+    with patch.object(_er, "async_get", return_value=mock_ent_reg), \
+         patch.object(_er, "async_entries_for_config_entry", return_value=entries):
+        _async_reenable_room_entities(hass, config_entry, coordinator, "sensor", current_area_ids)
+    return mock_ent_reg
+
+
+def test_reenable_restores_integration_disabled_entity():
+    """An entity disabled by this integration is re-enabled when its area returns."""
+    entry = _make_registry_entry(
+        unique_id="room_3_map3_cleanings_dev",
+        entity_id="sensor.dev_map3_room_3_cleanings",
+        disabled_by=_er.RegistryEntryDisabler.INTEGRATION,
+    )
+    mock_reg = _call_reenable([entry], active_map_id="3", current_area_ids={3, 11})
+    mock_reg.async_update_entity.assert_called_once_with(
+        "sensor.dev_map3_room_3_cleanings", disabled_by=None
+    )
+
+
+def test_reenable_skips_user_disabled_entity():
+    """User-disabled entities must not be re-enabled by the integration."""
+    entry = _make_registry_entry(
+        unique_id="room_3_map3_cleanings_dev",
+        disabled_by=_er.RegistryEntryDisabler.USER,
+    )
+    mock_reg = _call_reenable([entry], active_map_id="3", current_area_ids={3})
+    mock_reg.async_update_entity.assert_not_called()
+
+
+def test_reenable_skips_entity_from_other_map():
+    """Entities belonging to a different map are left untouched."""
+    entry = _make_registry_entry(
+        unique_id="room_3_map5_cleanings_dev",
+        disabled_by=_er.RegistryEntryDisabler.INTEGRATION,
+    )
+    # active map is "3" but entity is from map 5
+    mock_reg = _call_reenable([entry], active_map_id="3", current_area_ids={3})
+    mock_reg.async_update_entity.assert_not_called()
+
+
+def test_reenable_skips_area_not_in_current_map():
+    """An entity whose area is absent from the current map is not re-enabled."""
+    entry = _make_registry_entry(
+        unique_id="room_99_map3_cleanings_dev",
+        disabled_by=_er.RegistryEntryDisabler.INTEGRATION,
+    )
+    # area 99 is not in current_area_ids {3, 11}
+    mock_reg = _call_reenable([entry], active_map_id="3", current_area_ids={3, 11})
+    mock_reg.async_update_entity.assert_not_called()
+
+
+def test_reenable_skips_already_enabled_entity():
+    """No-op when the entity is not disabled."""
+    entry = _make_registry_entry(
+        unique_id="room_3_map3_cleanings_dev",
+        disabled_by=None,
+    )
+    mock_reg = _call_reenable([entry], active_map_id="3", current_area_ids={3})
+    mock_reg.async_update_entity.assert_not_called()
+
+
+def test_reenable_skips_non_room_entity():
+    """Entities whose unique_id does not start with 'room_' are ignored."""
+    entry = _make_registry_entry(
+        unique_id="live_map_dev",
+        disabled_by=_er.RegistryEntryDisabler.INTEGRATION,
+    )
+    mock_reg = _call_reenable([entry], active_map_id="3", current_area_ids={3})
+    mock_reg.async_update_entity.assert_not_called()
+
+
+# ── _async_remove_stale_room_entities ────────────────────────────────
+
+def _call_remove_stale(entries, active_map_id, current_area_ids):
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "entry1"
+    coordinator = MagicMock()
+    coordinator.active_map_id = active_map_id
+
+    mock_ent_reg = MagicMock()
+    with patch.object(_er, "async_get", return_value=mock_ent_reg), \
+         patch.object(_er, "async_entries_for_config_entry", return_value=entries):
+        _async_remove_stale_room_entities(hass, config_entry, coordinator, "sensor", current_area_ids)
+    return mock_ent_reg
+
+
+def test_remove_stale_disables_entity_missing_from_current_map():
+    """An entity whose area is gone from the current map is disabled."""
+    entry = _make_registry_entry(
+        unique_id="room_99_map3_last_cleaned_dev",
+        entity_id="sensor.dev_map3_room_99_last_cleaned",
+        disabled_by=None,
+    )
+    mock_reg = _call_remove_stale([entry], active_map_id="3", current_area_ids={3, 11})
+    mock_reg.async_update_entity.assert_called_once_with(
+        "sensor.dev_map3_room_99_last_cleaned",
+        disabled_by=_er.RegistryEntryDisabler.INTEGRATION,
+    )
+
+
+def test_remove_stale_skips_entity_from_other_map():
+    """Entities from a different map are never disabled."""
+    entry = _make_registry_entry(
+        unique_id="room_3_map5_cleanings_dev",
+        disabled_by=None,
+    )
+    # active map "3", entity is from map 5
+    mock_reg = _call_remove_stale([entry], active_map_id="3", current_area_ids={3, 11})
+    mock_reg.async_update_entity.assert_not_called()
+
+
+def test_remove_stale_leaves_present_entity_alone():
+    """An entity whose area is still in the current map is not touched."""
+    entry = _make_registry_entry(
+        unique_id="room_3_map3_cleanings_dev",
+        disabled_by=None,
+    )
+    mock_reg = _call_remove_stale([entry], active_map_id="3", current_area_ids={3, 11})
+    mock_reg.async_update_entity.assert_not_called()
