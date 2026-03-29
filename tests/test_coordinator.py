@@ -596,8 +596,9 @@ async def test_async_set_active_map_invalidates_dashboard(coordinator):
 
 
 @pytest.mark.asyncio
-async def test_floor_change_clears_manual_override(coordinator, mock_client):
-    """When the robot changes floors, _manual_map_id is cleared."""
+async def test_floor_change_preserves_manual_override(coordinator, mock_client):
+    """When the robot reports a different map while the user has a manual override,
+    the manual override is kept so the user's selection is respected."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
     coordinator._manual_map_id = "57"          # user had manually selected map 57
     coordinator._last_active_map_id = "3"
@@ -611,15 +612,41 @@ async def test_floor_change_clears_manual_override(coordinator, mock_client):
 
     await coordinator._async_update_data()
 
-    assert coordinator._manual_map_id is None   # cleared by floor-change detection
+    # Manual override is preserved; only the tracking variable updates
+    assert coordinator._manual_map_id == "57"
     assert coordinator._last_active_map_id == "4"
+
+
+@pytest.mark.asyncio
+async def test_floor_change_without_override_resets_areas(coordinator, mock_client):
+    """When the robot changes floors and there is no manual override,
+    area/session state is reset so fresh areas are loaded for the new floor."""
+    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
+    coordinator._manual_map_id = None          # no user override
+    coordinator._last_active_map_id = "3"
+    coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+    coordinator._known_area_ids = {1, 2, 3}    # simulate previously known areas
+
+    # Robot reports map 4 as active
+    mock_client.get_map_status.return_value = {"active_map_id": 4, "operation_map_id": 4}
+
+    await coordinator._async_update_data()
+
+    assert coordinator._manual_map_id is None  # still None
+    assert coordinator._last_active_map_id == "4"
+    # _known_area_ids is cleared inside the floor-change block then immediately
+    # repopulated by _check_for_new_areas with the freshly-fetched new-map areas.
+    assert coordinator._known_area_ids == {3, 11, 99}  # MOCK_AREAS ids
 
 
 # ── _check_for_new_areas signal behaviour ────────────────────────────────────
 
 def test_check_for_new_areas_signals_on_first_areas(coordinator):
-    """Signal fires when _known_area_ids is empty and areas arrive (map-switch path)."""
-    from unittest.mock import patch
+    """Signal fires (via call_soon) when _known_area_ids is empty and areas arrive."""
+    from custom_components.rowenta_roboeye.coordinator import async_dispatcher_send
 
     coordinator._known_area_ids = set()  # simulate post-map-switch reset
     areas_blob = {
@@ -629,58 +656,46 @@ def test_check_for_new_areas_signals_on_first_areas(coordinator):
         ]
     }
 
-    with patch(
-        "custom_components.rowenta_roboeye.coordinator.async_dispatcher_send"
-    ) as mock_send:
-        coordinator._check_for_new_areas(areas_blob)
+    coordinator._check_for_new_areas(areas_blob)
 
-    mock_send.assert_called_once_with(
-        coordinator.hass,
-        f"rowenta_roboeye_areas_updated_{coordinator.config_entry.entry_id}",
+    # Signal is deferred through loop.call_soon so that self.data is updated
+    # before callbacks run.  Verify call_soon was invoked with the correct args.
+    expected_signal = f"rowenta_roboeye_areas_updated_{coordinator.config_entry.entry_id}"
+    coordinator.hass.loop.call_soon.assert_called_once_with(
+        async_dispatcher_send, coordinator.hass, expected_signal
     )
     assert coordinator._known_area_ids == {5, 6}
 
 
 def test_check_for_new_areas_no_signal_when_empty_response(coordinator):
     """No signal when _known_area_ids is empty but API returns empty areas."""
-    from unittest.mock import patch
-
     coordinator._known_area_ids = set()
 
-    with patch(
-        "custom_components.rowenta_roboeye.coordinator.async_dispatcher_send"
-    ) as mock_send:
-        coordinator._check_for_new_areas({"areas": []})
+    coordinator._check_for_new_areas({"areas": []})
 
-    mock_send.assert_not_called()
+    coordinator.hass.loop.call_soon.assert_not_called()
 
 
 def test_check_for_new_areas_signals_on_change(coordinator):
-    """Signal fires when area set differs from known set."""
-    from unittest.mock import patch
+    """Signal fires (via call_soon) when area set differs from known set."""
+    from custom_components.rowenta_roboeye.coordinator import async_dispatcher_send
 
     coordinator._known_area_ids = {5}  # previously had area 5
     areas_blob = {"areas": [{"id": 5}, {"id": 7}]}  # now area 7 added
 
-    with patch(
-        "custom_components.rowenta_roboeye.coordinator.async_dispatcher_send"
-    ) as mock_send:
-        coordinator._check_for_new_areas(areas_blob)
+    coordinator._check_for_new_areas(areas_blob)
 
-    mock_send.assert_called_once()
+    coordinator.hass.loop.call_soon.assert_called_once()
+    call_args = coordinator.hass.loop.call_soon.call_args
+    assert call_args[0][0] is async_dispatcher_send
     assert coordinator._known_area_ids == {5, 7}
 
 
 def test_check_for_new_areas_no_signal_when_unchanged(coordinator):
     """No signal when area set is identical to known set."""
-    from unittest.mock import patch
-
     coordinator._known_area_ids = {5, 6}
     areas_blob = {"areas": [{"id": 5}, {"id": 6}]}
 
-    with patch(
-        "custom_components.rowenta_roboeye.coordinator.async_dispatcher_send"
-    ) as mock_send:
-        coordinator._check_for_new_areas(areas_blob)
+    coordinator._check_for_new_areas(areas_blob)
 
-    mock_send.assert_not_called()
+    coordinator.hass.loop.call_soon.assert_not_called()

@@ -50,6 +50,17 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     )
     await coordinator.async_config_entry_first_refresh()
 
+    # Persist the resolved device_id (serial-based) to config entry data so that
+    # async_remove_entry can reconstruct the correct dashboard URL path even when
+    # hass.data is empty (e.g. setup failed on a later HA restart before removal).
+    # Must be done BEFORE add_update_listener is registered to avoid a reload loop.
+    _device_id = coordinator.device_id
+    if config_entry.data.get("_device_id") != _device_id:
+        hass.config_entries.async_update_entry(
+            config_entry,
+            data={**config_entry.data, "_device_id": _device_id},
+        )
+
     hass.data.setdefault(DOMAIN, {})[config_entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
@@ -221,10 +232,12 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Delete the Lovelace dashboard when the integration is removed."""
     manager = hass.data.get(DOMAIN, {}).pop(f"{entry.entry_id}_dashboard", None)
     if manager is None:
-        # HA was restarted before removal — reconstruct from config entry.
-        # Use entry_id as device_id (matches coordinator.device_id fallback when
-        # no serial number is available in hass.data).
-        device_id = entry.entry_id.lower()
+        # HA was restarted before removal — reconstruct from config entry data.
+        # Use the persisted _device_id (written by async_setup_entry after the
+        # first successful coordinator refresh) so the dashboard URL path matches
+        # the one that was actually created.  Fall back to entry_id only when
+        # _device_id was never stored (e.g. the entry never set up successfully).
+        device_id = entry.data.get("_device_id") or entry.entry_id.lower()
         friendly_name = entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
         manager = RobEyeDashboardManager(device_id=device_id, friendly_name=friendly_name)
     await manager.async_delete(hass)
