@@ -74,9 +74,10 @@ def _build_room_button_entities(
 ) -> tuple[list, set]:
     new_entities = []
     new_ids: set = set()
+    _map = coordinator.active_map_id
     for area in areas:
         area_id = area.get("id")
-        if area_id is None or area_id in already_known:
+        if area_id is None or (_map, area_id) in already_known:
             continue
         meta_raw = area.get("area_meta_data", "")
         if not meta_raw:
@@ -97,7 +98,7 @@ def _build_room_button_entities(
             )
         )
 
-        new_ids.add(area_id)
+        new_ids.add((_map, area_id))
     return new_entities, new_ids
 
 

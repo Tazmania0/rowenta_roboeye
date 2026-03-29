@@ -198,7 +198,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id, None)
-        hass.data[DOMAIN].pop(f"{entry.entry_id}_dashboard", None)
+        # Do NOT pop the dashboard manager here.  async_remove_entry (called
+        # immediately after on full removal) needs it to find the correct
+        # per-device dashboard URL path.  On reload, async_setup_entry
+        # overwrites it with a fresh manager.
 
         # HA sets entry.disabled_by before calling async_unload_entry when a
         # device or entry is disabled — this is the reliable signal that we
@@ -218,8 +221,12 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Delete the Lovelace dashboard when the integration is removed."""
     manager = hass.data.get(DOMAIN, {}).pop(f"{entry.entry_id}_dashboard", None)
     if manager is None:
-        # Entry was already unloaded — create a temporary manager just for deletion
-        manager = RobEyeDashboardManager()
+        # HA was restarted before removal — reconstruct from config entry.
+        # Use entry_id as device_id (matches coordinator.device_id fallback when
+        # no serial number is available in hass.data).
+        device_id = entry.entry_id.lower()
+        friendly_name = entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
+        manager = RobEyeDashboardManager(device_id=device_id, friendly_name=friendly_name)
     await manager.async_delete(hass)
 
 

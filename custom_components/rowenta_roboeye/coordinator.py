@@ -548,6 +548,18 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if not self._known_area_ids:
             self._known_area_ids = current_ids
+            # Fire signal so platforms create entities for the new map's rooms.
+            # This handles the map-switch case where async_set_active_map() resets
+            # _known_area_ids to set() — the first new-areas response must signal.
+            if current_ids:
+                LOGGER.debug(
+                    "RobEye: initial/post-switch areas loaded (%d areas), signalling platforms",
+                    len(current_ids),
+                )
+                async_dispatcher_send(
+                    self.hass,
+                    f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}",
+                )
             return
 
         if current_ids != self._known_area_ids:
