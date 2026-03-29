@@ -453,26 +453,38 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     or self.map_id
                 )
                 if new_active_map != self._last_active_map_id:
-                    LOGGER.info(
-                        "Active map changed: %s -> %s — reloading areas",
-                        self._last_active_map_id,
-                        new_active_map,
-                    )
+                    prev_map_id = self._last_active_map_id
                     self._last_active_map_id = new_active_map
-                    self._manual_map_id = None   # robot changed floors — clear user override
-                    self._last_areas = None
-                    self._last_map_geometry = None
-                    self._known_area_ids = set()
-                    self._robot_path = []
-                    self._last_session_grid = {}
-                    self._last_session_path = []
-                    self._last_session_outline = []
-                    self._session_complete = False
-                    dashboard_manager = self.hass.data.get(DOMAIN, {}).get(
-                        f"{self.config_entry.entry_id}_dashboard"
-                    )
-                    if dashboard_manager:
-                        dashboard_manager.invalidate()
+                    if self._manual_map_id is not None:
+                        # User has an active manual map selection — respect it and
+                        # do not auto-follow the robot's reported floor.  Only update
+                        # the tracking variable so the next robot-initiated change is
+                        # still detected correctly.
+                        LOGGER.debug(
+                            "Robot reports map %s but user override %s is active — "
+                            "keeping manual selection",
+                            new_active_map,
+                            self._manual_map_id,
+                        )
+                    else:
+                        LOGGER.info(
+                            "Active map changed: %s -> %s — reloading areas",
+                            prev_map_id,
+                            new_active_map,
+                        )
+                        self._last_areas = None
+                        self._last_map_geometry = None
+                        self._known_area_ids = set()
+                        self._robot_path = []
+                        self._last_session_grid = {}
+                        self._last_session_path = []
+                        self._last_session_outline = []
+                        self._session_complete = False
+                        dashboard_manager = self.hass.data.get(DOMAIN, {}).get(
+                            f"{self.config_entry.entry_id}_dashboard"
+                        )
+                        if dashboard_manager:
+                            dashboard_manager.invalidate()
 
                 self._last_areas = now
                 self._check_for_new_areas(new_areas_blob)
@@ -538,6 +550,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         When any new area IDs appear (or disappear), dispatch
         SIGNAL_AREAS_UPDATED so platform listeners can add/remove entities
         without a full integration reload.
+
+        The signal is deferred via loop.call_soon so it fires AFTER
+        _async_update_data returns and self.data is updated.  Without this
+        deferral all platform callbacks would read the stale self.data
+        (old map areas) and create entities for the wrong map.
         """
         areas = (
             areas_blob.get("areas", []) if isinstance(areas_blob, dict) else []
@@ -545,6 +562,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         current_ids: set = {
             a.get("id") for a in areas if a.get("id") is not None
         }
+
+        signal = f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}"
 
         if not self._known_area_ids:
             self._known_area_ids = current_ids
@@ -556,10 +575,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "RobEye: initial/post-switch areas loaded (%d areas), signalling platforms",
                     len(current_ids),
                 )
-                async_dispatcher_send(
-                    self.hass,
-                    f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}",
-                )
+                self.hass.loop.call_soon(async_dispatcher_send, self.hass, signal)
             return
 
         if current_ids != self._known_area_ids:
@@ -571,10 +587,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 removed_ids,
             )
             self._known_area_ids = current_ids
-            async_dispatcher_send(
-                self.hass,
-                f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}",
-            )
+            self.hass.loop.call_soon(async_dispatcher_send, self.hass, signal)
 
     # ── Convenience properties ────────────────────────────────────────
 
