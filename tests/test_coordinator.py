@@ -613,3 +613,74 @@ async def test_floor_change_clears_manual_override(coordinator, mock_client):
 
     assert coordinator._manual_map_id is None   # cleared by floor-change detection
     assert coordinator._last_active_map_id == "4"
+
+
+# ── _check_for_new_areas signal behaviour ────────────────────────────────────
+
+def test_check_for_new_areas_signals_on_first_areas(coordinator):
+    """Signal fires when _known_area_ids is empty and areas arrive (map-switch path)."""
+    from unittest.mock import patch
+
+    coordinator._known_area_ids = set()  # simulate post-map-switch reset
+    areas_blob = {
+        "areas": [
+            {"id": 5, "area_meta_data": '{"name":"Kitchen"}'},
+            {"id": 6, "area_meta_data": '{"name":"Bedroom"}'},
+        ]
+    }
+
+    with patch(
+        "custom_components.rowenta_roboeye.coordinator.async_dispatcher_send"
+    ) as mock_send:
+        coordinator._check_for_new_areas(areas_blob)
+
+    mock_send.assert_called_once_with(
+        coordinator.hass,
+        f"rowenta_roboeye_areas_updated_{coordinator.config_entry.entry_id}",
+    )
+    assert coordinator._known_area_ids == {5, 6}
+
+
+def test_check_for_new_areas_no_signal_when_empty_response(coordinator):
+    """No signal when _known_area_ids is empty but API returns empty areas."""
+    from unittest.mock import patch
+
+    coordinator._known_area_ids = set()
+
+    with patch(
+        "custom_components.rowenta_roboeye.coordinator.async_dispatcher_send"
+    ) as mock_send:
+        coordinator._check_for_new_areas({"areas": []})
+
+    mock_send.assert_not_called()
+
+
+def test_check_for_new_areas_signals_on_change(coordinator):
+    """Signal fires when area set differs from known set."""
+    from unittest.mock import patch
+
+    coordinator._known_area_ids = {5}  # previously had area 5
+    areas_blob = {"areas": [{"id": 5}, {"id": 7}]}  # now area 7 added
+
+    with patch(
+        "custom_components.rowenta_roboeye.coordinator.async_dispatcher_send"
+    ) as mock_send:
+        coordinator._check_for_new_areas(areas_blob)
+
+    mock_send.assert_called_once()
+    assert coordinator._known_area_ids == {5, 7}
+
+
+def test_check_for_new_areas_no_signal_when_unchanged(coordinator):
+    """No signal when area set is identical to known set."""
+    from unittest.mock import patch
+
+    coordinator._known_area_ids = {5, 6}
+    areas_blob = {"areas": [{"id": 5}, {"id": 6}]}
+
+    with patch(
+        "custom_components.rowenta_roboeye.coordinator.async_dispatcher_send"
+    ) as mock_send:
+        coordinator._check_for_new_areas(areas_blob)
+
+    mock_send.assert_not_called()

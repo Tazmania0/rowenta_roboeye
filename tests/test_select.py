@@ -175,3 +175,29 @@ async def test_restore_ignores_unknown():
     await entity.async_added_to_hass()
 
     assert coord._manual_map_id is None
+
+
+@pytest.mark.asyncio
+async def test_restore_populates_name_to_id_before_lookup():
+    """async_added_to_hass resolves map name to ID even without prior _build_options().
+
+    Regression test for bug where _name_to_id was empty at restore time,
+    causing the raw display name (e.g. 'First Floor') to be stored as
+    _manual_map_id instead of the numeric ID '4'.
+    """
+    coord = _make_coordinator()
+    entity = _entity(coord)
+    # Deliberately do NOT call entity._build_options() — simulates HA restart
+    assert entity._name_to_id == {}   # confirm _name_to_id is empty
+
+    last_state = MagicMock()
+    last_state.state = "First Floor"
+    entity.async_get_last_state = AsyncMock(return_value=last_state)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await entity.async_added_to_hass()
+
+    # Must resolve to numeric ID, not the raw display name string
+    assert coord._manual_map_id == "4"
