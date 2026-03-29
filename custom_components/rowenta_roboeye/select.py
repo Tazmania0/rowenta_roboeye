@@ -70,9 +70,10 @@ def _build_room_select_entities(
 ) -> tuple[list, set]:
     new_entities = []
     new_ids: set = set()
+    _map = coordinator.active_map_id
     for area in areas:
         area_id = area.get("id")
-        if area_id is None or area_id in already_known:
+        if area_id is None or (_map, area_id) in already_known:
             continue
         meta_raw = area.get("area_meta_data", "")
         if not meta_raw:
@@ -92,7 +93,7 @@ def _build_room_select_entities(
                 room_name=room_name,
             )
         )
-        new_ids.add(area_id)
+        new_ids.add((_map, area_id))
     return new_entities, new_ids
 
 
@@ -213,6 +214,7 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self._build_options()  # populate _name_to_id before reading last state
         if (last_state := await self.async_get_last_state()) is not None:
             state = last_state.state
             if state not in ("unknown", "unavailable"):

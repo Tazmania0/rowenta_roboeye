@@ -355,9 +355,10 @@ async def async_setup_entry(
             async_add_entities(new_entities)
             known_ids.update(new_area_ids)
 
-        # Disable entities for areas that have disappeared from the API
+        # Disable entities for areas that have disappeared from the current map
+        current_area_ids = {a.get("id") for a in coordinator.areas if a.get("id") is not None}
         _async_remove_stale_room_entities(
-            hass, config_entry, coordinator, "sensor", known_ids
+            hass, config_entry, coordinator, "sensor", current_area_ids
         )
 
     config_entry.async_on_unload(
@@ -563,9 +564,10 @@ def _build_room_sensor_entities(
     new_entities: list[RobEyeRoomSensor] = []
     new_ids: set = set()
 
+    _map = coordinator.active_map_id
     for area in areas:
         area_id = area.get("id")
-        if area_id is None or area_id in already_known:
+        if area_id is None or (_map, area_id) in already_known:
             continue
         meta_raw = area.get("area_meta_data", "")
         if not meta_raw:
@@ -581,10 +583,10 @@ def _build_room_sensor_entities(
         new_entities.extend(
             _build_room_sensors(
                 coordinator, config_entry, area_id, room_name,
-                coordinator.device_id, map_id=coordinator.active_map_id,
+                coordinator.device_id, map_id=_map,
             )
         )
-        new_ids.add(area_id)
+        new_ids.add((_map, area_id))
 
     return new_entities, new_ids
 
@@ -662,13 +664,20 @@ def _async_remove_stale_room_entities(
     platform: str,
     current_area_ids: set,
 ) -> None:
-    """Disable entity registry entries for rooms no longer in the API response."""
+    """Disable entity registry entries for rooms deleted from the CURRENT MAP.
+
+    Entities from other maps are left alone — they will be re-used when the
+    user switches back to that map.  Only areas that have been removed from
+    the active map (not just a map switch) are disabled.
+    """
+    active_map_id = coordinator.active_map_id
     ent_reg = er.async_get(hass)
     entries = er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)
     for entry in entries:
         if entry.domain != platform:
             continue
-        # Room sensor unique_ids look like: room_<id>_<suffix>_<device_id>
+        # Room sensor unique_ids: room_{area_id}_{map_prefix}_{suffix}_{device_id}
+        # e.g. room_5_map3_cleanings_device123
         if not entry.unique_id.startswith("room_"):
             continue
         parts = entry.unique_id.split("_")
@@ -676,6 +685,12 @@ def _async_remove_stale_room_entities(
             continue
         try:
             area_id_str = parts[1]
+            # Extract the map_id embedded in the unique_id (parts[2] = "map3")
+            entity_map_id = parts[2][3:] if parts[2].startswith("map") else ""
+            # Only process entities belonging to the current active map.
+            # Entities from other maps are not stale — skip them.
+            if entity_map_id and entity_map_id != active_map_id:
+                continue
             # Try int match first, then string
             matches = (
                 int(area_id_str) in current_area_ids
@@ -684,9 +699,10 @@ def _async_remove_stale_room_entities(
             )
             if not matches:
                 LOGGER.info(
-                    "RobEye: disabling stale room entity %s (area %s no longer present)",
+                    "RobEye: disabling stale room entity %s (area %s no longer present on map %s)",
                     entry.entity_id,
                     area_id_str,
+                    active_map_id,
                 )
                 ent_reg.async_update_entity(entry.entity_id, disabled_by=er.RegistryEntryDisabler.INTEGRATION)
         except (ValueError, IndexError):
