@@ -226,6 +226,7 @@ def _build_config(
                     "\n{{ '✅' if s.enabled else '⬜' }} "
                     "**{{ s.days | join('/') }}** {{ s.time }}"
                     " — {{ s.rooms_str }}"
+                    "{% if s.map_name %} *({{ s.map_name }})*{% endif %}"
                     "{% if s.fan_raw > 0 %} · {{ s.fan_speed }}{% endif %}"
                     "\n{% endfor %}"
                     "\n{% else %}"

@@ -485,3 +485,128 @@ def test_remove_stale_leaves_present_entity_alone():
     )
     mock_reg = _call_remove_stale([entry], active_map_id="3", current_area_ids={3, 11})
     mock_reg.async_update_entity.assert_not_called()
+
+
+# ── Schedule sensor tests ─────────────────────────────────────────────
+
+CONFIRMED_SCHEDULE = {
+    "schedule": [{
+        "task_id": 2,
+        "time": {"days_of_week": [7], "hour": 20, "min": 36, "sec": 0},
+        "enabled": 0,
+        "task": {
+            "map_id": 3,
+            "cleaning_parameter_set": 0,
+            "cleaning_mode": 2,
+            "parameter1": "3",
+            "parameter2": "10",
+            "parameters": [3, 10],
+        },
+    }]
+}
+
+
+def _make_sched_coordinator():
+    coord = _make_coordinator()
+    coord.schedule = CONFIRMED_SCHEDULE
+    coord.available_maps = [
+        {"map_id": "3",  "display_name": "Дружба", "is_active": True,  "statistics": {}},
+    ]
+    # Ensure areas include room 3 and 10 for name resolution
+    coord.areas = [
+        {"id": 3,  "area_meta_data": '{"name": "Спалня"}',  "statistics": {}},
+        {"id": 10, "area_meta_data": '{"name": "Коридор"}', "statistics": {}},
+    ]
+    return coord
+
+
+def _make_schedule_sensor(coord):
+    from custom_components.rowenta_roboeye.sensor import RobEyeScheduleSensor
+    s = RobEyeScheduleSensor.__new__(RobEyeScheduleSensor)
+    s.coordinator = coord
+    return s
+
+
+def test_schedule_confirmed_response():
+    coord = _make_sched_coordinator()
+    s = _make_schedule_sensor(coord)._parsed_schedules()[0]
+
+    assert s["task_id"]   == 2
+    assert s["enabled"]   is False          # int 0 → False
+    assert s["days"]      == ["Sun"]
+    assert s["days_full"] == ["Sunday"]
+    assert s["time"]      == "20:36"
+    assert s["mode"]      == "rooms"        # cleaning_mode=2
+    assert s["map_id"]    == "3"
+    assert s["map_name"]  == "Дружба"
+    assert s["rooms_str"] == "Спалня + Коридор"
+    assert s["rooms"]     == [{"id": 3, "name": "Спалня"}, {"id": 10, "name": "Коридор"}]
+    assert s["fan_raw"]   == 0
+    assert s["fan_speed"] == "default"      # 0 → "default", never ""
+
+
+def test_schedule_cleaning_mode_1_is_all_rooms():
+    """cleaning_mode=1 → mode='all' regardless of parameters."""
+    coord = _make_sched_coordinator()
+    coord.schedule = {"schedule": [{
+        "task_id": 1, "enabled": 1,
+        "time": {"days_of_week": [1], "hour": 8, "min": 0, "sec": 0},
+        "task": {"map_id": 3, "cleaning_parameter_set": 2,
+                 "cleaning_mode": 1, "parameters": [3]},  # mode=1 wins
+    }]}
+    s = _make_schedule_sensor(coord)._parsed_schedules()[0]
+    assert s["mode"]      == "all"
+    assert s["rooms_str"] == "All rooms"
+    assert s["fan_speed"] == "normal"
+
+
+def test_schedule_mode_rooms_empty_parameters():
+    """cleaning_mode=2 + empty parameters → mode='rooms', not 'all'."""
+    coord = _make_sched_coordinator()
+    coord.schedule = {"schedule": [{
+        "task_id": 3, "enabled": 1,
+        "time": {"days_of_week": [2], "hour": 9, "min": 0, "sec": 0},
+        "task": {"map_id": 3, "cleaning_parameter_set": 1,
+                 "cleaning_mode": 2, "parameters": []},
+    }]}
+    s = _make_schedule_sensor(coord)._parsed_schedules()[0]
+    assert s["mode"] == "rooms"   # NOT "all"
+
+
+def test_schedule_disabled_included():
+    """enabled=0 entries must appear — /get/schedule returns all."""
+    coord = _make_sched_coordinator()
+    s = _make_schedule_sensor(coord)._parsed_schedules()[0]
+    assert s["enabled"] is False
+
+
+def test_schedule_fan_zero_is_default():
+    """cleaning_parameter_set=0 → 'default', not empty string."""
+    coord = _make_sched_coordinator()
+    s = _make_schedule_sensor(coord)._parsed_schedules()[0]
+    assert s["fan_speed"] == "default"
+    assert s["fan_speed"] != ""
+
+
+def test_schedule_second_floor_map_name():
+    coord = _make_sched_coordinator()
+    coord.available_maps = [
+        {"map_id": "3",  "display_name": "Дружба", "is_active": True,  "statistics": {}},
+        {"map_id": "18", "display_name": "Map 2",  "is_active": False, "statistics": {}},
+    ]
+    coord.schedule = {"schedule": [{
+        "task_id": 5, "enabled": 1,
+        "time": {"days_of_week": [1], "hour": 7, "min": 0, "sec": 0},
+        "task": {"map_id": 18, "cleaning_parameter_set": 0,
+                 "cleaning_mode": 1, "parameters": []},
+    }]}
+    s = _make_schedule_sensor(coord)._parsed_schedules()[0]
+    assert s["map_id"]   == "18"
+    assert s["map_name"] == "Map 2"
+
+
+def test_schedule_sensor_state_counts_all_not_just_enabled():
+    """native_value = total count including disabled entries."""
+    coord = _make_sched_coordinator()
+    sensor = _make_schedule_sensor(coord)
+    assert sensor.native_value == 1  # one entry, even though enabled=0
