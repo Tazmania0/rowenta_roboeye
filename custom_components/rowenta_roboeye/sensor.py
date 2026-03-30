@@ -601,8 +601,9 @@ class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
     ) -> None:
         super().__init__(coordinator)
         self._value_fn = value_fn
+        _map = coordinator.active_map_id
         self._attr_unique_id = (
-            f"room_{area_id}_{unique_suffix}_{coordinator.device_id}"
+            f"room_{area_id}_map{_map}_{unique_suffix}_{coordinator.device_id}"
         )
         # Use the human-readable room name directly — this is what HA displays.
         # unique_id is stable (area_id-based) so entity_id doesn't change.
@@ -846,6 +847,8 @@ def _format_date(last_cleaned: dict[str, Any]) -> str | None:
         return None
     try:
         y = last_cleaned.get("year", 0)
+        if y <= 2001:  # sentinel value meaning "never cleaned"
+            return None
         m = last_cleaned.get("month", 0)
         d = last_cleaned.get("day", 0)
         return f"{y:04d}-{m:02d}-{d:02d}"

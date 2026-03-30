@@ -375,14 +375,14 @@ class RobEyeApiClient:
 
         Args:
             cleaning_parameter_set: Fan-speed API value "1"–"4".
-            deep_clean: True = cleaning_strategy_mode=2 (deep/double pass),
+            deep_clean: True = cleaning_strategy_mode=3 (deep/double pass),
                         False = cleaning_strategy_mode=1 (normal).
         """
         await self._get(
             API_SET_CLEAN_ALL,
             params={
                 "cleaning_parameter_set": cleaning_parameter_set,
-                "cleaning_strategy_mode": "2" if deep_clean else "1",
+                "cleaning_strategy_mode": "3" if deep_clean else "1",
             },
         )
 
@@ -399,7 +399,7 @@ class RobEyeApiClient:
             map_id: Map identifier (e.g. "3").
             area_ids: Comma-separated area IDs (e.g. "2,11").
             cleaning_parameter_set: Fan-speed API value "1"–"4".
-            deep_clean: True = cleaning_strategy_mode=2 (deep/double pass).
+            deep_clean: True = cleaning_strategy_mode=3 (deep/double pass).
         """
         await self._get(
             API_SET_CLEAN_MAP,
@@ -407,7 +407,7 @@ class RobEyeApiClient:
                 "map_id": map_id,
                 "area_ids": area_ids,
                 "cleaning_parameter_set": cleaning_parameter_set,
-                "cleaning_strategy_mode": "2" if deep_clean else "1",
+                "cleaning_strategy_mode": "3" if deep_clean else "1",
             },
         )
 
