@@ -501,6 +501,7 @@ class RobEyeScheduleSensor(RobEyeEntity, SensorEntity):
         if not isinstance(raw_list, list):
             return []
 
+        active_map = self.coordinator.active_map_id
         result = []
         for item in raw_list:
             if not isinstance(item, dict):
@@ -516,6 +517,12 @@ class RobEyeScheduleSensor(RobEyeEntity, SensorEntity):
             fan_raw       = int(task.get("cleaning_parameter_set", 0))
             area_ids      = task.get("parameters", [])
             task_map_id   = str(task.get("map_id", "")).strip()
+
+            # Only show schedules that belong to the currently active map.
+            # When both ids are known and they differ, skip this entry so
+            # rooms from a foreign map are never shown with wrong names.
+            if task_map_id and active_map and task_map_id != active_map:
+                continue
 
             # Resolve map display name from coordinator.available_maps
             map_name = ""
