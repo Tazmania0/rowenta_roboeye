@@ -90,6 +90,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 device_id=coordinator.device_id,
                 active_map_id=coordinator.active_map_id,
                 friendly_name=friendly_name,
+                available_maps=coordinator.available_maps,
             )
         )
 
@@ -111,6 +112,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 device_id=coordinator.device_id,
                 active_map_id=coordinator.active_map_id,
                 friendly_name=friendly_name,
+                available_maps=coordinator.available_maps,
             )
         )
 
@@ -165,6 +167,7 @@ async def _async_initial_dashboard(
             device_id=coordinator.device_id,
             active_map_id=coordinator.active_map_id,
             friendly_name=friendly_name,
+            available_maps=coordinator.available_maps,
         )
 
         if success:

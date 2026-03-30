@@ -56,7 +56,18 @@ _CONF_REQUIRE_ADMIN    = "require_admin"
 _CONF_SHOW_IN_SIDEBAR  = "show_in_sidebar"
 _CONF_ALLOW_SINGLE_WORD = "allow_single_word"
 
-
+_NO_MAP_GUIDANCE = (
+    "## No Floor Map Found\n\n"
+    "The robot has no saved floor map yet.\n\n"
+    "**To create your floor map:**\n"
+    "1. Open the **Rowenta RobEye** app on your smartphone\n"
+    "2. Start a full **Explore** (room scan) from the app\n"
+    "3. Allow the robot to complete the exploration and save the map\n\n"
+    "Once the exploration is complete, this dashboard will update automatically "
+    "(within 5 minutes). No reload is needed.\n\n"
+    "Room-based cleaning, live map tracking, and map visualisation will be "
+    "available once a floor map exists."
+)
 
 
 def _config_hash(config: dict[str, Any]) -> str:
@@ -78,7 +89,9 @@ def _build_config(
     device_id: str = _DEV,
     active_map_id: str = "",
     title: str = DASHBOARD_TITLE,
+    available_maps: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    has_maps = bool(available_maps)
     _d = device_id
     _m = f"map{active_map_id}_" if active_map_id else ""
     # Entity IDs — all use device_id prefix, suffixes match slugified translation names
@@ -241,7 +254,7 @@ def _build_config(
                     {"entity": f"sensor.{_d}_active_map",  "name": "Active Map"},
                     {"entity": f"select.{_d}_active_map",  "name": "Switch Map"},
                 ],
-            }] if _available(hass, f"sensor.{_d}_active_map") else []),
+            }] if (has_maps and _available(hass, f"sensor.{_d}_active_map")) else []),
         ],
     }
 
@@ -292,10 +305,14 @@ def _build_config(
             ],
         })
 
-    view_rooms: dict[str, Any] = {
-        "title": "Rooms",
-        "icon": "mdi:floor-plan",
-        "cards": room_cards or [
+    if not has_maps:
+        _rooms_cards: list[dict[str, Any]] = [
+            {"type": "markdown", "content": _NO_MAP_GUIDANCE}
+        ]
+    elif room_cards:
+        _rooms_cards = room_cards
+    else:
+        _rooms_cards = [
             {
                 "type": "markdown",
                 "content": (
@@ -304,7 +321,12 @@ def _build_config(
                     "then reload the integration."
                 ),
             }
-        ],
+        ]
+
+    view_rooms: dict[str, Any] = {
+        "title": "Rooms",
+        "icon": "mdi:floor-plan",
+        "cards": _rooms_cards,
     }
 
     stats_cards: list[dict[str, Any]] = [
@@ -341,24 +363,30 @@ def _build_config(
         "cards": stats_cards,
     }
 
-    # ── View 4: Live Map ──────────────────────────────────────────────
-    view_map: dict[str, Any] = {
-        "title": "Map",
-        "icon": "mdi:map",
-        "cards": [
-            {
-                "type": "custom:rowenta-map-card",
-                "entity": e_live_map,
-                "title": "Live Map",
-                "show_debug": True,
-            }
-        ],
-    }
-
-    views = [view_control, view_rooms, view_stats]
-    # Only add map view if the live map sensor is enabled
-    if _available(hass, e_live_map):
-        views.append(view_map)
+    # ── View 4: Map ───────────────────────────────────────────────────
+    if not has_maps:
+        view_map: dict[str, Any] = {
+            "title": "Map",
+            "icon": "mdi:map",
+            "cards": [{"type": "markdown", "content": _NO_MAP_GUIDANCE}],
+        }
+        views = [view_control, view_rooms, view_stats, view_map]
+    elif _available(hass, e_live_map):
+        view_map = {
+            "title": "Map",
+            "icon": "mdi:map",
+            "cards": [
+                {
+                    "type": "custom:rowenta-map-card",
+                    "entity": e_live_map,
+                    "title": "Live Map",
+                    "show_debug": True,
+                }
+            ],
+        }
+        views = [view_control, view_rooms, view_stats, view_map]
+    else:
+        views = [view_control, view_rooms, view_stats]
 
     return {
         "title": title,
@@ -407,6 +435,7 @@ class RobEyeDashboardManager:
         device_id: str = _DEV,
         active_map_id: str = "",
         friendly_name: str | None = None,
+        available_maps: list[dict[str, Any]] | None = None,
     ) -> bool:
         """Create or update the dashboard only when config has changed.
 
@@ -415,7 +444,7 @@ class RobEyeDashboardManager:
         """
         rooms = _extract_rooms(areas)
         title = friendly_name or self._title
-        config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title)
+        config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title, available_maps=available_maps)
         new_hash = _config_hash(config)
 
         _LOGGER.debug(
@@ -758,6 +787,7 @@ async def async_create_dashboard(
     device_id: str = _DEV,
     active_map_id: str = "",
     friendly_name: str | None = None,
+    available_maps: list[dict[str, Any]] | None = None,
 ) -> bool:
     """Create or update the dashboard. Idempotent — safe to call repeatedly.
 
@@ -765,4 +795,4 @@ async def async_create_dashboard(
     False if the lovelace store was not available or the save failed.
     """
     _mgr = manager or RobEyeDashboardManager(device_id=device_id, friendly_name=friendly_name)
-    return await _mgr.async_update(hass, areas, device_id, active_map_id=active_map_id, friendly_name=friendly_name)
+    return await _mgr.async_update(hass, areas, device_id, active_map_id=active_map_id, friendly_name=friendly_name, available_maps=available_maps)
