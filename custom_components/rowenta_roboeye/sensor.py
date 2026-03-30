@@ -47,9 +47,17 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN, FAN_SPEED_MAP, LOGGER, SIGNAL_AREAS_UPDATED
-
-_DOW_NAMES = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
+from .const import (
+    CLEANING_MODE_ALL,
+    CLEANING_MODE_ROOMS,
+    DOMAIN,
+    FAN_SPEED_LABELS,
+    FAN_SPEED_MAP,
+    LOGGER,
+    SCHEDULE_DAYS,
+    SCHEDULE_DAYS_FULL,
+    SIGNAL_AREAS_UPDATED,
+)
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
 
@@ -483,36 +491,73 @@ class RobEyeScheduleSensor(RobEyeEntity, SensorEntity):
         return {"schedules": self._parsed_schedules()}
 
     def _parsed_schedules(self) -> list[dict[str, Any]]:
+        """Parse all schedule entries from /get/schedule.
+
+        Confirmed (2026-03-29): returns ALL schedules, enabled and disabled.
+        enabled is int 0/1. cleaning_mode determines mode, not parameters length.
+        cleaning_parameter_set=0 means each room uses its own stored setting.
+        """
         raw_list = self.coordinator.schedule.get("schedule", [])
         if not isinstance(raw_list, list):
             return []
-        parsed: list[dict[str, Any]] = []
+
+        result = []
         for item in raw_list:
-            time_block = item.get("time", {})
-            task_block = item.get("task", {})
-            days_of_week = time_block.get("days_of_week", [])
-            days = [_DOW_NAMES.get(d, str(d)) for d in days_of_week]
-            hour = time_block.get("hour", 0)
-            minute = time_block.get("min", 0)
-            time_str = f"{hour:02d}:{minute:02d}"
-            fan_raw = int(task_block.get("cleaning_parameter_set", 0))
-            fan_speed = FAN_SPEED_MAP.get(str(fan_raw), "")
-            room_ids = task_block.get("parameters", [])
-            if room_ids:
-                rooms_str = ", ".join(
-                    _room_name_for_id(self.coordinator, int(r)) for r in room_ids
-                )
-            else:
-                rooms_str = "All Rooms"
-            parsed.append({
-                "enabled": bool(item.get("enabled", 0)),
-                "days": days,
-                "time": time_str,
+            if not isinstance(item, dict):
+                continue
+
+            t    = item.get("time", {})
+            task = item.get("task", {})
+
+            days_of_week  = t.get("days_of_week", [])
+            hour          = t.get("hour", 0)
+            minute        = t.get("min", 0)
+            cleaning_mode = int(task.get("cleaning_mode", CLEANING_MODE_ALL))
+            fan_raw       = int(task.get("cleaning_parameter_set", 0))
+            area_ids      = task.get("parameters", [])
+            task_map_id   = str(task.get("map_id", "")).strip()
+
+            # Resolve map display name from coordinator.available_maps
+            map_name = ""
+            for m in self.coordinator.available_maps:
+                if m["map_id"] == task_map_id:
+                    map_name = m["display_name"]
+                    break
+            if not map_name and task_map_id:
+                map_name = f"Map {task_map_id}"
+
+            # Mode from cleaning_mode field — NOT from parameters length
+            is_all = (cleaning_mode == CLEANING_MODE_ALL)
+
+            # Resolve room names
+            rooms: list[dict[str, Any]] = []
+            if not is_all:
+                for aid in area_ids:
+                    rooms.append({
+                        "id":   int(aid),
+                        "name": _room_name_for_id(self.coordinator, int(aid)),
+                    })
+
+            rooms_str = "All rooms" if is_all else " + ".join(r["name"] for r in rooms)
+
+            result.append({
+                "task_id":   item.get("task_id"),
+                "enabled":   bool(int(item.get("enabled", 0))),
+                "days":      [SCHEDULE_DAYS.get(d, str(d)) for d in days_of_week],
+                "days_full": [SCHEDULE_DAYS_FULL.get(d, str(d)) for d in days_of_week],
+                "time":      f"{hour:02d}:{minute:02d}",
+                "hour":      hour,
+                "minute":    minute,
+                "mode":      "all" if is_all else "rooms",
+                "map_id":    task_map_id,
+                "map_name":  map_name,
+                "rooms":     rooms,
                 "rooms_str": rooms_str,
-                "fan_raw": fan_raw,
-                "fan_speed": fan_speed,
+                "fan_raw":   fan_raw,
+                "fan_speed": FAN_SPEED_LABELS.get(fan_raw, str(fan_raw)),
             })
-        return parsed
+
+        return result
 
 
 def _room_name_for_id(coordinator: RobEyeCoordinator, area_id: int) -> str:

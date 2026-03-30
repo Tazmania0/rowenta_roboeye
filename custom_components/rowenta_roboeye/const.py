@@ -148,6 +148,27 @@ DATA_EXPLORATION = "exploration"
 DATA_RELOCALIZATION = "relocalization"
 DATA_SCHEDULE = "schedule"
 
+# ── Schedule ──────────────────────────────────────────────────────────
+CLEANING_MODE_ALL   = 1   # clean_all (whole home)
+CLEANING_MODE_ROOMS = 2   # clean_map (specific rooms)
+
+SCHEDULE_DAYS: dict[int, str] = {
+    1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu",
+    5: "Fri", 6: "Sat", 7: "Sun",
+}
+SCHEDULE_DAYS_FULL: dict[int, str] = {
+    1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday",
+    5: "Friday",  6: "Saturday", 7: "Sunday",
+}
+# 0 = per-room default (each room uses its own cleaning_parameter_set)
+FAN_SPEED_LABELS: dict[int, str] = {
+    0: "default",
+    1: "eco",
+    2: "normal",
+    3: "high",
+    4: "silent",
+}
+
 # ── Saved map ID ──────────────────────────────────────────────────────
 SAVED_MAP_ID = "3"  # permanent saved map; all rooms are on this map
 
