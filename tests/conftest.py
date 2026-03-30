@@ -63,7 +63,36 @@ MOCK_LIVE_PARAMETERS = {"area_cleaned": 50000, "cleaning_time": 720}
 MOCK_SENSOR_STATUS = {"cliff_sensor": "ok", "bump_sensor": "ok", "wheel_drop": "ok"}
 MOCK_ROBOT_FLAGS = {"has_mop": False, "has_camera": True}
 MOCK_MAP_STATUS = {"operation_map_id": 3, "active_map_id": 3}
-MOCK_MAPS = {"maps": [{"map_id": 3, "name": "Ground Floor"}, {"map_id": 4, "name": "First Floor"}]}
+MOCK_MAPS = {
+    "maps": [
+        {
+            "map_id": 3,
+            "map_meta_data": "Ground Floor",
+            "permanent_flag": "true",
+            "statistics": {
+                "area_size": 0,
+                "cleaning_counter": 5,
+                "estimated_cleaning_time": 0,
+                "average_cleaning_time": 1800,
+                "last_cleaned": {"year": 2026, "month": 3, "day": 20,
+                                 "hour": 11, "min": 21, "sec": 0},
+            },
+        },
+        {
+            "map_id": 4,
+            "map_meta_data": "First Floor",
+            "permanent_flag": "true",
+            "statistics": {
+                "area_size": 0,
+                "cleaning_counter": 0,
+                "estimated_cleaning_time": 0,
+                "average_cleaning_time": 0,
+                "last_cleaned": {"year": 2001, "month": 1, "day": 1,
+                                 "hour": 0, "min": 0, "sec": 0},
+            },
+        },
+    ]
+}
 
 MOCK_LOCALIZATION = {"localization_algo_input": [
     {"localization_type": "global",

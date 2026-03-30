@@ -82,13 +82,23 @@ _SENSOR_ENTITY_ID_SUFFIX: dict[str, str] = {
 # ── Helpers ───────────────────────────────────────────────────────────
 
 def _resolve_active_map_name(coordinator: RobEyeCoordinator) -> str | None:
-    """Return human-readable name of the currently active map."""
+    """Return the display name of the currently active map.
+
+    Confirmed naming (2026-03-29):
+      non-empty map_meta_data → user name e.g. "Дружба"
+      empty map_meta_data     → "Map {N}"  (1-based position in list)
+
+    Returns None until /get/map_status has been fetched at least once.
+    """
     active_id = coordinator.active_map_id
     if not active_id:
         return None
+
     for m in coordinator.available_maps:
         if m["map_id"] == active_id:
-            return f"{m['name']} (map {active_id})"
+            return m["display_name"]
+
+    # /get/maps not yet fetched — bare fallback
     return f"Map {active_id}"
 
 

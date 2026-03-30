@@ -289,11 +289,11 @@ def test_active_map_sensor_shows_map_name():
     coord = _make_coordinator()
     coord.active_map_id = "3"
     coord.available_maps = [
-        {"map_id": "3", "name": "Ground Floor"},
-        {"map_id": "4", "name": "First Floor"},
+        {"map_id": "3", "display_name": "Ground Floor"},
+        {"map_id": "4", "display_name": "First Floor"},
     ]
     result = _resolve_active_map_name(coord)
-    assert result == "Ground Floor (map 3)"
+    assert result == "Ground Floor"
 
 
 def test_active_map_sensor_falls_back_when_no_name():

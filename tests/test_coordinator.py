@@ -22,6 +22,7 @@ from custom_components.rowenta_roboeye.coordinator import (
     RobEyeCoordinator,
     _build_live_map_payload,
     _extract_rob_pose,
+    _parse_map_entry,
 )
 
 from .conftest import MOCK_AREAS, MOCK_CLEANING_GRID, MOCK_MAP_STATUS, MOCK_MAPS, MOCK_ROB_POSE, MOCK_STATISTICS, MOCK_STATUS
@@ -476,18 +477,121 @@ def test_active_map_id_falls_back_on_empty_string(coordinator):
     assert coordinator.active_map_id == "3"  # setup-time map_id
 
 
+CONFIRMED_MAPS_RESPONSE = {
+    "maps": [
+        {
+            "map_id": 3,
+            "map_meta_data": "Дружба ",
+            "permanent_flag": "true",
+            "statistics": {
+                "area_size": 0, "cleaning_counter": 5,
+                "estimated_cleaning_time": 0, "average_cleaning_time": 1800,
+                "last_cleaned": {"year": 2026, "month": 3, "day": 20,
+                                 "hour": 11, "min": 21, "sec": 0},
+            },
+        },
+        {
+            "map_id": 18,
+            "map_meta_data": "",
+            "permanent_flag": "true",
+            "statistics": {
+                "area_size": 0, "cleaning_counter": 0,
+                "estimated_cleaning_time": 0, "average_cleaning_time": 0,
+                "last_cleaned": {"year": 2001, "month": 1, "day": 1,
+                                 "hour": 0, "min": 0, "sec": 0},
+            },
+        },
+    ]
+}
+
+
+def test_parse_map_entry_named():
+    """Named map uses map_meta_data, stripped."""
+    result = _parse_map_entry(CONFIRMED_MAPS_RESPONSE["maps"][0], position=1, active_map_id="3")
+    assert result["map_id"] == "3"
+    assert result["display_name"] == "Дружба"
+    assert result["user_name"] == "Дружба"
+    assert result["is_active"] is True
+
+
+def test_parse_map_entry_unnamed_uses_position():
+    """Unnamed map uses 1-based position, NOT map_id."""
+    result = _parse_map_entry(CONFIRMED_MAPS_RESPONSE["maps"][1], position=2, active_map_id="3")
+    assert result["display_name"] == "Map 2"
+    assert result["map_id"] == "18"        # map_id is still 18
+    assert result["is_active"] is False
+
+
+def test_parse_map_entry_strips_whitespace():
+    raw = {"map_id": 3, "map_meta_data": "  Дружба  ", "permanent_flag": "true", "statistics": {}}
+    result = _parse_map_entry(raw, position=1)
+    assert result["display_name"] == "Дружба"
+
+
+def test_parse_map_entry_permanent_flag_is_string_not_bool():
+    """permanent_flag is the string "true", not Python True."""
+    raw = {"map_id": 5, "map_meta_data": "Test", "permanent_flag": "true", "statistics": {}}
+    result = _parse_map_entry(raw, position=1)
+    assert result is not None
+
+
+def test_parse_map_entry_skips_non_permanent():
+    raw = {"map_id": 99, "map_meta_data": "", "permanent_flag": "false", "statistics": {}}
+    assert _parse_map_entry(raw, position=1) is None
+
+
+def test_parse_map_entry_last_cleaned_sentinel_2001():
+    """year 2001 → never cleaned → last_cleaned is None."""
+    result = _parse_map_entry(CONFIRMED_MAPS_RESPONSE["maps"][1], position=2)
+    assert result["statistics"]["last_cleaned"] is None
+
+
+def test_parse_map_entry_real_last_cleaned():
+    result = _parse_map_entry(CONFIRMED_MAPS_RESPONSE["maps"][0], position=1)
+    assert result["statistics"]["last_cleaned"] == "2026-03-20"
+
+
 def test_available_maps_parses_dict_entries(coordinator):
     coordinator.data = {"maps": dict(MOCK_MAPS)}
     maps = coordinator.available_maps
     assert len(maps) == 2
-    assert maps[0] == {"map_id": "3", "name": "Ground Floor"}
-    assert maps[1] == {"map_id": "4", "name": "First Floor"}
+    assert maps[0]["map_id"] == "3"
+    assert maps[0]["display_name"] == "Ground Floor"
+    assert maps[0]["user_name"] == "Ground Floor"
+    assert maps[1]["map_id"] == "4"
+    assert maps[1]["display_name"] == "First Floor"
 
 
-def test_available_maps_handles_int_entries(coordinator):
-    coordinator.data = {"maps": {"maps": [3, 4]}}
+def test_available_maps_skips_non_permanent(coordinator):
+    coordinator.data = {"maps": {"maps": [
+        {"map_id": 3, "map_meta_data": "Floor", "permanent_flag": "true", "statistics": {}},
+        {"map_id": 99, "map_meta_data": "", "permanent_flag": "false", "statistics": {}},
+    ]}}
     maps = coordinator.available_maps
-    assert maps == [{"map_id": "3", "name": "Map 3"}, {"map_id": "4", "name": "Map 4"}]
+    assert len(maps) == 1
+    assert maps[0]["map_id"] == "3"
+
+
+def test_available_maps_unnamed_uses_position(coordinator):
+    coordinator.data = {"maps": {"maps": [
+        {"map_id": 18, "map_meta_data": "", "permanent_flag": "true", "statistics": {}},
+    ]}}
+    maps = coordinator.available_maps
+    assert maps[0]["display_name"] == "Map 1"
+    assert maps[0]["map_id"] == "18"
+
+
+def test_available_maps_full(coordinator):
+    coordinator.data = {
+        "map_status": {"active_map_id": 3},
+        "maps": CONFIRMED_MAPS_RESPONSE,
+    }
+    maps = coordinator.available_maps
+    assert len(maps) == 2
+    assert maps[0]["display_name"] == "Дружба"
+    assert maps[0]["is_active"] is True
+    assert maps[1]["display_name"] == "Map 2"
+    assert maps[1]["is_active"] is False
 
 
 def test_available_maps_empty_when_no_data(coordinator):

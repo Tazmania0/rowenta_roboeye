@@ -16,6 +16,51 @@ from .api import CannotConnect, RobEyeApiClient
 from .const import CONF_HOSTNAME, CONF_MAP_ID, CONF_NAME, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER
 
 
+def _parse_maps(
+    maps_response: dict,
+    active_map_id: str = "",
+) -> list[dict[str, str]]:
+    """Build the map selector list from /get/maps for the config flow dropdown.
+
+    Returns list of {"id": "3", "label": "Дружба ✓"} or {"id": "18", "label": "Map 2"}.
+
+    Rules:
+      - Only permanent maps (permanent_flag == "true" string)
+      - Non-empty map_meta_data.strip() → use as label
+      - Empty map_meta_data → "Map {N}" (1-based position in array)
+      - Active map gets " ✓" appended so user can see current floor
+      - Falls back to single DEFAULT_MAP_ID entry if response is empty/unparseable
+    """
+    raw = maps_response.get("maps", []) if isinstance(maps_response, dict) else []
+
+    result: list[dict[str, str]] = []
+    position = 0
+
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("permanent_flag", "")).strip().lower() != "true":
+            continue
+
+        map_id = str(item.get("map_id", "")).strip()
+        if not map_id:
+            continue
+
+        position += 1
+        meta = str(item.get("map_meta_data", "")).strip()
+        label = meta if meta else f"Map {position}"
+
+        if active_map_id and map_id == str(active_map_id):
+            label += " ✓"
+
+        result.append({"id": map_id, "label": label})
+
+    if not result:
+        result = [{"id": DEFAULT_MAP_ID, "label": "Map 1"}]
+
+    return result
+
+
 class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Rowenta RobEye."""
 

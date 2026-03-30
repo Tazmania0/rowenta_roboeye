@@ -148,22 +148,30 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def available_maps(self) -> list[dict]:
-        """List of all saved maps from /get/maps."""
+        """Normalised list of permanent floor maps from /get/maps.
+
+        Each entry:
+          map_id:       "3"
+          display_name: "Дружба"  or  "Map 2"  (native app naming logic)
+          user_name:    "Дружба"  or  ""       (raw map_meta_data, stripped)
+          is_active:    True / False            (matches active_map_id)
+          statistics:   {area_size, cleaning_counter, last_cleaned, ...}
+
+        Non-permanent maps (temporary/live session maps) are excluded.
+        Returns empty list until /get/maps has been fetched.
+        """
         raw = (self.data or {}).get(DATA_MAPS, {})
         maps_list = raw.get("maps", []) if isinstance(raw, dict) else []
+        active = self.active_map_id
+
         result = []
-        for m in maps_list:
-            if isinstance(m, dict):
-                result.append({
-                    "map_id": str(m.get("map_id", m.get("id", ""))),
-                    "name": str(
-                        m.get("name")
-                        or m.get("map_name")
-                        or f"Map {m.get('map_id', '?')}"
-                    ),
-                })
-            elif isinstance(m, (int, str)):
-                result.append({"map_id": str(m), "name": f"Map {m}"})
+        position = 0
+        for entry in maps_list:
+            position += 1
+            parsed = _parse_map_entry(entry, position=position, active_map_id=active)
+            if parsed:
+                result.append(parsed)
+
         return result
 
     # ── Active map switching ──────────────────────────────────────────
@@ -661,6 +669,65 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_send_command(self, coro_func, *args: Any, **kwargs: Any) -> None:
         await coro_func(*args, **kwargs)
         await self.async_request_refresh()
+
+
+# ── Map helpers ───────────────────────────────────────────────────────
+
+def _parse_map_entry(
+    raw: dict,
+    position: int,
+    active_map_id: str = "",
+) -> dict[str, Any] | None:
+    """Normalise one entry from /get/maps into a standard map dict.
+
+    Confirmed field names (2026-03-29):
+      map_id          int    — numeric map identifier
+      map_meta_data   str    — user name; strip(); may be ""
+      permanent_flag  str    — "true" string for saved floor maps
+      statistics      dict   — per-map stats
+
+    Display name logic (matches native app):
+      non-empty map_meta_data.strip() → use it
+      empty                           → f"Map {position}"  (1-based)
+
+    Returns None for non-permanent maps (permanent_flag != "true").
+    """
+    if not isinstance(raw, dict):
+        return None
+
+    map_id = str(raw.get("map_id", "")).strip()
+    if not map_id:
+        return None
+
+    # permanent_flag is a STRING "true", not a boolean
+    if str(raw.get("permanent_flag", "")).strip().lower() != "true":
+        return None
+
+    meta = str(raw.get("map_meta_data", "")).strip()
+    display_name = meta if meta else f"Map {position}"
+    is_active = (map_id == str(active_map_id)) if active_map_id else False
+
+    stats_raw = raw.get("statistics", {}) or {}
+    lc = stats_raw.get("last_cleaned", {}) or {}
+    never = lc.get("year", 2001) <= 2001
+    last_cleaned_str = (
+        None if never
+        else f"{lc['year']}-{lc['month']:02d}-{lc['day']:02d}"
+    )
+
+    return {
+        "map_id":       map_id,
+        "display_name": display_name,
+        "user_name":    meta,           # raw user name; "" if not set
+        "is_active":    is_active,
+        "statistics": {
+            "area_size":               stats_raw.get("area_size", 0),
+            "cleaning_counter":        stats_raw.get("cleaning_counter", 0),
+            "estimated_cleaning_time": stats_raw.get("estimated_cleaning_time", 0),
+            "average_cleaning_time":   stats_raw.get("average_cleaning_time", 0),
+            "last_cleaned":            last_cleaned_str,
+        },
+    }
 
 
 # ── Sensor-values helpers ─────────────────────────────────────────────

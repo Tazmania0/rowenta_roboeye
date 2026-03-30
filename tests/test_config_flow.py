@@ -6,8 +6,29 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.rowenta_roboeye.api import CannotConnect
-from custom_components.rowenta_roboeye.config_flow import RobEyeConfigFlow, RobEyeOptionsFlow
+from custom_components.rowenta_roboeye.config_flow import RobEyeConfigFlow, RobEyeOptionsFlow, _parse_maps
 from custom_components.rowenta_roboeye.const import DEFAULT_MAP_ID
+
+from .conftest import MOCK_MAPS
+
+
+# Confirmed live-device response for _parse_maps tests
+_CONFIRMED_MAPS = {
+    "maps": [
+        {
+            "map_id": 3,
+            "map_meta_data": "Дружба ",
+            "permanent_flag": "true",
+            "statistics": {},
+        },
+        {
+            "map_id": 18,
+            "map_meta_data": "",
+            "permanent_flag": "true",
+            "statistics": {},
+        },
+    ]
+}
 
 
 def _make_flow():
@@ -192,3 +213,55 @@ async def test_options_flow_shows_form_without_input():
     flow = _make_options_flow()
     result = await flow.async_step_init(None)
     assert result["type"] == "form"
+
+
+# ── _parse_maps helper ────────────────────────────────────────────────
+
+def test_parse_maps_named_active():
+    result = _parse_maps(_CONFIRMED_MAPS, active_map_id="3")
+    assert result[0]["id"] == "3"
+    assert result[0]["label"] == "Дружба ✓"
+
+
+def test_parse_maps_unnamed_position_label():
+    result = _parse_maps(_CONFIRMED_MAPS, active_map_id="3")
+    assert result[1]["id"] == "18"
+    assert result[1]["label"] == "Map 2"    # position 2, not "Map 18"
+
+
+def test_parse_maps_no_active_no_checkmark():
+    result = _parse_maps(_CONFIRMED_MAPS, active_map_id="")
+    assert result[0]["label"] == "Дружба"
+    assert "✓" not in result[0]["label"]
+
+
+def test_parse_maps_permanent_flag_string():
+    """Must not fail when permanent_flag is the string "true"."""
+    result = _parse_maps(_CONFIRMED_MAPS)
+    assert len(result) == 2
+
+
+def test_parse_maps_skips_non_permanent():
+    data = {"maps": [
+        {"map_id": 3, "map_meta_data": "Floor", "permanent_flag": "true"},
+        {"map_id": 99, "map_meta_data": "Temp", "permanent_flag": "false"},
+    ]}
+    result = _parse_maps(data)
+    assert len(result) == 1
+    assert result[0]["id"] == "3"
+
+
+def test_parse_maps_empty_falls_back():
+    result = _parse_maps({})
+    assert len(result) == 1
+    assert result[0]["id"] == DEFAULT_MAP_ID
+
+
+def test_parse_maps_mock_maps_fixture():
+    """MOCK_MAPS confirmed format parses to named maps."""
+    result = _parse_maps(MOCK_MAPS)
+    assert len(result) == 2
+    assert result[0]["id"] == "3"
+    assert result[0]["label"] == "Ground Floor"
+    assert result[1]["id"] == "4"
+    assert result[1]["label"] == "First Floor"
