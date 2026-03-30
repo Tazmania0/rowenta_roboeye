@@ -90,8 +90,9 @@ API_SET_FAN_SPEED = "/set/switch_cleaning_parameter_set"
 SERVICE_CLEAN_ROOM = "clean_room"
 
 # ── cleaning_strategy_mode values ────────────────────────────────────
-STRATEGY_NORMAL = "1"
-STRATEGY_DEEP = "2"
+STRATEGY_NORMAL        = "1"
+STRATEGY_WALLS_CORNERS = "2"
+STRATEGY_DEEP          = "3"
 
 # ── API mode strings ──────────────────────────────────────────────────
 MODE_CLEANING = "cleaning"
