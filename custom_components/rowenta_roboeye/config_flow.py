@@ -13,52 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .api import CannotConnect, RobEyeApiClient
-from .const import CONF_HOSTNAME, CONF_MAP_ID, CONF_NAME, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER
-
-
-def _parse_maps(
-    maps_response: dict,
-    active_map_id: str = "",
-) -> list[dict[str, str]]:
-    """Build the map selector list from /get/maps for the config flow dropdown.
-
-    Returns list of {"id": "3", "label": "Дружба ✓"} or {"id": "18", "label": "Map 2"}.
-
-    Rules:
-      - Only permanent maps (permanent_flag == "true" string)
-      - Non-empty map_meta_data.strip() → use as label
-      - Empty map_meta_data → "Map {N}" (1-based position in array)
-      - Active map gets " ✓" appended so user can see current floor
-      - Falls back to single DEFAULT_MAP_ID entry if response is empty/unparseable
-    """
-    raw = maps_response.get("maps", []) if isinstance(maps_response, dict) else []
-
-    result: list[dict[str, str]] = []
-    position = 0
-
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("permanent_flag", "")).strip().lower() != "true":
-            continue
-
-        map_id = str(item.get("map_id", "")).strip()
-        if not map_id:
-            continue
-
-        position += 1
-        meta = str(item.get("map_meta_data", "")).strip()
-        label = meta if meta else f"Map {position}"
-
-        if active_map_id and map_id == str(active_map_id):
-            label += " ✓"
-
-        result.append({"id": map_id, "label": label})
-
-    if not result:
-        result = [{"id": DEFAULT_MAP_ID, "label": "Map 1"}]
-
-    return result
+from .const import CONF_HOSTNAME, CONF_NAME, DEFAULT_DEVICE_NAME, DOMAIN, LOGGER
 
 
 class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -70,7 +25,6 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         """Initialise the config flow."""
         self._host: str = ""
         self._hostname: str = ""
-        self._map_id: str = DEFAULT_MAP_ID
 
     # ------------------------------------------------------------------
     # Step 1a — Manual IP entry (fallback when mDNS unavailable)
@@ -84,7 +38,6 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             host: str = user_input[CONF_HOST].strip()
-            map_id: str = user_input[CONF_MAP_ID].strip()
             name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
 
             try:
@@ -103,7 +56,6 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_HOST: host,
                         CONF_HOSTNAME: host,
-                        CONF_MAP_ID: map_id,
                         CONF_NAME: name,
                     },
                 )
@@ -113,7 +65,6 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_HOST): cv.string,
-                    vol.Required(CONF_MAP_ID, default=DEFAULT_MAP_ID): cv.string,
                     vol.Optional(CONF_NAME, default=DEFAULT_DEVICE_NAME): cv.string,
                 }
             ),
@@ -176,7 +127,6 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
             data={
                 CONF_HOST: self._host,
                 CONF_HOSTNAME: self._hostname,
-                CONF_MAP_ID: self._map_id,
                 CONF_NAME: name,
             },
         )
@@ -201,7 +151,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class RobEyeOptionsFlow(OptionsFlow):
-    """Allow updating IP address, map ID, and name without removing the integration."""
+    """Allow updating IP address and name without removing the integration."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialise options flow."""
@@ -214,12 +164,10 @@ class RobEyeOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
 
         current_host = self._config_entry.data.get(CONF_HOST, "")
-        current_map_id = self._config_entry.data.get(CONF_MAP_ID, DEFAULT_MAP_ID)
         current_name = self._config_entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
 
         if user_input is not None:
             host: str = user_input[CONF_HOST].strip()
-            map_id: str = user_input[CONF_MAP_ID].strip()
             name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
             try:
                 client = RobEyeApiClient(host=host)
@@ -234,7 +182,6 @@ class RobEyeOptionsFlow(OptionsFlow):
                     data={
                         CONF_HOST: host,
                         CONF_HOSTNAME: self._config_entry.data.get(CONF_HOSTNAME, host),
-                        CONF_MAP_ID: map_id,
                         CONF_NAME: name,
                     },
                 )
@@ -244,7 +191,6 @@ class RobEyeOptionsFlow(OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_HOST, default=current_host): cv.string,
-                    vol.Required(CONF_MAP_ID, default=current_map_id): cv.string,
                     vol.Optional(CONF_NAME, default=current_name): cv.string,
                 }
             ),

@@ -12,15 +12,13 @@
     "step": {
       "user": {
         "title": "Set up Rowenta Xplorer 120",
-        "description": "Enter the local IP address of your vacuum and the map ID shown in the RobEye app.",
+        "description": "Enter the local IP address of your vacuum. The map will be fetched automatically from the device.",
         "data": {
           "host": "Host",
-          "map_id": "Map ID",
           "name": "Name"
         },
         "data_description": {
           "host": "Local IP address of the vacuum (e.g. 192.168.1.50).",
-          "map_id": "Map ID from the RobEye app (default: 3).",
           "name": "A friendly nickname for this vacuum (e.g. Merry, Daisy, Rosie)."
         }
       },
@@ -51,7 +49,6 @@
         "title": "Update Rowenta Xplorer 120 Settings",
         "data": {
           "host": "Host",
-          "map_id": "Map ID",
           "name": "Name"
         },
         "data_description": {
