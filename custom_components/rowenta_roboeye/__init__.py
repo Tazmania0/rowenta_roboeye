@@ -10,7 +10,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
-from .const import CONF_MAP_ID, CONF_NAME, DEFAULT_DEVICE_NAME, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, VERSION
+from .const import CONF_MAP_ID, CONF_NAME, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, VERSION
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
@@ -37,7 +37,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up Rowenta RobEye from a config entry."""
     host: str = config_entry.data[CONF_HOST]
-    map_id: str = config_entry.data[CONF_MAP_ID]
+    map_id: str = config_entry.data.get(CONF_MAP_ID, DEFAULT_MAP_ID)
     friendly_name: str = config_entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
 
     client = RobEyeApiClient(host=host)
