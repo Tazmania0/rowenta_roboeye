@@ -25,8 +25,8 @@ def _make_coordinator(data=None):
     # by delegating to a real coordinator instance when needed.
     # For simplicity, set them as plain properties on the mock.
     coord.available_maps = [
-        {"map_id": "3", "name": "Ground Floor"},
-        {"map_id": "4", "name": "First Floor"},
+        {"map_id": "3", "display_name": "Ground Floor"},
+        {"map_id": "4", "display_name": "First Floor"},
     ]
     coord.active_map_id = "3"
     return coord

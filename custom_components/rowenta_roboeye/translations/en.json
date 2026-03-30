@@ -32,6 +32,16 @@
         "data_description": {
           "name": "A friendly nickname for this vacuum (e.g. Merry, Daisy, Rosie)."
         }
+      },
+      "select_map": {
+        "title": "Select Floor Map",
+        "description": "Found {map_count} map(s) on your vacuum at {host}.",
+        "data": {
+          "map_id": "Floor Map"
+        },
+        "data_description": {
+          "map_id": "Select the floor to use. Maps you have named in the RobEye app appear by name. Unnamed maps appear as Map 1, Map 2, etc. The active map is marked with ✓."
+        }
       }
     }
   },

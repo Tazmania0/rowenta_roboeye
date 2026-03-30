@@ -192,7 +192,36 @@ class RobEyeApiClient:
         return await self._get(API_GET_AREAS, params=params)
 
     async def get_maps(self) -> dict[str, Any]:
-        """GET /get/maps — list of available floor-plan maps."""
+        """GET /get/maps — list of all saved floor-plan maps.
+
+        Confirmed response (live device 2026-03-29):
+        {
+          "maps": [
+            {
+              "map_id": 3,
+              "map_meta_data": "Дружба ",    ← user name; strip(); may be ""
+              "permanent_flag": "true",        ← STRING not boolean
+              "statistics": {
+                "area_size": 0,
+                "cleaning_counter": 0,
+                "estimated_cleaning_time": 0,
+                "average_cleaning_time": 0,
+                "last_cleaned": {"year": 2001, "month": 1, "day": 1,
+                                 "hour": 0, "min": 0, "sec": 0}
+              }
+            },
+            ...
+          ]
+        }
+
+        Display name rules (matches native app):
+          non-empty map_meta_data.strip() → use it           e.g. "Дружба"
+          empty map_meta_data             → "Map {N}"        N = 1-based position
+
+        permanent_flag == "true" (string) marks saved floor maps.
+        Non-permanent entries (temporary/live maps) must be skipped.
+        year 2001 in last_cleaned is the firmware sentinel for never cleaned.
+        """
         return await self._get(API_GET_MAPS)
 
     async def get_map_status(self) -> dict[str, Any]:

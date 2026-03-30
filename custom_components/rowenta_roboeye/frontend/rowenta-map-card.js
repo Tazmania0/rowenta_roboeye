@@ -1,9 +1,10 @@
-// Rowenta Xplorer 120 — Live Map Card  v2.6.0
+// Rowenta Xplorer 120 — Live Map Card  v2.6.1
 // Renders rooms, walls, dock, robot, live outline and post-run session
 // replay (cleaning grid + robot trail) from _build_live_map_payload() schema.
 // v2.6.0: avoidance zones rendered as hatched red overlay.
+// v2.6.1: auto-unfreeze and full reload when active map_id changes.
 
-const VERSION = "2.6.0";
+const VERSION = "2.6.1";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -98,7 +99,16 @@ class RowentaMapCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    if (this._frozen) return;
+    if (this._frozen) {
+      // Auto-unfreeze when the active map changes so stale geometry is not shown.
+      const newMapId = hass.states[this._config.entity]?.attributes?.map_id;
+      const oldMapId = this._lastAttrs?.map_id;
+      if (newMapId !== undefined && oldMapId !== undefined && newMapId !== oldMapId) {
+        this._frozen = false;
+      } else {
+        return;
+      }
+    }
     try { this._render(); }
     catch (err) {
       console.error("rowenta-map-card:", err);

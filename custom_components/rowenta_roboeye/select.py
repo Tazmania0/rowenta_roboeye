@@ -196,7 +196,7 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
 
     def _build_options(self) -> list[str]:
         maps = self.coordinator.available_maps
-        self._name_to_id = {m["name"]: m["map_id"] for m in maps}
+        self._name_to_id = {m["display_name"]: m["map_id"] for m in maps}
         opts = list(self._name_to_id.keys())
         return opts if opts else [self.coordinator.active_map_id]
 
