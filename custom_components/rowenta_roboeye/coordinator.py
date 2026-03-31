@@ -99,6 +99,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Track known area IDs so we can detect additions/removals without reload
         self._known_area_ids: set = set()
+        # Which map_id was active when DATA_AREAS was last fetched.
+        # Compared by platforms before creating entities to avoid stale-signal races.
+        self._areas_fetched_for_map_id: str | None = None
 
         # Cleaning strategy — set by strategy select or deep-clean switch; read by all clean operations
         self.cleaning_strategy: str = STRATEGY_DEFAULT
@@ -177,12 +180,22 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ── Active map switching ──────────────────────────────────────────
 
+    @property
+    def areas_map_id(self) -> str | None:
+        """Map ID for which DATA_AREAS was last fetched.
+
+        Platform entity-builders compare this against active_map_id to guard
+        against stale-signal races when the user switches maps rapidly.
+        """
+        return self._areas_fetched_for_map_id
+
     async def async_set_active_map(self, map_id: str) -> None:
         """Override the active map and force-reload all map-dependent data."""
         self._manual_map_id = map_id
         self._last_active_map_id = map_id
         self._last_areas = None
         self._last_map_geometry = None
+        self._areas_fetched_for_map_id = None  # invalidate until refresh fetches new areas
         self._known_area_ids = set()
         self._robot_path = []
         self._last_session_grid = {}
@@ -432,7 +445,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._last_areas is None or (
                 now - self._last_areas
             ) >= timedelta(seconds=SCAN_INTERVAL_AREAS):
-                new_areas_blob = await self.client.get_areas(self.active_map_id)
+                _fetched_for = self.active_map_id
+                new_areas_blob = await self.client.get_areas(_fetched_for)
+                self._areas_fetched_for_map_id = _fetched_for
                 data[DATA_AREAS] = new_areas_blob
 
                 try:
@@ -483,6 +498,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         self._last_areas = None
                         self._last_map_geometry = None
+                        self._areas_fetched_for_map_id = None
                         self._known_area_ids = set()
                         self._robot_path = []
                         self._last_session_grid = {}

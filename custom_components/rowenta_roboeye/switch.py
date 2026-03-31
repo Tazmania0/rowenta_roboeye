@@ -42,6 +42,9 @@ async def async_setup_entry(
         new_entities: list = []
         new_ids: set = set()
         _map = coordinator.active_map_id
+        # Guard: skip if areas data was fetched for a different map (stale-signal race).
+        if coordinator.areas_map_id != _map:
+            return new_entities, new_ids
         for area in areas:
             area_id = area.get("id")
             if area_id is None or (_map, area_id) in already_known:
