@@ -27,6 +27,7 @@ from .const import (
     LOGGER,
     SIGNAL_AREAS_UPDATED,
     STRATEGY_DEFAULT,
+    STRATEGY_DEEP,
     STRATEGY_LABELS,
     STRATEGY_OPTIONS,
     STRATEGY_REVERSE_MAP,
@@ -105,6 +106,14 @@ def _build_room_select_entities(
                 room_name=room_name,
             )
         )
+        new_entities.append(
+            RobEyeRoomStrategySelect(
+                coordinator=coordinator,
+                config_entry=config_entry,
+                area_id=str(area_id),
+                room_name=room_name,
+            )
+        )
         new_ids.add((_map, area_id))
     return new_entities, new_ids
 
@@ -169,10 +178,15 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         self._area_id = area_id
         self._room_name = room_name
         _map = coordinator.active_map_id
+        self._map_id = _map
         self._attr_unique_id = f"room_fan_speed_map{_map}_{area_id}_{coordinator.device_id}"
         self._attr_name = f"{room_name} Fan Speed"
         self.entity_id = f"select.{coordinator.device_id}_map{_map}_room_{area_id}_fan_speed"
         self._selected: str = "normal"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._map_id == self.coordinator.active_map_id
 
     @property
     def current_option(self) -> str:
@@ -261,16 +275,24 @@ class RobEyeStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"cleaning_strategy_{coordinator.device_id}"
         self.entity_id = f"select.{coordinator.device_id}_cleaning_strategy"
+        self._last_non_deep: str = STRATEGY_LABELS[STRATEGY_DEFAULT]
 
     @property
     def current_option(self) -> str:
-        return STRATEGY_LABELS.get(self.coordinator.cleaning_strategy, STRATEGY_LABELS[STRATEGY_DEFAULT])
+        strategy = self.coordinator.cleaning_strategy
+        if strategy == STRATEGY_DEEP:
+            # Deep is controlled by the switch; keep select showing last non-deep choice
+            return self._last_non_deep
+        label = STRATEGY_LABELS.get(strategy, STRATEGY_LABELS[STRATEGY_DEFAULT])
+        self._last_non_deep = label
+        return label
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         if (last_state := await self.async_get_last_state()) is not None:
             api_val = STRATEGY_REVERSE_MAP.get(last_state.state)
-            if api_val is not None:
+            if api_val is not None and api_val != STRATEGY_DEEP:
+                self._last_non_deep = last_state.state
                 self.coordinator.cleaning_strategy = api_val
 
     async def async_select_option(self, option: str) -> None:
@@ -278,5 +300,59 @@ class RobEyeStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
         if api_val is None:
             LOGGER.warning("Unknown cleaning strategy option: %s", option)
             return
+        self._last_non_deep = option
         self.coordinator.cleaning_strategy = api_val
+        self.async_write_ha_state()
+
+
+# ── Per-room strategy select ──────────────────────────────────────────
+
+class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
+    """Stores the desired cleaning strategy for a single room (local only).
+
+    Options are Default, Normal, and Walls & Corners. Deep strategy is not
+    offered here; use the per-room deep clean switch for that.
+    When the room deep clean switch is ON it takes precedence over this select.
+    Entity is unavailable while its map is not the active map.
+    """
+
+    _attr_icon = "mdi:layers-triple"
+    _attr_options = STRATEGY_OPTIONS
+
+    def __init__(
+        self,
+        coordinator: RobEyeCoordinator,
+        config_entry: ConfigEntry,
+        area_id: str,
+        room_name: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._area_id = area_id
+        self._room_name = room_name
+        _map = coordinator.active_map_id
+        self._map_id = _map
+        self._attr_unique_id = f"room_strategy_map{_map}_{area_id}_{coordinator.device_id}"
+        self._attr_name = f"{room_name} Strategy"
+        self.entity_id = f"select.{coordinator.device_id}_map{_map}_room_{area_id}_strategy"
+        self._selected: str = STRATEGY_LABELS[STRATEGY_DEFAULT]
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._map_id == self.coordinator.active_map_id
+
+    @property
+    def current_option(self) -> str:
+        return self._selected
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last_state := await self.async_get_last_state()) is not None:
+            if last_state.state in STRATEGY_OPTIONS:
+                self._selected = last_state.state
+
+    async def async_select_option(self, option: str) -> None:
+        if option not in STRATEGY_OPTIONS:
+            LOGGER.warning("Unknown strategy for room %s: %s", self._room_name, option)
+            return
+        self._selected = option
         self.async_write_ha_state()

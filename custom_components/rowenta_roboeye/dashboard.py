@@ -277,14 +277,19 @@ def _build_config(
                     "icon": "mdi:speedometer",
                 },
                 {
-                    "entity": f"button.{device_id}_{_m}clean_room_{rid}",
-                    "name": "▶  Start Cleaning",
-                    "icon": "mdi:broom",
+                    "entity": f"select.{device_id}_{_m}room_{rid}_strategy",
+                    "name": "Strategy",
+                    "icon": "mdi:layers-triple",
                 },
                 {
                     "entity": f"switch.{device_id}_{_m}room_{rid}_deep_clean",
-                    "name": "Deep clean this room",
+                    "name": "Deep clean (overrides strategy)",
                     "icon": "mdi:robot-vacuum-variant",
+                },
+                {
+                    "entity": f"button.{device_id}_{_m}clean_room_{rid}",
+                    "name": "▶  Start Cleaning",
+                    "icon": "mdi:broom",
                 },
                 {"type": "divider"},
                 {
