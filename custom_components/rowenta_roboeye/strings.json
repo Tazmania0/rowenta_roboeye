@@ -165,6 +165,15 @@
       },
       "active_map": {
         "name": "Active map"
+      },
+      "cleaning_strategy": {
+        "name": "Cleaning strategy",
+        "state": {
+          "Default": "Default",
+          "Normal": "Normal",
+          "Walls & Corners": "Walls & Corners",
+          "Deep": "Deep"
+        }
       }
     },
     "switch": {

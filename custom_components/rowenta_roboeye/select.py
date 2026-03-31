@@ -1,10 +1,13 @@
 """Select entities for the Rowenta RobEye integration.
 
-Global select:
+Global selects:
   RobEyeCleaningModeSelect  — sets the vacuum's active fan speed
+  RobEyeStrategySelect      — sets the global cleaning strategy
 
 Per-room selects (one per discovered area):
-  RobEyeRoomFanSpeedSelect  — stores desired fan speed for that room locally.
+  RobEyeRoomFanSpeedSelect    — stores desired fan speed for that room locally.
+  RobEyeRoomStrategySelect    — stores desired cleaning strategy for that room locally.
+                                "Default" means inherit the global strategy select value.
   Added dynamically via SIGNAL_AREAS_UPDATED without reload.
 """
 
@@ -61,7 +64,7 @@ async def async_setup_entry(
             coordinator, config_entry, coordinator.areas, known_ids
         )
         if new_entities:
-            LOGGER.debug("select: adding %d new room fan speed selects", len(new_entities))
+            LOGGER.debug("select: adding %d new room selects", len(new_entities))
             async_add_entities(new_entities)
             known_ids.update(new_area_ids)
 
@@ -99,6 +102,14 @@ def _build_room_select_entities(
             continue
         new_entities.append(
             RobEyeRoomFanSpeedSelect(
+                coordinator=coordinator,
+                config_entry=config_entry,
+                area_id=str(area_id),
+                room_name=room_name,
+            )
+        )
+        new_entities.append(
+            RobEyeRoomStrategySelect(
                 coordinator=coordinator,
                 config_entry=config_entry,
                 area_id=str(area_id),
@@ -279,4 +290,51 @@ class RobEyeStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
             LOGGER.warning("Unknown cleaning strategy option: %s", option)
             return
         self.coordinator.cleaning_strategy = api_val
+        self.async_write_ha_state()
+
+
+# ── Per-room cleaning strategy select ────────────────────────────────
+
+class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
+    """Per-room cleaning strategy override.
+
+    "Default" means use the global strategy select value when the room's
+    clean button is pressed.  Any other option overrides the global for
+    that specific room only.  Stored locally — no API call until clean.
+    """
+
+    _attr_icon = "mdi:layers-triple"
+    _attr_options = STRATEGY_OPTIONS
+
+    def __init__(
+        self,
+        coordinator: RobEyeCoordinator,
+        config_entry: ConfigEntry,
+        area_id: str,
+        room_name: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._area_id = area_id
+        self._room_name = room_name
+        _map = coordinator.active_map_id
+        self._attr_unique_id = f"room_strategy_map{_map}_{area_id}_{coordinator.device_id}"
+        self._attr_name = f"{room_name} Cleaning Strategy"
+        self.entity_id = f"select.{coordinator.device_id}_map{_map}_room_{area_id}_strategy"
+        self._selected: str = STRATEGY_LABELS[STRATEGY_DEFAULT]
+
+    @property
+    def current_option(self) -> str:
+        return self._selected
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last_state := await self.async_get_last_state()) is not None:
+            if last_state.state in STRATEGY_OPTIONS:
+                self._selected = last_state.state
+
+    async def async_select_option(self, option: str) -> None:
+        if option not in STRATEGY_OPTIONS:
+            LOGGER.warning("Unknown strategy for room %s: %s", self._room_name, option)
+            return
+        self._selected = option
         self.async_write_ha_state()
