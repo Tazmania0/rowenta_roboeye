@@ -145,12 +145,12 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
 
     async def async_start(self, **kwargs: Any) -> None:
         """Start a full-home clean at the current fan speed."""
-        LOGGER.debug("async_start deep_clean=%s", self.coordinator.deep_clean_enabled)
+        LOGGER.debug("async_start strategy=%s", self.coordinator.cleaning_strategy)
         raw = FAN_SPEED_REVERSE_MAP.get(self._attr_fan_speed or "normal", "2")
         await self.coordinator.async_send_command(
             self.coordinator.client.clean_all,
             cleaning_parameter_set=raw,
-            deep_clean=self.coordinator.deep_clean_enabled,
+            strategy_mode=self.coordinator.cleaning_strategy,
         )
 
     async def async_stop(self, **kwargs: Any) -> None:
@@ -202,5 +202,5 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
             map_id=map_id,
             area_ids=area_ids_str,
             cleaning_parameter_set=raw,
-            deep_clean=self.coordinator.deep_clean_enabled,
+            strategy_mode=self.coordinator.cleaning_strategy,
         )
