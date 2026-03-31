@@ -20,7 +20,9 @@ from .const import (
     FAN_SPEEDS,
     LOGGER,
     SIGNAL_AREAS_UPDATED,
-    STRATEGY_DEEP,
+    STRATEGY_DEFAULT,
+    STRATEGY_LABELS,
+    STRATEGY_REVERSE_MAP,
 )
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
@@ -172,22 +174,26 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
         _dev = coordinator.device_id
         self.entity_id = f"button.{_dev}_map{_map}_clean_room_{area_id}"
         self._fan_speed_select_id = f"select.{_dev}_map{_map}_room_{area_id}_fan_speed"
-        # Per-room deep clean switch entity id
-        self._deep_clean_switch_id = f"switch.{_dev}_map{_map}_room_{area_id}_deep_clean"
+        self._strategy_select_id = f"select.{_dev}_map{_map}_room_{area_id}_strategy"
 
     async def async_press(self) -> None:
         LOGGER.debug("button: clean room %s", self._area_id)
         fan_speed_label = self._get_room_fan_speed()
         raw = FAN_SPEED_REVERSE_MAP.get(fan_speed_label, "2")
         map_id: str = self.coordinator.active_map_id
-        # Per-room deep-clean switch forces STRATEGY_DEEP for this room only;
-        # otherwise fall back to the global strategy set by the strategy select.
-        room_switch = self.coordinator.hass.states.get(self._deep_clean_switch_id)
-        strategy_mode = (
-            STRATEGY_DEEP
-            if room_switch is not None and room_switch.state == "on"
-            else self.coordinator.cleaning_strategy
-        )
+        # Per-room strategy select overrides the global strategy when set to
+        # anything other than "Default"; "Default" falls back to the global.
+        room_strategy_state = self.coordinator.hass.states.get(self._strategy_select_id)
+        _default_label = STRATEGY_LABELS[STRATEGY_DEFAULT]
+        if (
+            room_strategy_state is not None
+            and room_strategy_state.state not in ("unknown", "unavailable", _default_label)
+        ):
+            strategy_mode = STRATEGY_REVERSE_MAP.get(
+                room_strategy_state.state, self.coordinator.cleaning_strategy
+            )
+        else:
+            strategy_mode = self.coordinator.cleaning_strategy
         await self.coordinator.async_send_command(
             self.coordinator.client.clean_map,
             map_id=map_id,
