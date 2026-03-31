@@ -143,10 +143,15 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         super().__init__(coordinator)
         self._area_id = area_id
         _map = coordinator.active_map_id
+        self._map_id = _map
         self._attr_unique_id = f"room_deep_clean_map{_map}_{area_id}_{coordinator.device_id}"
         self._attr_name = room_name + " Deep Clean"
         self.entity_id = f"switch.{coordinator.device_id}_map{_map}_room_{area_id}_deep_clean"
         self._is_on: bool = False
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._map_id == self.coordinator.active_map_id
 
     @property
     def is_on(self) -> bool:
