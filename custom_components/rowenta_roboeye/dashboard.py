@@ -111,6 +111,7 @@ def _build_config(
     e_serial            = f"sensor.{_d}_serial_number"
     e_live_map          = f"sensor.{_d}_live_map"
     e_cleaning_mode     = f"select.{_d}_cleaning_mode"
+    e_cleaning_strategy = f"select.{_d}_cleaning_strategy"
     e_deep_clean_switch = f"switch.{_d}_deep_clean_mode"
     e_btn_clean_all     = f"button.{_d}_clean_entire_home"
     e_btn_stop          = f"button.{_d}_stop"
@@ -206,6 +207,10 @@ def _build_config(
                     {
                         "entity": e_cleaning_mode,
                         "name": "Fan speed",
+                    },
+                    {
+                        "entity": e_cleaning_strategy,
+                        "name": "Cleaning strategy",
                     },
                     {
                         "entity": e_deep_clean_switch,
