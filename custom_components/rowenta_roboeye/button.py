@@ -20,6 +20,7 @@ from .const import (
     FAN_SPEEDS,
     LOGGER,
     SIGNAL_AREAS_UPDATED,
+    STRATEGY_DEEP,
 )
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
@@ -147,7 +148,7 @@ class RobEyeCleanAllButton(RobEyeBaseButton):
         await self.coordinator.async_send_command(
             self.coordinator.client.clean_all,
             cleaning_parameter_set=raw,
-            deep_clean=self.coordinator.deep_clean_enabled,
+            strategy_mode=self.coordinator.cleaning_strategy,
         )
 
 
@@ -179,19 +180,20 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
         fan_speed_label = self._get_room_fan_speed()
         raw = FAN_SPEED_REVERSE_MAP.get(fan_speed_label, "2")
         map_id: str = self.coordinator.active_map_id
-        # Per-room switch overrides global deep clean; global is the fallback
+        # Per-room deep-clean switch forces STRATEGY_DEEP for this room only;
+        # otherwise fall back to the global strategy set by the strategy select.
         room_switch = self.coordinator.hass.states.get(self._deep_clean_switch_id)
-        deep_clean = (
-            room_switch.state == "on"
-            if room_switch is not None
-            else self.coordinator.deep_clean_enabled
+        strategy_mode = (
+            STRATEGY_DEEP
+            if room_switch is not None and room_switch.state == "on"
+            else self.coordinator.cleaning_strategy
         )
         await self.coordinator.async_send_command(
             self.coordinator.client.clean_map,
             map_id=map_id,
             area_ids=self._area_id,
             cleaning_parameter_set=raw,
-            deep_clean=deep_clean,
+            strategy_mode=strategy_mode,
         )
 
     def _get_room_fan_speed(self) -> str:

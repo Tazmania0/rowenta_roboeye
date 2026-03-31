@@ -59,7 +59,7 @@ API_GET_SENSOR_STATUS = "/get/sensor_status"
 API_GET_SENSOR_VALUES = "/get/sensor_values"
 API_GET_LIVE_PARAMETERS = "/get/live_parameters"
 API_GET_ROB_POSE = "/get/rob_pose"
-API_GET_ROOMS = "/get/rooms"
+# API_GET_ROOMS = "/get/rooms"  # returns unknown_request on Xplorer 120 firmware — do not call
 API_GET_PRODUCT_FEATURE_SET = "/get/product_feature_set"
 API_GET_SAFETY_MCU_FIRMWARE = "/get/safety_mcu_firmware_version"
 API_GET_CLEANING_PARAMETER_SET = "/get/cleaning_parameter_set"
@@ -90,9 +90,27 @@ API_SET_FAN_SPEED = "/set/switch_cleaning_parameter_set"
 SERVICE_CLEAN_ROOM = "clean_room"
 
 # ── cleaning_strategy_mode values ────────────────────────────────────
+# Values confirmed from RobEye web UI HTML source (option tags).
+STRATEGY_DEFAULT       = "4"   # robot chooses strategy automatically
 STRATEGY_NORMAL        = "1"
 STRATEGY_WALLS_CORNERS = "2"
-STRATEGY_DEEP          = "3"
+STRATEGY_DEEP          = "3"   # double/triple pass
+
+# Human-readable labels for the strategy select entity
+STRATEGY_LABELS: dict[str, str] = {
+    STRATEGY_DEFAULT:       "Default",
+    STRATEGY_NORMAL:        "Normal",
+    STRATEGY_WALLS_CORNERS: "Walls & Corners",
+    STRATEGY_DEEP:          "Deep",
+}
+STRATEGY_OPTIONS: list[str] = [
+    STRATEGY_LABELS[STRATEGY_DEFAULT],
+    STRATEGY_LABELS[STRATEGY_NORMAL],
+    STRATEGY_LABELS[STRATEGY_WALLS_CORNERS],
+    STRATEGY_LABELS[STRATEGY_DEEP],
+]
+# Reverse map: label → API value
+STRATEGY_REVERSE_MAP: dict[str, str] = {v: k for k, v in STRATEGY_LABELS.items()}
 
 # ── API mode strings ──────────────────────────────────────────────────
 MODE_CLEANING = "cleaning"

@@ -56,6 +56,7 @@ from .const import (
     SCAN_INTERVAL_ROBOT_INFO,
     SCAN_INTERVAL_STATISTICS,
     SIGNAL_AREAS_UPDATED,
+    STRATEGY_DEFAULT,
     UPDATE_INTERVAL,
     UPDATE_INTERVAL_CLEANING,
     UPDATE_INTERVAL_IDLE,
@@ -99,8 +100,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Track known area IDs so we can detect additions/removals without reload
         self._known_area_ids: set = set()
 
-        # Deep clean mode — toggled by switch entity, read by all clean operations
-        self.deep_clean_enabled: bool = False
+        # Cleaning strategy — set by strategy select or deep-clean switch; read by all clean operations
+        self.cleaning_strategy: str = STRATEGY_DEFAULT
 
         # Brush stuck notification state tracking
         self._brush_left_notified: bool = False

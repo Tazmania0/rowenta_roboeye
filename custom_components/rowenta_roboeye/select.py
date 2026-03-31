@@ -19,7 +19,18 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import DOMAIN, FAN_SPEED_MAP, FAN_SPEED_REVERSE_MAP, FAN_SPEEDS, LOGGER, SIGNAL_AREAS_UPDATED
+from .const import (
+    DOMAIN,
+    FAN_SPEED_MAP,
+    FAN_SPEED_REVERSE_MAP,
+    FAN_SPEEDS,
+    LOGGER,
+    SIGNAL_AREAS_UPDATED,
+    STRATEGY_DEFAULT,
+    STRATEGY_LABELS,
+    STRATEGY_OPTIONS,
+    STRATEGY_REVERSE_MAP,
+)
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
 
@@ -32,6 +43,7 @@ async def async_setup_entry(
     coordinator: RobEyeCoordinator = hass.data[DOMAIN][config_entry.entry_id]
     entities: list[SelectEntity] = [
         RobEyeCleaningModeSelect(coordinator),
+        RobEyeStrategySelect(coordinator),
         RobEyeActiveMapSelect(coordinator),
     ]
 
@@ -224,3 +236,47 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
     async def async_select_option(self, option: str) -> None:
         map_id = self._name_to_id.get(option, option)
         await self.coordinator.async_set_active_map(map_id)
+
+
+# ── Cleaning strategy select ──────────────────────────────────────────
+
+class RobEyeStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
+    """Four-mode cleaning strategy selector.
+
+    Options (confirmed from RobEye web UI HTML source, 2026-03-30):
+      Default       (4) — robot chooses strategy automatically
+      Normal        (1) — single-pass clean
+      Walls & Corners (2) — focus on edges
+      Deep          (3) — double/triple pass
+
+    Syncs with the global deep-clean switch: turning the switch ON sets this
+    select to "Deep"; the switch reflects "on" whenever this select is "Deep".
+    """
+
+    _attr_translation_key = "cleaning_strategy"
+    _attr_icon = "mdi:layers-triple"
+    _attr_options = STRATEGY_OPTIONS
+
+    def __init__(self, coordinator: RobEyeCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"cleaning_strategy_{coordinator.device_id}"
+        self.entity_id = f"select.{coordinator.device_id}_cleaning_strategy"
+
+    @property
+    def current_option(self) -> str:
+        return STRATEGY_LABELS.get(self.coordinator.cleaning_strategy, STRATEGY_LABELS[STRATEGY_DEFAULT])
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last_state := await self.async_get_last_state()) is not None:
+            api_val = STRATEGY_REVERSE_MAP.get(last_state.state)
+            if api_val is not None:
+                self.coordinator.cleaning_strategy = api_val
+
+    async def async_select_option(self, option: str) -> None:
+        api_val = STRATEGY_REVERSE_MAP.get(option)
+        if api_val is None:
+            LOGGER.warning("Unknown cleaning strategy option: %s", option)
+            return
+        self.coordinator.cleaning_strategy = api_val
+        self.async_write_ha_state()

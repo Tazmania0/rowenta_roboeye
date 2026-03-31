@@ -65,7 +65,6 @@ from .const import (
     API_GET_ROB_POSE,
     API_GET_ROBOT_FLAGS,
     API_GET_ROBOT_ID,
-    API_GET_ROOMS,
     API_GET_SCHEDULE,
     API_GET_SEEN_POLYGON,
     API_GET_SENSOR_STATUS,
@@ -84,6 +83,7 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_TIMEOUT,
     LOGGER,
+    STRATEGY_DEFAULT,
 )
 
 
@@ -349,14 +349,12 @@ class RobEyeApiClient:
         return await self._get(API_GET_POINTS_OF_INTEREST)
 
     async def get_rooms(self) -> dict[str, Any]:
-        """GET /get/rooms — named room list (UNCONFIRMED).
+        """GET /get/rooms — returns unknown_request on Xplorer 120 firmware.
 
-        Discovered in APK v9.5.1-RC1 source analysis only.
-        NOT yet confirmed to exist on the physical device.
-        May return 404 or an empty response on current firmware.
-        Do not call this in production polling loops until confirmed live.
+        Confirmed dead on live device (2026-03-30). Do not call in polling loops.
+        Use /get/areas (get_areas) as the sole room-data source.
         """
-        return await self._get(API_GET_ROOMS)
+        raise NotImplementedError("/get/rooms is unsupported on Xplorer 120 firmware")
 
     async def get_product_feature_set(self) -> dict[str, Any]:
         """GET /get/product_feature_set — device-level capability flags.
@@ -369,20 +367,22 @@ class RobEyeApiClient:
     # ── Commands ──────────────────────────────────────────────────────
 
     async def clean_all(
-        self, cleaning_parameter_set: str, deep_clean: bool = False
+        self,
+        cleaning_parameter_set: str,
+        strategy_mode: str = STRATEGY_DEFAULT,
     ) -> None:
         """Start a full-home clean at the specified fan speed.
 
         Args:
             cleaning_parameter_set: Fan-speed API value "1"–"4".
-            deep_clean: True = cleaning_strategy_mode=3 (deep/double pass),
-                        False = cleaning_strategy_mode=1 (normal).
+            strategy_mode: One of the STRATEGY_* constants (default "4" = robot decides).
+                           "1"=Normal, "2"=Walls & Corners, "3"=Deep, "4"=Default.
         """
         await self._get(
             API_SET_CLEAN_ALL,
             params={
                 "cleaning_parameter_set": cleaning_parameter_set,
-                "cleaning_strategy_mode": "3" if deep_clean else "1",
+                "cleaning_strategy_mode": strategy_mode,
             },
         )
 
@@ -391,7 +391,7 @@ class RobEyeApiClient:
         map_id: str,
         area_ids: str,
         cleaning_parameter_set: str,
-        deep_clean: bool = False,
+        strategy_mode: str = STRATEGY_DEFAULT,
     ) -> None:
         """Start a room-targeted clean.
 
@@ -399,7 +399,7 @@ class RobEyeApiClient:
             map_id: Map identifier (e.g. "3").
             area_ids: Comma-separated area IDs (e.g. "2,11").
             cleaning_parameter_set: Fan-speed API value "1"–"4".
-            deep_clean: True = cleaning_strategy_mode=3 (deep/double pass).
+            strategy_mode: One of the STRATEGY_* constants (default "4" = robot decides).
         """
         await self._get(
             API_SET_CLEAN_MAP,
@@ -407,7 +407,7 @@ class RobEyeApiClient:
                 "map_id": map_id,
                 "area_ids": area_ids,
                 "cleaning_parameter_set": cleaning_parameter_set,
-                "cleaning_strategy_mode": "3" if deep_clean else "1",
+                "cleaning_strategy_mode": strategy_mode,
             },
         )
 

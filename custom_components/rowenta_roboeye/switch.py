@@ -1,12 +1,15 @@
 """Switch entities for the Rowenta Xplorer 120.
 
 RobEyeDeepCleanSwitch
-  Global deep clean toggle. When ON, all clean operations use
-  cleaning_strategy_mode=2 (double pass). Stored locally, no API call.
+  Global deep clean toggle. When ON, sets coordinator.cleaning_strategy to
+  STRATEGY_DEEP (mode 3 = double/triple pass). When OFF, resets to
+  STRATEGY_DEFAULT (mode 4 = robot decides). Stored locally, no API call.
+  Kept for backwards compatibility; the strategy select exposes all four modes.
 
 RobEyeRoomDeepCleanSwitch
-  Per-room deep clean toggle. When ON, cleaning that room uses double pass
-  regardless of the global switch. Falls back to global when OFF.
+  Per-room deep clean toggle. When ON, that room's clean uses STRATEGY_DEEP
+  regardless of the global strategy. Falls back to coordinator.cleaning_strategy
+  when OFF.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import DOMAIN, LOGGER, SIGNAL_AREAS_UPDATED
+from .const import DOMAIN, LOGGER, SIGNAL_AREAS_UPDATED, STRATEGY_DEFAULT, STRATEGY_DEEP
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
 
@@ -86,7 +89,11 @@ async def async_setup_entry(
 
 
 class RobEyeDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
-    """Global toggle: ON means all cleans use double pass."""
+    """Global toggle: ON = STRATEGY_DEEP, OFF = STRATEGY_DEFAULT.
+
+    Kept for backwards compatibility. The strategy select entity exposes all
+    four modes; this switch is the simpler ON/OFF facade over it.
+    """
 
     _attr_translation_key = "deep_clean_mode"
     _attr_icon = "mdi:robot-vacuum-variant"
@@ -95,27 +102,24 @@ class RobEyeDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         super().__init__(coordinator)
         self._attr_unique_id = "deep_clean_mode_" + coordinator.device_id
         self.entity_id = f"switch.{coordinator.device_id}_deep_clean_mode"
-        self._is_on: bool = False
 
     @property
     def is_on(self) -> bool:
-        return self._is_on
+        return self.coordinator.cleaning_strategy == STRATEGY_DEEP
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         if (last := await self.async_get_last_state()) is not None:
-            self._is_on = last.state == "on"
-            self.coordinator.deep_clean_enabled = self._is_on
-            LOGGER.debug("Deep clean mode restored: %s", "ON" if self._is_on else "OFF")
+            if last.state == "on":
+                self.coordinator.cleaning_strategy = STRATEGY_DEEP
+            LOGGER.debug("Deep clean mode restored: %s", last.state)
 
     async def async_turn_on(self, **kwargs) -> None:  # type: ignore[override]
-        self._is_on = True
-        self.coordinator.deep_clean_enabled = True
+        self.coordinator.cleaning_strategy = STRATEGY_DEEP
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:  # type: ignore[override]
-        self._is_on = False
-        self.coordinator.deep_clean_enabled = False
+        self.coordinator.cleaning_strategy = STRATEGY_DEFAULT
         self.async_write_ha_state()
 
 
