@@ -120,6 +120,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_session_grid: dict = {}
         self._last_session_path: list = []
         self._last_session_outline: list = []
+        self._last_session_map_id: str = ""  # map_id the frozen session belongs to
         self._last_mode: str = ""
         self._session_complete: bool = False
         self._last_rob_pose_ts: int = 0   # last seen /get/rob_pose timestamp value
@@ -201,6 +202,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_session_grid = {}
         self._last_session_path = []
         self._last_session_outline = []
+        self._last_session_map_id = ""
         self._session_complete = False
         dashboard_manager = self.hass.data.get(DOMAIN, {}).get(
             f"{self.config_entry.entry_id}_dashboard"
@@ -286,6 +288,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._last_session_grid = {}
                 self._last_session_path = []
                 self._last_session_outline = []
+                self._last_session_map_id = ""
                 self._session_complete = False
                 self._last_live_map = None
                 self._last_rob_pose_ts = 0
@@ -297,11 +300,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._last_session_outline = _parse_live_outline(
                     data.get(DATA_SEEN_POLYGON, {})
                 )
+                self._last_session_map_id  = str(
+                    self._last_session_grid.get("map_id", self.active_map_id)
+                )
                 self._session_complete = True
                 LOGGER.info(
-                    "Cleaning session complete — frozen grid=%s cells, path=%d points",
+                    "Cleaning session complete — frozen grid=%s cells, path=%d points, map_id=%s",
                     self._last_session_grid.get("size_x", 0),
                     len(self._last_session_path),
+                    self._last_session_map_id,
                 )
 
             self._last_mode = mode
@@ -340,12 +347,16 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         if saved_grid.get("size_x", 0) > 0:
                             self._last_session_grid = saved_grid
+                            self._last_session_map_id = str(
+                                saved_grid.get("map_id", self.active_map_id)
+                            )
                             if not self._session_complete:
                                 self._session_complete = True
                                 LOGGER.info(
-                                    "Loaded last session grid from saved map: %d×%d",
+                                    "Loaded last session grid from saved map: %d×%d map_id=%s",
                                     saved_grid["size_x"],
                                     saved_grid["size_y"],
+                                    self._last_session_map_id,
                                 )
                     except CannotConnect:
                         LOGGER.debug("get_cleaning_grid_map saved map unavailable")
@@ -436,6 +447,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         last_session_grid=self._last_session_grid,
                         last_session_path=self._last_session_path,
                         last_session_outline=self._last_session_outline,
+                        last_session_map_id=self._last_session_map_id,
                         session_complete=self._session_complete,
                     )
 
@@ -504,6 +516,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         self._last_session_grid = {}
                         self._last_session_path = []
                         self._last_session_outline = []
+                        self._last_session_map_id = ""
                         self._session_complete = False
                         dashboard_manager = self.hass.data.get(DOMAIN, {}).get(
                             f"{self.config_entry.entry_id}_dashboard"
@@ -998,6 +1011,7 @@ def _build_live_map_payload(
     last_session_grid: dict,
     last_session_path: list,
     last_session_outline: list,
+    last_session_map_id: str,
     session_complete: bool,
 ) -> dict[str, Any]:
     """Compose the live_map attribute dict for the SVG card sensor.
@@ -1102,9 +1116,14 @@ def _build_live_map_payload(
         robot = None
 
     # ── Live / session outline ────────────────────────────────────────
+    session_matches_map = (
+        session_complete
+        and last_session_map_id != ""
+        and str(last_session_map_id) == str(map_id)
+    )
     if is_active:
         live_outline: list[list[int]] = _parse_live_outline(seen_polygon_raw)
-    elif session_complete:
+    elif session_matches_map:
         live_outline = list(last_session_outline)
     else:
         live_outline = []
@@ -1113,9 +1132,12 @@ def _build_live_map_payload(
     if is_active:
         display_grid = cleaning_grid if isinstance(cleaning_grid, dict) and cleaning_grid.get("size_x", 0) > 0 else {}
         display_path = list(robot_path)
-    else:
+    elif session_matches_map:
         display_grid = last_session_grid
         display_path = last_session_path
+    else:
+        display_grid = {}
+        display_path = []
 
     # ── Bounding box ─────────────────────────────────────────────────
     all_pts: list[list[int]] = (
