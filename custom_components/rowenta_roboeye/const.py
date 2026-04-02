@@ -131,8 +131,8 @@ AREA_STATE_BLOCKING = "blocking"
 
 # ── Fan speed mapping  API value (str) -> human label ─────────────────
 FAN_SPEED_MAP: dict[str, str] = {
-    "1": "eco",
-    "2": "normal",
+    "1": "normal",
+    "2": "eco",
     "3": "high",
     "4": "silent",
 }
@@ -181,8 +181,8 @@ SCHEDULE_DAYS_FULL: dict[int, str] = {
 # 0 = per-room default (each room uses its own cleaning_parameter_set)
 FAN_SPEED_LABELS: dict[int, str] = {
     0: "default",
-    1: "eco",
-    2: "normal",
+    1: "normal",
+    2: "eco",
     3: "high",
     4: "silent",
 }
