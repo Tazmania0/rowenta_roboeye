@@ -131,8 +131,8 @@ AREA_STATE_BLOCKING = "blocking"
 
 # ── Fan speed mapping  API value (str) -> human label ─────────────────
 FAN_SPEED_MAP: dict[str, str] = {
-    "1": "normal",
-    "2": "eco",
+    "1": "eco",
+    "2": "normal",
     "3": "high",
     "4": "silent",
 }

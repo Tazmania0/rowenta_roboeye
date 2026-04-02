@@ -48,6 +48,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
+    AREA_STATE_BLOCKING,
     CLEANING_MODE_ALL,
     CLEANING_MODE_ROOMS,
     DOMAIN,
@@ -652,6 +653,9 @@ def _build_room_sensor_entities(
             continue
         room_name = meta.get("name", "").strip()
         if not room_name:
+            continue
+        # Skip areas disabled for cleaning in the RobEye app
+        if area.get("area_state") == AREA_STATE_BLOCKING:
             continue
         new_entities.extend(
             _build_room_sensors(
