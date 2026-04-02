@@ -23,7 +23,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import DOMAIN, LOGGER, SIGNAL_AREAS_UPDATED, STRATEGY_DEFAULT, STRATEGY_DEEP
+from .const import AREA_STATE_BLOCKING, DOMAIN, LOGGER, SIGNAL_AREAS_UPDATED, STRATEGY_DEFAULT, STRATEGY_DEEP
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
 
@@ -58,6 +58,9 @@ async def async_setup_entry(
                 continue
             room_name = meta.get("name", "").strip()
             if not room_name:
+                continue
+            # Skip areas disabled for cleaning in the RobEye app
+            if area.get("area_state") == AREA_STATE_BLOCKING:
                 continue
             new_entities.append(
                 RobEyeRoomDeepCleanSwitch(
