@@ -32,6 +32,8 @@ def _make_vacuum(status: dict):
     vac._attr_fan_speed = None
     vac._attr_battery_level = None
     vac._attr_activity = None
+    vac._is_paused = False
+    vac._error_status = None
     vac.async_write_ha_state = lambda: None
     return vac, coord
 
@@ -157,3 +159,34 @@ async def test_clean_room_fan_speed_override():
 
     kwargs = coord.async_send_command.call_args[1]
     assert kwargs["cleaning_parameter_set"] == "3"  # high overrides eco
+
+
+# ── Service: pause ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_async_pause_calls_stop_and_sets_flag():
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    vac._attr_activity = VacuumActivity.CLEANING
+    await vac.async_pause()
+    coord.async_send_command.assert_called_once_with(coord.client.stop)
+    assert vac._is_paused is True
+
+
+def test_state_machine_paused():
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, _ = _make_vacuum({"mode": "ready", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    vac._is_paused = True
+    vac.coordinator.sensor_values_parsed = {}
+    vac._handle_coordinator_update()
+    assert vac._attr_activity is VacuumActivity.PAUSED
+
+
+def test_state_machine_clears_paused_on_cleaning():
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, _ = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    vac._is_paused = True
+    vac.coordinator.sensor_values_parsed = {}
+    vac._handle_coordinator_update()
+    assert vac._is_paused is False
+    assert vac._attr_activity is VacuumActivity.CLEANING
