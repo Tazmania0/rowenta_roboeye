@@ -137,10 +137,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
                 self._is_paused = False
                 self._attr_activity = VacuumActivity.DOCKED
             elif mode == MODE_READY and charging == CHARGING_UNCONNECTED:
-                if self._is_paused:
-                    self._attr_activity = VacuumActivity.PAUSED
-                else:
-                    self._attr_activity = VacuumActivity.IDLE
+                self._attr_activity = VacuumActivity.IDLE
             elif mode == MODE_GO_HOME:
                 self._is_paused = False
                 self._attr_activity = VacuumActivity.RETURNING
