@@ -125,6 +125,10 @@ class _CoordinatorEntityBase:
     def __init__(self, coordinator=None, *a, **kw):
         self.coordinator = coordinator
 
+    @property
+    def available(self) -> bool:
+        return True
+
 # homeassistant.helpers.update_coordinator
 ha_uc = _make_module(
     "homeassistant.helpers.update_coordinator",

@@ -400,6 +400,7 @@ def _make_live_map_kwargs(**overrides):
         last_session_grid={},
         last_session_path=[],
         last_session_outline=[],
+        last_session_map_id="",
         session_complete=False,
     )
     base.update(overrides)

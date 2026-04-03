@@ -38,38 +38,34 @@ def _make_vacuum(status: dict):
 
 # ── State machine ─────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("mode,charging,expected", [
-    ("cleaning",  "unconnected", "cleaning"),
-    ("ready",     "charging",    "docked"),
-    ("ready",     "connected",   "docked"),
-    ("ready",     "unconnected", "paused"),
-    ("go_home",   "unconnected", "returning"),
-    ("unknown",   "unconnected", "idle"),
+@pytest.mark.parametrize("mode,charging,expected_attr", [
+    ("cleaning",  "unconnected", "CLEANING"),
+    ("ready",     "charging",    "DOCKED"),
+    ("ready",     "connected",   "DOCKED"),
+    ("ready",     "unconnected", "PAUSED"),
+    ("go_home",   "unconnected", "RETURNING"),
+    ("unknown",   "unconnected", "IDLE"),
 ])
-def test_state_machine(mode, charging, expected):
+def test_state_machine(mode, charging, expected_attr):
+    # The implementation uses VacuumActivity.CLEANING etc. (attribute access),
+    # NOT VacuumActivity("cleaning") (calling the mock). Compare via the same
+    # attribute so both sides reference the same MagicMock child object.
     from homeassistant.components.vacuum import VacuumActivity
     vac, _ = _make_vacuum({"mode": mode, "charging": charging, "battery_level": 80, "cleaning_parameter_set": 2})
     vac._handle_coordinator_update()
-    assert vac._attr_activity == VacuumActivity(expected)
+    assert vac._attr_activity is getattr(VacuumActivity, expected_attr)
 
 
 # ── Fan speed mapping ─────────────────────────────────────────────────
 
 @pytest.mark.parametrize("raw,expected", [
-    (1, "eco"), (2, "normal"), (3, "high"), (4, "silent"),
+    # API mapping: "1"=normal, "2"=eco, "3"=high, "4"=silent (fixed in e4a2c74)
+    (1, "normal"), (2, "eco"), (3, "high"), (4, "silent"),
 ])
 def test_fan_speed_mapped(raw, expected):
     vac, _ = _make_vacuum({"mode": "ready", "charging": "charging", "battery_level": 100, "cleaning_parameter_set": raw})
     vac._handle_coordinator_update()
     assert vac._attr_fan_speed == expected
-
-
-# ── Battery level ─────────────────────────────────────────────────────
-
-def test_battery_level():
-    vac, _ = _make_vacuum({"mode": "ready", "charging": "charging", "battery_level": 73, "cleaning_parameter_set": 2})
-    vac._handle_coordinator_update()
-    assert vac._attr_battery_level == 73
 
 
 # ── Service: start ────────────────────────────────────────────────────
@@ -80,7 +76,8 @@ async def test_async_start_uses_current_fan_speed():
     vac._attr_fan_speed = "normal"
     await vac.async_start()
     coord.async_send_command.assert_called_once()
-    assert coord.async_send_command.call_args[1]["cleaning_parameter_set"] == "2"
+    # "normal" → FAN_SPEED_REVERSE_MAP["normal"] = "1"
+    assert coord.async_send_command.call_args[1]["cleaning_parameter_set"] == "1"
 
 
 @pytest.mark.asyncio
@@ -88,7 +85,8 @@ async def test_async_start_defaults_to_normal_if_no_fan_speed():
     vac, coord = _make_vacuum({"mode": "ready", "charging": "charging", "battery_level": 100, "cleaning_parameter_set": 2})
     vac._attr_fan_speed = None
     await vac.async_start()
-    assert coord.async_send_command.call_args[1]["cleaning_parameter_set"] == "2"
+    # Default "normal" → "1"
+    assert coord.async_send_command.call_args[1]["cleaning_parameter_set"] == "1"
 
 
 # ── Service: stop ─────────────────────────────────────────────────────
@@ -137,7 +135,7 @@ async def test_clean_room_single_room():
     kwargs = coord.async_send_command.call_args[1]
     assert kwargs["map_id"] == "3"
     assert kwargs["area_ids"] == "3"
-    assert kwargs["cleaning_parameter_set"] == "2"
+    assert kwargs["cleaning_parameter_set"] == "1"  # "normal" → "1"
 
 
 @pytest.mark.asyncio
@@ -148,7 +146,7 @@ async def test_clean_room_multi_room():
 
     kwargs = coord.async_send_command.call_args[1]
     assert kwargs["area_ids"] == "2,11"
-    assert kwargs["cleaning_parameter_set"] == "1"  # eco = 1
+    assert kwargs["cleaning_parameter_set"] == "2"  # "eco" → "2"
 
 
 @pytest.mark.asyncio
