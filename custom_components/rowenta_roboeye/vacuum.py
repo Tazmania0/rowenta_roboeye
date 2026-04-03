@@ -181,14 +181,18 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         self,
         room_ids: list[str],
         fan_speed: str | None = None,
+        deep_clean: bool = False,
     ) -> None:
         """Service handler for rowenta_roboeye.clean_room.
 
         Args:
             room_ids: List of area IDs to clean (strings or ints, joined as comma list).
             fan_speed: Optional fan speed override; uses current speed if omitted.
+            deep_clean: When True, forces deep-clean strategy for this run only.
         """
-        LOGGER.debug("clean_room: room_ids=%s fan_speed=%s", room_ids, fan_speed)
+        from .const import STRATEGY_DEEP
+
+        LOGGER.debug("clean_room: room_ids=%s fan_speed=%s deep_clean=%s", room_ids, fan_speed, deep_clean)
         area_ids_str = ",".join(str(r) for r in room_ids)
         map_id: str = self.coordinator.active_map_id
 
@@ -197,10 +201,12 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         else:
             raw = FAN_SPEED_REVERSE_MAP.get(self._attr_fan_speed or "normal", "2")
 
+        strategy = STRATEGY_DEEP if deep_clean else self.coordinator.cleaning_strategy
+
         await self.coordinator.async_send_command(
             self.coordinator.client.clean_map,
             map_id=map_id,
             area_ids=area_ids_str,
             cleaning_parameter_set=raw,
-            strategy_mode=self.coordinator.cleaning_strategy,
+            strategy_mode=strategy,
         )
