@@ -32,3 +32,13 @@ clean_room:
             - "normal"
             - "high"
             - "silent"
+    deep_clean:
+      name: Deep clean
+      description: >
+        When enabled, forces deep-clean strategy (double/triple pass) for this
+        run only, overriding the global strategy setting.
+      required: false
+      default: false
+      example: true
+      selector:
+        boolean:
