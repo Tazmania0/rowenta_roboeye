@@ -25,7 +25,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import AREA_STATE_BLOCKING, DOMAIN, LOGGER, SIGNAL_AREAS_UPDATED, STRATEGY_DEFAULT, STRATEGY_DEEP
 from .coordinator import RobEyeCoordinator
-from .entity import RobEyeEntity
+from .entity import RobEyeEntity, async_remove_stale_room_entities
 
 
 async def async_setup_entry(
@@ -80,6 +80,9 @@ async def async_setup_entry(
 
     @callback
     def _on_areas_updated() -> None:
+        current_area_ids = {a.get("id") for a in coordinator.areas if a.get("id") is not None}
+        removed = async_remove_stale_room_entities(hass, config_entry, coordinator, "switch", current_area_ids)
+        known_ids.difference_update(removed)
         new_entities, new_area_ids = _room_switches(coordinator.areas, known_ids)
         if new_entities:
             async_add_entities(new_entities)

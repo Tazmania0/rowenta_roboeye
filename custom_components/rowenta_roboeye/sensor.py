@@ -45,7 +45,6 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers import entity_registry as er
 
 from .const import (
     AREA_STATE_BLOCKING,
@@ -60,7 +59,7 @@ from .const import (
     SIGNAL_AREAS_UPDATED,
 )
 from .coordinator import RobEyeCoordinator
-from .entity import RobEyeEntity
+from .entity import RobEyeEntity, async_remove_stale_room_entities
 
 
 # ── Extended descriptor ───────────────────────────────────────────────
@@ -368,11 +367,12 @@ async def async_setup_entry(
         """Called by the coordinator when the area set changes."""
         current_area_ids = {a.get("id") for a in coordinator.areas if a.get("id") is not None}
 
-        # Re-enable any entities for this map that were previously disabled by us
-        # (e.g. due to a transient API response or a map switch cycle).
-        _async_reenable_room_entities(
+        # Remove entities for areas that no longer exist on the active map
+        # (user split/merged/renamed rooms → old IDs are gone for good).
+        removed = async_remove_stale_room_entities(
             hass, config_entry, coordinator, "sensor", current_area_ids
         )
+        known_ids.difference_update(removed)
 
         new_entities, new_area_ids = _build_room_sensor_entities(
             coordinator, config_entry, coordinator.areas, known_ids
@@ -381,11 +381,6 @@ async def async_setup_entry(
             LOGGER.debug("sensor: adding %d new room entities", len(new_entities))
             async_add_entities(new_entities)
             known_ids.update(new_area_ids)
-
-        # Disable entities for areas that have disappeared from the current map
-        _async_remove_stale_room_entities(
-            hass, config_entry, coordinator, "sensor", current_area_ids
-        )
 
     config_entry.async_on_unload(
         async_dispatcher_connect(
@@ -733,107 +728,6 @@ def _build_room_sensors(
         ),
     ]
 
-
-def _async_reenable_room_entities(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    coordinator: RobEyeCoordinator,
-    platform: str,
-    current_area_ids: set,
-) -> None:
-    """Re-enable integration-disabled room entities whose area has returned to the current map.
-
-    This is the inverse of _async_remove_stale_room_entities.  When a room area
-    disappears transiently (flaky API response, robot map edit) and its entity was
-    disabled by this integration, restore it once the area is present again.
-    User-disabled entities (disabled_by=USER) are intentionally left alone.
-    """
-    active_map_id = coordinator.active_map_id
-    ent_reg = er.async_get(hass)
-    entries = er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)
-    for entry in entries:
-        if entry.domain != platform:
-            continue
-        if not entry.unique_id.startswith("room_"):
-            continue
-        if entry.disabled_by != er.RegistryEntryDisabler.INTEGRATION:
-            continue  # Only restore what we disabled; leave user-disabled alone
-        parts = entry.unique_id.split("_")
-        if len(parts) < 3:
-            continue
-        try:
-            area_id_str = parts[1]
-            entity_map_id = parts[2][3:] if parts[2].startswith("map") else ""
-            # Only process entities belonging to the current active map
-            if entity_map_id and entity_map_id != active_map_id:
-                continue
-            matches = (
-                int(area_id_str) in current_area_ids
-                or area_id_str in current_area_ids
-                or area_id_str in {str(x) for x in current_area_ids}
-            )
-            if matches:
-                LOGGER.info(
-                    "RobEye: re-enabling room entity %s (area %s returned to map %s)",
-                    entry.entity_id,
-                    area_id_str,
-                    active_map_id,
-                )
-                ent_reg.async_update_entity(entry.entity_id, disabled_by=None)
-        except (ValueError, IndexError):
-            pass
-
-
-def _async_remove_stale_room_entities(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    coordinator: RobEyeCoordinator,
-    platform: str,
-    current_area_ids: set,
-) -> None:
-    """Disable entity registry entries for rooms deleted from the CURRENT MAP.
-
-    Entities from other maps are left alone — they will be re-used when the
-    user switches back to that map.  Only areas that have been removed from
-    the active map (not just a map switch) are disabled.
-    """
-    active_map_id = coordinator.active_map_id
-    ent_reg = er.async_get(hass)
-    entries = er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)
-    for entry in entries:
-        if entry.domain != platform:
-            continue
-        # Room sensor unique_ids: room_{area_id}_{map_prefix}_{suffix}_{device_id}
-        # e.g. room_5_map3_cleanings_device123
-        if not entry.unique_id.startswith("room_"):
-            continue
-        parts = entry.unique_id.split("_")
-        if len(parts) < 3:
-            continue
-        try:
-            area_id_str = parts[1]
-            # Extract the map_id embedded in the unique_id (parts[2] = "map3")
-            entity_map_id = parts[2][3:] if parts[2].startswith("map") else ""
-            # Only process entities belonging to the current active map.
-            # Entities from other maps are not stale — skip them.
-            if entity_map_id and entity_map_id != active_map_id:
-                continue
-            # Try int match first, then string
-            matches = (
-                int(area_id_str) in current_area_ids
-                or area_id_str in current_area_ids
-                or area_id_str in {str(x) for x in current_area_ids}
-            )
-            if not matches:
-                LOGGER.info(
-                    "RobEye: disabling stale room entity %s (area %s no longer present on map %s)",
-                    entry.entity_id,
-                    area_id_str,
-                    active_map_id,
-                )
-                ent_reg.async_update_entity(entry.entity_id, disabled_by=er.RegistryEntryDisabler.INTEGRATION)
-        except (ValueError, IndexError):
-            pass
 
 
 # ── Helpers ───────────────────────────────────────────────────────────

@@ -34,7 +34,7 @@ from .const import (
     STRATEGY_REVERSE_MAP,
 )
 from .coordinator import RobEyeCoordinator
-from .entity import RobEyeEntity
+from .entity import RobEyeEntity, async_remove_stale_room_entities
 
 
 async def async_setup_entry(
@@ -59,6 +59,9 @@ async def async_setup_entry(
 
     @callback
     def _async_on_areas_updated() -> None:
+        current_area_ids = {a.get("id") for a in coordinator.areas if a.get("id") is not None}
+        removed = async_remove_stale_room_entities(hass, config_entry, coordinator, "select", current_area_ids)
+        known_ids.difference_update(removed)
         new_entities, new_area_ids = _build_room_select_entities(
             coordinator, config_entry, coordinator.areas, known_ids
         )
