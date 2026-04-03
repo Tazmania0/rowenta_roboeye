@@ -25,7 +25,7 @@ from .const import (
     STRATEGY_REVERSE_MAP,
 )
 from .coordinator import RobEyeCoordinator
-from .entity import RobEyeEntity, async_disable_stale_room_entities, async_reenable_room_entities
+from .entity import RobEyeEntity, async_remove_stale_room_entities
 
 
 async def async_setup_entry(
@@ -53,7 +53,8 @@ async def async_setup_entry(
     @callback
     def _async_on_areas_updated() -> None:
         current_area_ids = {a.get("id") for a in coordinator.areas if a.get("id") is not None}
-        async_reenable_room_entities(hass, config_entry, coordinator, "button", current_area_ids)
+        removed = async_remove_stale_room_entities(hass, config_entry, coordinator, "button", current_area_ids)
+        known_ids.difference_update(removed)
         new_entities, new_area_ids = _build_room_button_entities(
             coordinator, config_entry, coordinator.areas, known_ids
         )
@@ -61,7 +62,6 @@ async def async_setup_entry(
             LOGGER.debug("button: adding %d new room buttons", len(new_entities))
             async_add_entities(new_entities)
             known_ids.update(new_area_ids)
-        async_disable_stale_room_entities(hass, config_entry, coordinator, "button", current_area_ids)
 
     config_entry.async_on_unload(
         async_dispatcher_connect(

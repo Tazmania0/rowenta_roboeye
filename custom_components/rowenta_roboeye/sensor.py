@@ -59,7 +59,7 @@ from .const import (
     SIGNAL_AREAS_UPDATED,
 )
 from .coordinator import RobEyeCoordinator
-from .entity import RobEyeEntity, async_disable_stale_room_entities, async_reenable_room_entities
+from .entity import RobEyeEntity, async_remove_stale_room_entities
 
 
 # ── Extended descriptor ───────────────────────────────────────────────
@@ -367,11 +367,12 @@ async def async_setup_entry(
         """Called by the coordinator when the area set changes."""
         current_area_ids = {a.get("id") for a in coordinator.areas if a.get("id") is not None}
 
-        # Re-enable any entities for this map that were previously disabled by us
-        # (e.g. due to a transient API response or a map switch cycle).
-        async_reenable_room_entities(
+        # Remove entities for areas that no longer exist on the active map
+        # (user split/merged/renamed rooms → old IDs are gone for good).
+        removed = async_remove_stale_room_entities(
             hass, config_entry, coordinator, "sensor", current_area_ids
         )
+        known_ids.difference_update(removed)
 
         new_entities, new_area_ids = _build_room_sensor_entities(
             coordinator, config_entry, coordinator.areas, known_ids
@@ -380,11 +381,6 @@ async def async_setup_entry(
             LOGGER.debug("sensor: adding %d new room entities", len(new_entities))
             async_add_entities(new_entities)
             known_ids.update(new_area_ids)
-
-        # Disable entities for areas that have disappeared from the current map
-        async_disable_stale_room_entities(
-            hass, config_entry, coordinator, "sensor", current_area_ids
-        )
 
     config_entry.async_on_unload(
         async_dispatcher_connect(

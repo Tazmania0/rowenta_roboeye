@@ -31,83 +31,61 @@ def _parse_room_entity_uid(unique_id: str) -> tuple[str, str] | None:
     return None
 
 
-def async_disable_stale_room_entities(
+def async_remove_stale_room_entities(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
     coordinator: RobEyeCoordinator,
     platform: str,
     current_area_ids: set,
-) -> None:
-    """Disable entity registry entries for rooms deleted from the active map.
+) -> set:
+    """Permanently remove entity registry entries for areas deleted from the active map.
 
-    Entities belonging to other maps are left alone so they can be re-enabled
-    when the user switches back to that map.  User-disabled entities are never
-    touched.
+    When a user redraws/splits/merges rooms on the robot, the old area IDs are
+    gone for good and HA would show those entities as unavailable orphans.  This
+    function deletes them outright so they no longer appear in the UI.
+
+    Entities belonging to *other* maps are left untouched — they are simply
+    unavailable while that map is not active and come back when the user switches.
+
+    A guard is applied: if ``current_area_ids`` is empty (likely an API error
+    returning a blank list) the deletion is skipped to avoid wiping all entities
+    on a transient network failure.
+
+    Returns the set of ``(map_id, area_id_str)`` tuples that were removed so the
+    caller can evict them from its ``known_ids`` closure and allow fresh entity
+    creation if the same area ID ever reappears.
     """
+    if not current_area_ids:
+        return set()
+
     active_map_id = coordinator.active_map_id
+    current_strs = {str(x) for x in current_area_ids}
     ent_reg = er.async_get(hass)
-    for entry in er.async_entries_for_config_entry(ent_reg, config_entry.entry_id):
+    removed: set = set()
+
+    for entry in list(er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)):
         if entry.domain != platform:
             continue
         parsed = _parse_room_entity_uid(entry.unique_id)
         if parsed is None:
             continue
         area_id_str, entity_map_id = parsed
+        # Only act on entities for the currently active map; other maps are
+        # handled separately (their entities become unavailable during a map
+        # switch and are restored when the user switches back).
         if entity_map_id and entity_map_id != active_map_id:
             continue
-        still_present = (
-            area_id_str in current_area_ids
-            or area_id_str in {str(x) for x in current_area_ids}
-        )
-        if not still_present:
+        if area_id_str not in current_strs:
             LOGGER.info(
-                "RobEye: disabling stale room entity %s (area %s no longer on map %s)",
+                "RobEye: removing orphaned room entity %s (area %s no longer exists on map %s)",
                 entry.entity_id,
                 area_id_str,
                 active_map_id,
             )
-            ent_reg.async_update_entity(
-                entry.entity_id, disabled_by=er.RegistryEntryDisabler.INTEGRATION
-            )
+            ent_reg.async_remove(entry.entity_id)
+            removed.add((active_map_id, area_id_str))
 
-
-def async_reenable_room_entities(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    coordinator: RobEyeCoordinator,
-    platform: str,
-    current_area_ids: set,
-) -> None:
-    """Re-enable integration-disabled room entities whose area has reappeared.
-
-    Inverse of async_disable_stale_room_entities.  User-disabled entities are
-    intentionally left alone.
-    """
-    active_map_id = coordinator.active_map_id
-    ent_reg = er.async_get(hass)
-    for entry in er.async_entries_for_config_entry(ent_reg, config_entry.entry_id):
-        if entry.domain != platform:
-            continue
-        if entry.disabled_by != er.RegistryEntryDisabler.INTEGRATION:
-            continue
-        parsed = _parse_room_entity_uid(entry.unique_id)
-        if parsed is None:
-            continue
-        area_id_str, entity_map_id = parsed
-        if entity_map_id and entity_map_id != active_map_id:
-            continue
-        returned = (
-            area_id_str in current_area_ids
-            or area_id_str in {str(x) for x in current_area_ids}
-        )
-        if returned:
-            LOGGER.info(
-                "RobEye: re-enabling room entity %s (area %s returned to map %s)",
-                entry.entity_id,
-                area_id_str,
-                active_map_id,
-            )
-            ent_reg.async_update_entity(entry.entity_id, disabled_by=None)
+    return removed
 
 
 class RobEyeEntity(CoordinatorEntity[RobEyeCoordinator]):
