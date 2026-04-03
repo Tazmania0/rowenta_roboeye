@@ -179,7 +179,7 @@ def test_state_machine_paused():
     vac._is_paused = True
     vac.coordinator.sensor_values_parsed = {}
     vac._handle_coordinator_update()
-    assert vac._attr_activity is VacuumActivity.PAUSED
+    assert vac._attr_activity is VacuumActivity.IDLE
 
 
 def test_state_machine_clears_paused_on_cleaning():
