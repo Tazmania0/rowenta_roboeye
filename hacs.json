@@ -1,5 +1,5 @@
 {
-  "name": "Rowenta Xplorer 120",
+  "name": "Rowenta/Tefal RobEye",
   "iot_class": "local_polling",
   "homeassistant": "2024.1.0",
   "zip_release": false
