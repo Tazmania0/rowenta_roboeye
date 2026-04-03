@@ -41,6 +41,7 @@ SUPPORTED_FEATURES = (
     | VacuumEntityFeature.STATE
     | VacuumEntityFeature.START
     | VacuumEntityFeature.STOP
+    | VacuumEntityFeature.PAUSE
     | VacuumEntityFeature.FAN_SPEED
 )
 
@@ -88,6 +89,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         self._attr_unique_id = coordinator.device_id
         self.entity_id = f"vacuum.{coordinator.device_id}"
         self._error_status: str | None = None
+        self._is_paused: bool = False
 
     @property
     def extra_state_attributes(self) -> dict[str, str] | None:
@@ -129,12 +131,18 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         else:
             self._error_status = None
             if mode == MODE_CLEANING:
+                self._is_paused = False
                 self._attr_activity = VacuumActivity.CLEANING
             elif mode == MODE_READY and charging in (CHARGING_CHARGING, CHARGING_CONNECTED):
+                self._is_paused = False
                 self._attr_activity = VacuumActivity.DOCKED
             elif mode == MODE_READY and charging == CHARGING_UNCONNECTED:
-                self._attr_activity = VacuumActivity.IDLE
+                if self._is_paused:
+                    self._attr_activity = VacuumActivity.PAUSED
+                else:
+                    self._attr_activity = VacuumActivity.IDLE
             elif mode == MODE_GO_HOME:
+                self._is_paused = False
                 self._attr_activity = VacuumActivity.RETURNING
             else:
                 self._attr_activity = VacuumActivity.IDLE
@@ -146,6 +154,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
     async def async_start(self, **kwargs: Any) -> None:
         """Start a full-home clean at the current fan speed."""
         LOGGER.debug("async_start strategy=%s", self.coordinator.cleaning_strategy)
+        self._is_paused = False
         raw = FAN_SPEED_REVERSE_MAP.get(self._attr_fan_speed or "normal", "2")
         await self.coordinator.async_send_command(
             self.coordinator.client.clean_all,
@@ -156,6 +165,13 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
     async def async_stop(self, **kwargs: Any) -> None:
         """Stop the vacuum immediately."""
         LOGGER.debug("async_stop")
+        self._is_paused = False
+        await self.coordinator.async_send_command(self.coordinator.client.stop)
+
+    async def async_pause(self, **kwargs: Any) -> None:
+        """Pause the vacuum (no native pause — sends stop and tracks paused state)."""
+        LOGGER.debug("async_pause")
+        self._is_paused = True
         await self.coordinator.async_send_command(self.coordinator.client.stop)
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
