@@ -42,7 +42,7 @@ def _make_vacuum(status: dict):
     ("cleaning",  "unconnected", "CLEANING"),
     ("ready",     "charging",    "DOCKED"),
     ("ready",     "connected",   "DOCKED"),
-    ("ready",     "unconnected", "PAUSED"),
+    ("ready",     "unconnected", "IDLE"),
     ("go_home",   "unconnected", "RETURNING"),
     ("unknown",   "unconnected", "IDLE"),
 ])
