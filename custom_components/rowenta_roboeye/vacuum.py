@@ -137,7 +137,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
                 self._is_paused = False
                 self._attr_activity = VacuumActivity.DOCKED
             elif mode == MODE_READY and charging == CHARGING_UNCONNECTED:
-                self._attr_activity = VacuumActivity.IDLE
+                self._attr_activity = VacuumActivity.PAUSED
             elif mode == MODE_GO_HOME:
                 self._is_paused = False
                 self._attr_activity = VacuumActivity.RETURNING
@@ -149,15 +149,26 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
     # ── Standard vacuum services ──────────────────────────────────────
 
     async def async_start(self, **kwargs: Any) -> None:
-        """Start a full-home clean at the current fan speed."""
-        LOGGER.debug("async_start strategy=%s", self.coordinator.cleaning_strategy)
-        self._is_paused = False
-        raw = FAN_SPEED_REVERSE_MAP.get(self._attr_fan_speed or "normal", "2")
-        await self.coordinator.async_send_command(
-            self.coordinator.client.clean_all,
-            cleaning_parameter_set=raw,
-            strategy_mode=self.coordinator.cleaning_strategy,
-        )
+        """Start a new clean or resume a paused one.
+
+        If activity is PAUSED (robot stopped mid-clean, off dock),
+        sends /set/clean_start_or_continue to resume from current position.
+        Otherwise sends /set/clean_all to start a new whole-home clean.
+        """
+        if self._attr_activity == VacuumActivity.PAUSED:
+            LOGGER.debug("async_start: resuming paused clean via clean_start_or_continue")
+            await self.coordinator.async_send_command(
+                self.coordinator.client.clean_start_or_continue
+            )
+        else:
+            LOGGER.debug("async_start: starting new clean (activity=%s)", self._attr_activity)
+            self._is_paused = False
+            raw = FAN_SPEED_REVERSE_MAP.get(self._attr_fan_speed or "normal", "2")
+            await self.coordinator.async_send_command(
+                self.coordinator.client.clean_all,
+                cleaning_parameter_set=raw,
+                strategy_mode=self.coordinator.cleaning_strategy,
+            )
 
     async def async_stop(self, **kwargs: Any) -> None:
         """Stop the vacuum immediately."""
@@ -166,9 +177,12 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         await self.coordinator.async_send_command(self.coordinator.client.stop)
 
     async def async_pause(self, **kwargs: Any) -> None:
-        """Pause the vacuum (no native pause — sends stop and tracks paused state)."""
-        LOGGER.debug("async_pause")
-        self._is_paused = True
+        """Pause cleaning by stopping the robot in place.
+
+        Uses /set/stop — robot halts at current position without returning to dock.
+        A subsequent async_start will call clean_start_or_continue to resume.
+        """
+        LOGGER.debug("async_pause: stopping in place")
         await self.coordinator.async_send_command(self.coordinator.client.stop)
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
