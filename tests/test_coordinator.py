@@ -462,15 +462,13 @@ def test_active_map_id_falls_back_to_configured(coordinator):
     assert coordinator.active_map_id == "3"
 
 
-def test_active_map_id_from_map_status(coordinator):
-    """active_map_id reflects /get/map_status active_map_id."""
+def test_active_map_id_ignores_map_status(coordinator):
+    """active_map_id intentionally ignores /get/map_status — HA must not silently
+    follow the native app's floor selection.  Only the HA-stored preference or the
+    setup-time map_id are used."""
     coordinator.data = {"map_status": {"active_map_id": 4, "operation_map_id": 4}}
-    assert coordinator.active_map_id == "4"
-
-
-def test_active_map_id_strips_whitespace(coordinator):
-    coordinator.data = {"map_status": {"active_map_id": " 5 "}}
-    assert coordinator.active_map_id == "5"
+    # map_status says "4" but _manual_map_id is None → falls back to setup map_id "3"
+    assert coordinator.active_map_id == "3"
 
 
 def test_active_map_id_falls_back_on_empty_string(coordinator):
@@ -601,8 +599,9 @@ def test_available_maps_empty_when_no_data(coordinator):
 
 
 @pytest.mark.asyncio
-async def test_floor_change_resets_areas(coordinator, mock_client):
-    """When active_map_id changes, area tracking state is reset."""
+async def test_device_floor_change_does_not_reset_areas(coordinator, mock_client):
+    """When the device reports a different map via map_status, HA ignores it.
+    Area state must NOT be reset — only async_set_active_map (user action) does that."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
     coordinator._last_active_map_id = "3"
     coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
@@ -613,17 +612,16 @@ async def test_floor_change_resets_areas(coordinator, mock_client):
     coordinator._robot_path = [(0.0, 0.0)]
     coordinator._session_complete = True
 
-    # Simulate floor change: map_status now returns map 4
+    # Device reports a different map — HA must NOT follow it automatically
     mock_client.get_map_status.return_value = {"active_map_id": 4, "operation_map_id": 4}
 
     await coordinator._async_update_data()
 
-    assert coordinator._last_active_map_id == "4"
-    # _last_areas is reset to None then immediately re-set by the areas bucket
-    # but _last_map_geometry stays None to force geometry reload on next tick
-    assert coordinator._last_map_geometry is None  # force geometry reload
-    assert coordinator._robot_path == []  # reset
-    assert coordinator._session_complete is False  # reset
+    # active_map_id stays at setup map_id "3" regardless of what device reports
+    assert coordinator.active_map_id == "3"
+    # Areas/session state must NOT have been reset by the device-reported change
+    assert coordinator._robot_path != []
+    assert coordinator._session_complete is True
 
 
 @pytest.mark.asyncio
@@ -652,11 +650,12 @@ def test_active_map_id_manual_override_wins(coordinator):
     assert coordinator.active_map_id == "57"
 
 
-def test_active_map_id_no_override_uses_api(coordinator):
-    """Without override, active_map_id falls through to /get/map_status."""
+def test_active_map_id_no_override_uses_setup_map_id(coordinator):
+    """Without manual override, active_map_id returns the setup-time map_id.
+    map_status is intentionally ignored — HA must not silently follow the native app."""
     coordinator.data = {"map_status": {"active_map_id": 4, "operation_map_id": 4}}
     coordinator._manual_map_id = None
-    assert coordinator.active_map_id == "4"
+    assert coordinator.active_map_id == "3"  # setup-time map_id, not map_status
 
 
 @pytest.mark.asyncio
@@ -701,50 +700,45 @@ async def test_async_set_active_map_invalidates_dashboard(coordinator):
 
 
 @pytest.mark.asyncio
-async def test_floor_change_preserves_manual_override(coordinator, mock_client):
-    """When the robot reports a different map while the user has a manual override,
-    the manual override is kept so the user's selection is respected."""
+async def test_manual_override_persists_across_poll(coordinator, mock_client):
+    """Manual map override persists across coordinator polls regardless of
+    what map_status the device reports.  HA never silently follows the native app."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
-    coordinator._manual_map_id = "57"          # user had manually selected map 57
-    coordinator._last_active_map_id = "3"
+    coordinator._manual_map_id = "57"
     coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
 
-    # Robot reports map 4 as active
+    # Device reports a completely different map
     mock_client.get_map_status.return_value = {"active_map_id": 4, "operation_map_id": 4}
 
     await coordinator._async_update_data()
 
-    # Manual override is preserved; only the tracking variable updates
+    # Manual override must never be cleared by a poll cycle
     assert coordinator._manual_map_id == "57"
-    assert coordinator._last_active_map_id == "4"
+    assert coordinator.active_map_id == "57"
 
 
 @pytest.mark.asyncio
-async def test_floor_change_without_override_resets_areas(coordinator, mock_client):
-    """When the robot changes floors and there is no manual override,
-    area/session state is reset so fresh areas are loaded for the new floor."""
+async def test_areas_fetched_for_ha_configured_map(coordinator, mock_client):
+    """Areas are always fetched for the HA-configured map, never the device's map_status."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
-    coordinator._manual_map_id = None          # no user override
-    coordinator._last_active_map_id = "3"
+    coordinator._manual_map_id = None          # no user override → uses setup map_id "3"
     coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = {1, 2, 3}    # simulate previously known areas
+    coordinator._known_area_ids = {1, 2, 3}
 
-    # Robot reports map 4 as active
+    # Device reports map 4, but HA should fetch areas for map "3" (setup map)
     mock_client.get_map_status.return_value = {"active_map_id": 4, "operation_map_id": 4}
 
     await coordinator._async_update_data()
 
-    assert coordinator._manual_map_id is None  # still None
-    assert coordinator._last_active_map_id == "4"
-    # _known_area_ids is cleared inside the floor-change block then immediately
-    # repopulated by _check_for_new_areas with the freshly-fetched new-map areas.
-    assert coordinator._known_area_ids == {3, 11, 99}  # MOCK_AREAS ids
+    # Areas must have been fetched for the HA setup map_id ("3"), not device's "4"
+    mock_client.get_areas.assert_called_with("3")
+    assert coordinator.areas_map_id == "3"
 
 
 # ── _check_for_new_areas signal behaviour ────────────────────────────────────

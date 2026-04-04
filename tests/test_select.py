@@ -46,6 +46,8 @@ def _make_coordinator(data=None):
         {"map_id": "4", "display_name": "First Floor"},
     ]
     coord.active_map_id = "3"
+    # async_set_active_map must be an AsyncMock so it can be awaited
+    coord.async_set_active_map = AsyncMock()
     return coord
 
 
@@ -137,9 +139,12 @@ async def test_select_option_unknown_name_passes_raw():
 # ── async_added_to_hass (state restore) ───────────────────────────────
 
 @pytest.mark.asyncio
-async def test_restore_sets_manual_map_id_by_name():
-    """Restoring 'First Floor' sets _manual_map_id to its ID '4'."""
+async def test_restore_triggers_map_switch_when_different():
+    """Restoring 'First Floor' (map 4) while coordinator uses map 3 triggers
+    async_set_active_map so areas and geometry are loaded immediately."""
     coord = _make_coordinator()
+    # active_map_id is "3" (setup map), restored map is "4" → should switch
+    coord.active_map_id = "3"
     entity = _entity(coord)
     entity._build_options()
 
@@ -153,7 +158,8 @@ async def test_restore_sets_manual_map_id_by_name():
 
     await entity.async_added_to_hass()
 
-    assert coord._manual_map_id == "4"
+    # Must have called async_set_active_map with the resolved map ID "4"
+    coord.async_set_active_map.assert_called_once_with("4")
 
 
 @pytest.mark.asyncio
@@ -203,6 +209,7 @@ async def test_restore_populates_name_to_id_before_lookup():
     _manual_map_id instead of the numeric ID '4'.
     """
     coord = _make_coordinator()
+    coord.active_map_id = "3"
     entity = _entity(coord)
     # Deliberately do NOT call entity._build_options() — simulates HA restart
     assert entity._name_to_id == {}   # confirm _name_to_id is empty
@@ -216,8 +223,8 @@ async def test_restore_populates_name_to_id_before_lookup():
 
     await entity.async_added_to_hass()
 
-    # Must resolve to numeric ID, not the raw display name string
-    assert coord._manual_map_id == "4"
+    # Must resolve to numeric ID "4" and call async_set_active_map (not set _manual_map_id directly)
+    coord.async_set_active_map.assert_called_once_with("4")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -338,12 +345,13 @@ async def test_cleaning_mode_restore_invalid_state_ignored():
 # ══════════════════════════════════════════════════════════════════════
 
 
-def _make_strategy_coordinator(cleaning_strategy=STRATEGY_DEFAULT):
+def _make_strategy_coordinator(cleaning_strategy=STRATEGY_DEFAULT, last_non_deep=STRATEGY_DEFAULT):
     coord = MagicMock()
     coord.device_id = "dev123"
     coord.config_entry = MagicMock()
     coord.config_entry.entry_id = "test_entry"
     coord.cleaning_strategy = cleaning_strategy
+    coord.last_non_deep_strategy = last_non_deep
     return coord
 
 
@@ -354,7 +362,6 @@ def _strategy_entity(coord=None) -> RobEyeStrategySelect:
     object.__setattr__(entity, "coordinator", coord)
     object.__setattr__(entity, "_attr_unique_id", "")
     object.__setattr__(entity, "entity_id", "")
-    object.__setattr__(entity, "_last_non_deep", STRATEGY_LABELS[STRATEGY_DEFAULT])
     object.__setattr__(entity, "async_write_ha_state", MagicMock())
     RobEyeStrategySelect.__init__(entity, coord)
     return entity
@@ -385,9 +392,8 @@ def test_strategy_current_option_walls_corners():
 
 def test_strategy_current_option_deep_returns_last_non_deep():
     """When strategy is DEEP (controlled by switch), select shows last non-deep value."""
-    coord = _make_strategy_coordinator(STRATEGY_DEEP)
+    coord = _make_strategy_coordinator(STRATEGY_DEEP, last_non_deep="1")  # Normal
     entity = _strategy_entity(coord)
-    entity._last_non_deep = "Normal"
     assert entity.current_option == "Normal"
 
 
@@ -407,7 +413,8 @@ async def test_strategy_select_option_updates_last_non_deep():
     entity = _strategy_entity(coord)
     entity.async_write_ha_state = MagicMock()
     await entity.async_select_option("Walls & Corners")
-    assert entity._last_non_deep == "Walls & Corners"
+    # last_non_deep_strategy is now on the coordinator, stored as raw API value "2"
+    assert coord.last_non_deep_strategy == "2"
 
 
 @pytest.mark.asyncio
@@ -434,8 +441,9 @@ async def test_strategy_restore_valid_non_deep():
     RestoreEntity.async_added_to_hass = AsyncMock()
 
     await entity.async_added_to_hass()
-    assert entity._last_non_deep == "Normal"
+    # Both the active strategy and the pre-deep bookmark must be set on coordinator
     assert coord.cleaning_strategy == "1"
+    assert coord.last_non_deep_strategy == "1"
 
 
 @pytest.mark.asyncio

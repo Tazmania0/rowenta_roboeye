@@ -145,17 +145,26 @@ class RobEyeCleaningModeSelect(RobEyeEntity, SelectEntity, RestoreEntity):
 
     @property
     def current_option(self) -> str | None:
+        # Once HA has a stored preference (_last_known), always return it.
+        # The device's reported fan speed is only used to populate the initial
+        # value on first setup (when no prior HA state exists).
+        if self._last_known is not None:
+            return self._last_known
         raw = str(self.coordinator.status.get("cleaning_parameter_set", ""))
         live = FAN_SPEED_MAP.get(raw)
         if live is not None:
             self._last_known = live
-        return live or self._last_known
+            self.coordinator.ha_fan_speed = raw
+        return live
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         if (last_state := await self.async_get_last_state()) is not None:
             if last_state.state in FAN_SPEEDS:
                 self._last_known = last_state.state
+                raw = FAN_SPEED_REVERSE_MAP.get(last_state.state)
+                if raw:
+                    self.coordinator.ha_fan_speed = raw
 
     async def async_select_option(self, option: str) -> None:
         raw = FAN_SPEED_REVERSE_MAP.get(option)
@@ -163,6 +172,7 @@ class RobEyeCleaningModeSelect(RobEyeEntity, SelectEntity, RestoreEntity):
             LOGGER.warning("Unknown cleaning mode: %s", option)
             return
         self._last_known = option
+        self.coordinator.ha_fan_speed = raw
         await self.coordinator.async_send_command(
             self.coordinator.client.set_fan_speed,
             cleaning_parameter_set=raw,
@@ -255,7 +265,20 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
             state = last_state.state
             if state not in ("unknown", "unavailable"):
                 map_id = self._name_to_id.get(state, state)
-                self.coordinator._manual_map_id = map_id
+                if map_id != self.coordinator.active_map_id:
+                    # The restored map differs from the one used during the first
+                    # coordinator refresh (which ran before any entity was loaded).
+                    # Force a full map switch now so areas, geometry, and live map
+                    # are fetched for the correct map immediately rather than after
+                    # the next 300-s / 600-s polling cycle.
+                    LOGGER.debug(
+                        "Active map restored to %s (was %s) — forcing immediate switch",
+                        map_id,
+                        self.coordinator.active_map_id,
+                    )
+                    await self.coordinator.async_set_active_map(map_id)
+                else:
+                    self.coordinator._manual_map_id = map_id
 
     async def async_select_option(self, option: str) -> None:
         map_id = self._name_to_id.get(option, option)
@@ -285,33 +308,35 @@ class RobEyeStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"cleaning_strategy_{coordinator.device_id}"
         self.entity_id = f"select.{coordinator.device_id}_cleaning_strategy"
-        self._last_non_deep: str = STRATEGY_LABELS[STRATEGY_DEFAULT]
 
     @property
     def current_option(self) -> str:
         strategy = self.coordinator.cleaning_strategy
         if strategy == STRATEGY_DEEP:
-            # Deep is controlled by the switch; keep select showing last non-deep choice
-            return self._last_non_deep
-        label = STRATEGY_LABELS.get(strategy, STRATEGY_LABELS[STRATEGY_DEFAULT])
-        self._last_non_deep = label
-        return label
+            # Deep is driven by the switch; show the last explicitly chosen non-deep option
+            return STRATEGY_LABELS.get(
+                self.coordinator.last_non_deep_strategy,
+                STRATEGY_LABELS[STRATEGY_DEFAULT],
+            )
+        return STRATEGY_LABELS.get(strategy, STRATEGY_LABELS[STRATEGY_DEFAULT])
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         if (last_state := await self.async_get_last_state()) is not None:
             api_val = STRATEGY_REVERSE_MAP.get(last_state.state)
             if api_val is not None and api_val != STRATEGY_DEEP:
-                self._last_non_deep = last_state.state
+                # Restore both the active strategy and the pre-deep bookmark so
+                # turning the deep-clean switch off returns here, not to Default.
                 self.coordinator.cleaning_strategy = api_val
+                self.coordinator.last_non_deep_strategy = api_val
 
     async def async_select_option(self, option: str) -> None:
         api_val = STRATEGY_REVERSE_MAP.get(option)
         if api_val is None:
             LOGGER.warning("Unknown cleaning strategy option: %s", option)
             return
-        self._last_non_deep = option
         self.coordinator.cleaning_strategy = api_val
+        self.coordinator.last_non_deep_strategy = api_val
         self.async_write_ha_state()
 
 
