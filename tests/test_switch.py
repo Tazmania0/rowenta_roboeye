@@ -19,10 +19,11 @@ from custom_components.rowenta_roboeye.const import (
 # ── Helpers ───────────────────────────────────────────────────────────
 
 
-def _make_coordinator(device_id="dev123", cleaning_strategy=STRATEGY_DEFAULT, active_map_id="3"):
+def _make_coordinator(device_id="dev123", cleaning_strategy=STRATEGY_DEFAULT, active_map_id="3", last_non_deep=STRATEGY_DEFAULT):
     coord = MagicMock()
     coord.device_id = device_id
     coord.cleaning_strategy = cleaning_strategy
+    coord.last_non_deep_strategy = last_non_deep
     coord.active_map_id = active_map_id
     coord.areas_map_id = active_map_id
     coord.areas = []
@@ -103,11 +104,13 @@ async def test_deep_clean_turn_on_sets_strategy_deep():
 
 
 @pytest.mark.asyncio
-async def test_deep_clean_turn_off_sets_strategy_default():
-    coord = _make_coordinator(cleaning_strategy=STRATEGY_DEEP)
+async def test_deep_clean_turn_off_restores_prior_strategy():
+    """Turning off deep clean restores the last explicitly chosen non-deep strategy,
+    NOT STRATEGY_DEFAULT — the user's prior selection must be preserved."""
+    coord = _make_coordinator(cleaning_strategy=STRATEGY_DEEP, last_non_deep="2")  # Walls & Corners
     sw = _make_deep_clean_switch(coord)
     await sw.async_turn_off()
-    assert coord.cleaning_strategy == STRATEGY_DEFAULT
+    assert coord.cleaning_strategy == "2"  # restored to Walls & Corners, not Default
     sw.async_write_ha_state.assert_called_once()
 
 

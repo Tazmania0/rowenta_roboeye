@@ -308,33 +308,35 @@ class RobEyeStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"cleaning_strategy_{coordinator.device_id}"
         self.entity_id = f"select.{coordinator.device_id}_cleaning_strategy"
-        self._last_non_deep: str = STRATEGY_LABELS[STRATEGY_DEFAULT]
 
     @property
     def current_option(self) -> str:
         strategy = self.coordinator.cleaning_strategy
         if strategy == STRATEGY_DEEP:
-            # Deep is controlled by the switch; keep select showing last non-deep choice
-            return self._last_non_deep
-        label = STRATEGY_LABELS.get(strategy, STRATEGY_LABELS[STRATEGY_DEFAULT])
-        self._last_non_deep = label
-        return label
+            # Deep is driven by the switch; show the last explicitly chosen non-deep option
+            return STRATEGY_LABELS.get(
+                self.coordinator.last_non_deep_strategy,
+                STRATEGY_LABELS[STRATEGY_DEFAULT],
+            )
+        return STRATEGY_LABELS.get(strategy, STRATEGY_LABELS[STRATEGY_DEFAULT])
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         if (last_state := await self.async_get_last_state()) is not None:
             api_val = STRATEGY_REVERSE_MAP.get(last_state.state)
             if api_val is not None and api_val != STRATEGY_DEEP:
-                self._last_non_deep = last_state.state
+                # Restore both the active strategy and the pre-deep bookmark so
+                # turning the deep-clean switch off returns here, not to Default.
                 self.coordinator.cleaning_strategy = api_val
+                self.coordinator.last_non_deep_strategy = api_val
 
     async def async_select_option(self, option: str) -> None:
         api_val = STRATEGY_REVERSE_MAP.get(option)
         if api_val is None:
             LOGGER.warning("Unknown cleaning strategy option: %s", option)
             return
-        self._last_non_deep = option
         self.coordinator.cleaning_strategy = api_val
+        self.coordinator.last_non_deep_strategy = api_val
         self.async_write_ha_state()
 
 

@@ -98,7 +98,7 @@ async def async_setup_entry(
 
 
 class RobEyeDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
-    """Global toggle: ON = STRATEGY_DEEP, OFF = STRATEGY_DEFAULT.
+    """Global toggle: ON = STRATEGY_DEEP, OFF = restore prior non-deep strategy.
 
     Kept for backwards compatibility. The strategy select entity exposes all
     four modes; this switch is the simpler ON/OFF facade over it.
@@ -128,7 +128,9 @@ class RobEyeDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:  # type: ignore[override]
-        self.coordinator.cleaning_strategy = STRATEGY_DEFAULT
+        # Restore the strategy that was active before deep clean was enabled,
+        # not STRATEGY_DEFAULT — the user's prior choice must be preserved.
+        self.coordinator.cleaning_strategy = self.coordinator.last_non_deep_strategy
         self.async_write_ha_state()
 
 

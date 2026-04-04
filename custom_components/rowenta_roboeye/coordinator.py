@@ -106,6 +106,12 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Cleaning strategy — set by strategy select or deep-clean switch; read by all clean operations
         self.cleaning_strategy: str = STRATEGY_DEFAULT
 
+        # Last explicitly chosen non-deep strategy ("1", "2", or "4").
+        # Preserved so that turning off the deep-clean switch restores the user's prior
+        # strategy choice rather than resetting to STRATEGY_DEFAULT.
+        # Updated by RobEyeStrategySelect whenever a non-deep option is selected or restored.
+        self.last_non_deep_strategy: str = STRATEGY_DEFAULT
+
         # HA-preferred fan speed raw value ("1"–"4").
         # Set once from device on first setup (or state restore); thereafter HA takes precedence
         # and this value is never overwritten by coordinator polls.
