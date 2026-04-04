@@ -313,6 +313,35 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             self._last_mode = mode
 
+            # ── Resolve active map ID early ───────────────────────────
+            # On startup self.data is empty, so self.active_map_id would fall
+            # back to the config-stored map_id which may differ from the robot's
+            # current active floor.  Fetch /get/map_status now (once, on the
+            # first tick when DATA_MAP_STATUS is absent) so all geometry calls
+            # below use the correct map_id immediately.
+            if DATA_MAP_STATUS not in data:
+                try:
+                    _ms = await self.client.get_map_status()
+                    data[DATA_MAP_STATUS] = _ms
+                    _resolved_early = str(_ms.get("active_map_id", "")).strip()
+                    if _resolved_early and self._manual_map_id is None:
+                        # Pre-populate _last_active_map_id so the areas block
+                        # below does not treat this as a floor-switch event and
+                        # unnecessarily invalidate the geometry we are about to
+                        # fetch.
+                        self._last_active_map_id = _resolved_early
+                except CannotConnect:
+                    LOGGER.debug("get_map_status early fetch unavailable")
+
+            # Local effective map ID for this update cycle — reads from the
+            # local data dict (may include the freshly fetched map_status above)
+            # rather than from self.data (last committed, could be stale on startup).
+            _active_map_id: str = (
+                self._manual_map_id
+                or str((data.get(DATA_MAP_STATUS) or {}).get("active_map_id", "")).strip()
+                or self.map_id
+            )
+
             # ── Every 600 s: saved-map geometry (walls, rooms, outline) ──
             # Fetched BEFORE the live-map block so that feature_map / tile_map /
             # areas_saved_map are available the very first time _build_live_map_payload
@@ -323,19 +352,19 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ) >= timedelta(seconds=SCAN_INTERVAL_MAP_GEOMETRY)
             ):
                 try:
-                    data[DATA_FEATURE_MAP] = await self.client.get_feature_map(self.active_map_id)
+                    data[DATA_FEATURE_MAP] = await self.client.get_feature_map(_active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_feature_map unavailable, skipping")
                 try:
-                    data[DATA_TILE_MAP] = await self.client.get_tile_map(self.active_map_id)
+                    data[DATA_TILE_MAP] = await self.client.get_tile_map(_active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_tile_map unavailable, skipping")
                 try:
-                    data[DATA_AREAS_SAVED_MAP] = await self.client.get_areas(self.active_map_id)
+                    data[DATA_AREAS_SAVED_MAP] = await self.client.get_areas(_active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_areas (map geometry) unavailable, skipping")
                 try:
-                    data[DATA_SEEN_POLY_SAVED_MAP] = await self.client.get_seen_polygon(self.active_map_id)
+                    data[DATA_SEEN_POLY_SAVED_MAP] = await self.client.get_seen_polygon(_active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_seen_polygon (map geometry) unavailable, skipping")
 
@@ -343,12 +372,12 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if not is_active:
                     try:
                         saved_grid = await self.client.get_cleaning_grid_map(
-                            map_id=self.active_map_id
+                            map_id=_active_map_id
                         )
                         if saved_grid.get("size_x", 0) > 0:
                             self._last_session_grid = saved_grid
                             self._last_session_map_id = str(
-                                saved_grid.get("map_id", self.active_map_id)
+                                saved_grid.get("map_id", _active_map_id)
                             )
                             if not self._session_complete:
                                 self._session_complete = True
@@ -442,7 +471,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         areas_data=data.get(DATA_AREAS_SAVED_MAP, {}),
                         seen_poly_saved_map=data.get(DATA_SEEN_POLY_SAVED_MAP, {}),
                         is_active=is_active,
-                        map_id=self.active_map_id,
+                        map_id=_active_map_id,
                         robot_path=self._robot_path,
                         last_session_grid=self._last_session_grid,
                         last_session_path=self._last_session_path,
