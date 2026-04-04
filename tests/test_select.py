@@ -46,6 +46,8 @@ def _make_coordinator(data=None):
         {"map_id": "4", "display_name": "First Floor"},
     ]
     coord.active_map_id = "3"
+    # async_set_active_map must be an AsyncMock so it can be awaited
+    coord.async_set_active_map = AsyncMock()
     return coord
 
 
@@ -137,9 +139,12 @@ async def test_select_option_unknown_name_passes_raw():
 # ── async_added_to_hass (state restore) ───────────────────────────────
 
 @pytest.mark.asyncio
-async def test_restore_sets_manual_map_id_by_name():
-    """Restoring 'First Floor' sets _manual_map_id to its ID '4'."""
+async def test_restore_triggers_map_switch_when_different():
+    """Restoring 'First Floor' (map 4) while coordinator uses map 3 triggers
+    async_set_active_map so areas and geometry are loaded immediately."""
     coord = _make_coordinator()
+    # active_map_id is "3" (setup map), restored map is "4" → should switch
+    coord.active_map_id = "3"
     entity = _entity(coord)
     entity._build_options()
 
@@ -153,7 +158,8 @@ async def test_restore_sets_manual_map_id_by_name():
 
     await entity.async_added_to_hass()
 
-    assert coord._manual_map_id == "4"
+    # Must have called async_set_active_map with the resolved map ID "4"
+    coord.async_set_active_map.assert_called_once_with("4")
 
 
 @pytest.mark.asyncio
@@ -203,6 +209,7 @@ async def test_restore_populates_name_to_id_before_lookup():
     _manual_map_id instead of the numeric ID '4'.
     """
     coord = _make_coordinator()
+    coord.active_map_id = "3"
     entity = _entity(coord)
     # Deliberately do NOT call entity._build_options() — simulates HA restart
     assert entity._name_to_id == {}   # confirm _name_to_id is empty
@@ -216,8 +223,8 @@ async def test_restore_populates_name_to_id_before_lookup():
 
     await entity.async_added_to_hass()
 
-    # Must resolve to numeric ID, not the raw display name string
-    assert coord._manual_map_id == "4"
+    # Must resolve to numeric ID "4" and call async_set_active_map (not set _manual_map_id directly)
+    coord.async_set_active_map.assert_called_once_with("4")
 
 
 # ══════════════════════════════════════════════════════════════════════

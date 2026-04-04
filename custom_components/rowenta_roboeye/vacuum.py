@@ -90,6 +90,10 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         self.entity_id = f"vacuum.{coordinator.device_id}"
         self._error_status: str | None = None
         self._is_paused: bool = False
+        # True when an error occurred while a cleaning session was active.
+        # The next Start command will use clean_start_or_continue to resume
+        # from the interrupted position instead of starting a fresh whole-home clean.
+        self._was_cleaning_when_errored: bool = False
 
     @property
     def extra_state_attributes(self) -> dict[str, str] | None:
@@ -126,15 +130,25 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         _hardware_error = bool(_error_conditions) or mode == MODE_NOT_READY
 
         if _hardware_error:
+            # Track whether the error interrupted an active cleaning session so
+            # the next Start command can resume rather than start from scratch.
+            if self._attr_activity in (VacuumActivity.CLEANING, VacuumActivity.PAUSED):
+                self._was_cleaning_when_errored = True
             self._attr_activity = VacuumActivity.ERROR
             self._error_status = ", ".join(_error_conditions) if _error_conditions else "Not ready"
         else:
             self._error_status = None
             if mode == MODE_CLEANING:
                 self._is_paused = False
+                self._was_cleaning_when_errored = False
                 self._attr_activity = VacuumActivity.CLEANING
             elif mode == MODE_READY and charging in (CHARGING_CHARGING, CHARGING_CONNECTED):
                 self._is_paused = False
+                # Only clear the error-resume flag when the robot fully docks after a
+                # non-error session; if it docked *because* of an error, keep the flag
+                # so the user can still resume when they fix the issue.
+                if not self._was_cleaning_when_errored:
+                    pass  # flag already False; nothing to do
                 self._attr_activity = VacuumActivity.DOCKED
             elif mode == MODE_READY and charging == CHARGING_UNCONNECTED:
                 self._attr_activity = VacuumActivity.PAUSED
@@ -149,21 +163,37 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
     # ── Standard vacuum services ──────────────────────────────────────
 
     async def async_start(self, **kwargs: Any) -> None:
-        """Start a new clean or resume a paused one.
+        """Start a new clean or resume a paused / error-interrupted one.
 
-        If activity is PAUSED (robot stopped mid-clean, off dock),
-        sends /set/clean_start_or_continue to resume from current position.
+        Resume paths (clean_start_or_continue):
+          - Robot is PAUSED (stopped mid-clean, off dock).
+          - Robot encountered a hardware error during cleaning; the flag
+            _was_cleaning_when_errored is set so we resume rather than restart
+            even if the robot returned to dock to report the fault.
+
         Otherwise sends /set/clean_all to start a new whole-home clean.
         """
-        if self._attr_activity == VacuumActivity.PAUSED:
-            LOGGER.debug("async_start: resuming paused clean via clean_start_or_continue")
+        should_resume = (
+            self._attr_activity == VacuumActivity.PAUSED
+            or self._was_cleaning_when_errored
+        )
+        if should_resume:
+            LOGGER.debug(
+                "async_start: resuming via clean_start_or_continue "
+                "(activity=%s, error_interrupted=%s)",
+                self._attr_activity,
+                self._was_cleaning_when_errored,
+            )
+            self._was_cleaning_when_errored = False
             await self.coordinator.async_send_command(
                 self.coordinator.client.clean_start_or_continue
             )
         else:
             LOGGER.debug("async_start: starting new clean (activity=%s)", self._attr_activity)
             self._is_paused = False
-            raw = FAN_SPEED_REVERSE_MAP.get(self._attr_fan_speed or "normal", "2")
+            raw = self.coordinator.ha_fan_speed or FAN_SPEED_REVERSE_MAP.get(
+                self._attr_fan_speed or "normal", "2"
+            )
             await self.coordinator.async_send_command(
                 self.coordinator.client.clean_all,
                 cleaning_parameter_set=raw,
@@ -174,6 +204,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         """Stop the vacuum immediately."""
         LOGGER.debug("async_stop")
         self._is_paused = False
+        self._was_cleaning_when_errored = False
         await self.coordinator.async_send_command(self.coordinator.client.stop)
 
     async def async_pause(self, **kwargs: Any) -> None:
@@ -197,6 +228,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         if raw is None:
             LOGGER.warning("Unknown fan speed: %s", fan_speed)
             return
+        self.coordinator.ha_fan_speed = raw
         await self.coordinator.async_send_command(
             self.coordinator.client.set_fan_speed,
             cleaning_parameter_set=raw,

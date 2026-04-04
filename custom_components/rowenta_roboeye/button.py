@@ -23,6 +23,7 @@ from .const import (
     SIGNAL_AREAS_UPDATED,
     STRATEGY_DEEP,
     STRATEGY_REVERSE_MAP,
+    STRATEGY_DEFAULT,
 )
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity, async_remove_stale_room_entities
@@ -155,12 +156,87 @@ class RobEyeCleanAllButton(RobEyeBaseButton):
         self.entity_id = f"button.{coordinator.device_id}_clean_entire_home"
 
     async def async_press(self) -> None:
-        raw = str(self.coordinator.status.get("cleaning_parameter_set", "2"))
-        await self.coordinator.async_send_command(
-            self.coordinator.client.clean_all,
-            cleaning_parameter_set=raw,
-            strategy_mode=self.coordinator.cleaning_strategy,
+        # Use the HA-preferred fan speed (set by the global fan speed select or
+        # async_set_fan_speed on the vacuum entity). Fall back to the device's
+        # current value only when HA has never stored a preference.
+        raw = self.coordinator.ha_fan_speed or str(
+            self.coordinator.status.get("cleaning_parameter_set", "2")
         )
+        strategy = self.coordinator.cleaning_strategy
+
+        # Build area list for the active map, skipping rooms disabled in the app.
+        # Using clean_map (instead of clean_all) means:
+        #  - Rooms marked blocking in the RobEye app are excluded.
+        #  - Per-room fan-speed and strategy selects in HA are read for each room;
+        #    because the API accepts a single value for all rooms in one call,
+        #    we compute the effective global setting here and apply it uniformly.
+        areas = [
+            a for a in self.coordinator.areas
+            if a.get("id") is not None and a.get("area_state") != AREA_STATE_BLOCKING
+        ]
+
+        if areas:
+            # Collect per-room strategy/fan-speed from HA entities.
+            dev = self.coordinator.device_id
+            map_id = self.coordinator.active_map_id
+            hass = self.coordinator.hass
+
+            for area in areas:
+                area_id = str(area.get("id"))
+                # Per-room deep-clean switch overrides everything for that room.
+                switch_id = f"switch.{dev}_map{map_id}_room_{area_id}_deep_clean"
+                switch_state = hass.states.get(switch_id)
+                if switch_state is not None and switch_state.state == "on":
+                    strategy = STRATEGY_DEEP
+                    break  # one deep-clean room → deep for the whole run
+
+            # If no room forced deep-clean, check per-room strategy selects.
+            if strategy != STRATEGY_DEEP:
+                for area in areas:
+                    area_id = str(area.get("id"))
+                    sel_id = f"select.{dev}_map{map_id}_room_{area_id}_strategy"
+                    sel_state = hass.states.get(sel_id)
+                    if sel_state is not None and sel_state.state in STRATEGY_REVERSE_MAP:
+                        room_strategy = STRATEGY_REVERSE_MAP[sel_state.state]
+                        # Escalate to the most intensive strategy found.
+                        if room_strategy != STRATEGY_DEFAULT and strategy == STRATEGY_DEFAULT:
+                            strategy = room_strategy
+
+            # Per-room fan speed: use the most intensive speed found across rooms.
+            _speed_order = {"silent": 0, "eco": 1, "normal": 2, "high": 3}
+            best_raw = raw
+            for area in areas:
+                area_id = str(area.get("id"))
+                fan_sel_id = f"select.{dev}_map{map_id}_room_{area_id}_fan_speed"
+                fan_state = hass.states.get(fan_sel_id)
+                if fan_state is not None and fan_state.state in FAN_SPEEDS:
+                    candidate_raw = FAN_SPEED_REVERSE_MAP.get(fan_state.state, raw)
+                    if _speed_order.get(
+                        FAN_SPEED_MAP.get(candidate_raw, ""), -1
+                    ) > _speed_order.get(FAN_SPEED_MAP.get(best_raw, ""), -1):
+                        best_raw = candidate_raw
+            raw = best_raw
+
+            area_ids_str = ",".join(str(a["id"]) for a in areas)
+            LOGGER.debug(
+                "clean_all: using clean_map with %d areas, fan=%s, strategy=%s",
+                len(areas), raw, strategy,
+            )
+            await self.coordinator.async_send_command(
+                self.coordinator.client.clean_map,
+                map_id=map_id,
+                area_ids=area_ids_str,
+                cleaning_parameter_set=raw,
+                strategy_mode=strategy,
+            )
+        else:
+            # No area data yet (first boot) — fall back to clean_all.
+            LOGGER.debug("clean_all: no area data, falling back to clean_all endpoint")
+            await self.coordinator.async_send_command(
+                self.coordinator.client.clean_all,
+                cleaning_parameter_set=raw,
+                strategy_mode=strategy,
+            )
 
 
 

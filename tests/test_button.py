@@ -34,6 +34,9 @@ def _make_coordinator(status=None, areas=None, device_id="dev123", active_map_id
     coord.areas = list((areas or MOCK_AREAS)["areas"])
     coord.status = dict(status or MOCK_STATUS)
     coord.cleaning_strategy = STRATEGY_DEFAULT
+    # ha_fan_speed must be None (not a MagicMock) so the fallback to
+    # status["cleaning_parameter_set"] is exercised when no HA preference exists.
+    coord.ha_fan_speed = None
     coord.async_send_command = AsyncMock()
     coord.client = MagicMock()
     coord.client.go_home = AsyncMock()

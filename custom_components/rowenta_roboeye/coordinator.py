@@ -106,6 +106,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Cleaning strategy — set by strategy select or deep-clean switch; read by all clean operations
         self.cleaning_strategy: str = STRATEGY_DEFAULT
 
+        # HA-preferred fan speed raw value ("1"–"4").
+        # Set once from device on first setup (or state restore); thereafter HA takes precedence
+        # and this value is never overwritten by coordinator polls.
+        self.ha_fan_speed: str | None = None
+
         # Brush stuck notification state tracking
         self._brush_left_notified: bool = False
         self._brush_right_notified: bool = False

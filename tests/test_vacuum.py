@@ -17,6 +17,7 @@ def _make_vacuum(status: dict):
     coord.status = status
     coord.config_entry = entry
     coord.active_map_id = "3"
+    coord.ha_fan_speed = None  # explicit None so fallback to status value works
     coord.async_send_command = AsyncMock()
     coord.client = MagicMock()
     coord.client.clean_all = AsyncMock()
@@ -35,6 +36,7 @@ def _make_vacuum(status: dict):
     vac._attr_activity = None
     vac._is_paused = False
     vac._error_status = None
+    vac._was_cleaning_when_errored = False
     vac.async_write_ha_state = lambda: None
     return vac, coord
 
