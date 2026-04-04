@@ -437,8 +437,27 @@ class RobEyeLiveMapSensor(RobEyeEntity, SensorEntity):
 
     @property
     def native_value(self) -> str:
-        from .const import MODE_CLEANING, MODE_GO_HOME
-        mode = self.coordinator.status.get("mode", "")
+        from .const import (
+            CHARGING_UNCONNECTED,
+            MODE_CLEANING,
+            MODE_GO_HOME,
+            MODE_NOT_READY,
+        )
+        status = self.coordinator.status
+        mode = status.get("mode", "")
+        charging = status.get("charging", "")
+
+        # Error / stuck: hardware fault or robot not-ready
+        sv = self.coordinator.sensor_values_parsed
+        hardware_error = (
+            mode == MODE_NOT_READY
+            or sv.get("gpio__dustbin") == "inactive"
+            or sv.get("gpio__side_brush_left_stuck") == "active"
+            or sv.get("gpio__side_brush_right_stuck") == "active"
+        )
+        if hardware_error:
+            return "error"
+
         if mode == MODE_CLEANING:
             live_map = self.coordinator.live_map
             # Exploring new map (no saved map rooms available yet)
@@ -452,6 +471,9 @@ class RobEyeLiveMapSensor(RobEyeEntity, SensorEntity):
             return "cleaning"
         if mode == MODE_GO_HOME:
             return "returning"
+        # Paused: off dock, not cleaning, not returning home
+        if charging == CHARGING_UNCONNECTED:
+            return "paused"
         if self.coordinator.session_complete:
             return "session_complete"
         return "idle"
