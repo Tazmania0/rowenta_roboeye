@@ -80,6 +80,7 @@ from .const import (
     API_SET_FAN_SPEED,
     API_SET_GO_HOME,
     API_SET_STOP,
+    API_SET_CLEAN_START_OR_CONTINUE,
     DEFAULT_PORT,
     DEFAULT_TIMEOUT,
     LOGGER,
@@ -385,6 +386,16 @@ class RobEyeApiClient:
                 "cleaning_strategy_mode": strategy_mode,
             },
         )
+
+    async def clean_start_or_continue(self) -> None:
+        """GET /set/clean_start_or_continue — resume an interrupted clean.
+
+        Confirmed from RobEye web UI log (live device):
+          After stop: clean_start_or_continue → {"cmd_id":68,"status":"executing"}
+
+        Resumes from robot's current position. Does NOT reset to dock.
+        """
+        await self._get(API_SET_CLEAN_START_OR_CONTINUE)
 
     async def clean_map(
         self,

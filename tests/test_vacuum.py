@@ -21,6 +21,7 @@ def _make_vacuum(status: dict):
     coord.client = MagicMock()
     coord.client.clean_all = AsyncMock()
     coord.client.clean_map = AsyncMock()
+    coord.client.clean_start_or_continue = AsyncMock()
     coord.client.stop = AsyncMock()
     coord.client.go_home = AsyncMock()
     coord.client.set_fan_speed = AsyncMock()
@@ -44,7 +45,7 @@ def _make_vacuum(status: dict):
     ("cleaning",  "unconnected", "CLEANING"),
     ("ready",     "charging",    "DOCKED"),
     ("ready",     "connected",   "DOCKED"),
-    ("ready",     "unconnected", "IDLE"),
+    ("ready",     "unconnected", "PAUSED"),
     ("go_home",   "unconnected", "RETURNING"),
     ("unknown",   "unconnected", "IDLE"),
 ])
@@ -164,29 +165,72 @@ async def test_clean_room_fan_speed_override():
 # ── Service: pause ────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_async_pause_calls_stop_and_sets_flag():
+async def test_async_pause_calls_stop():
     from homeassistant.components.vacuum import VacuumActivity
     vac, coord = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
     vac._attr_activity = VacuumActivity.CLEANING
     await vac.async_pause()
     coord.async_send_command.assert_called_once_with(coord.client.stop)
-    assert vac._is_paused is True
 
 
 def test_state_machine_paused():
     from homeassistant.components.vacuum import VacuumActivity
     vac, _ = _make_vacuum({"mode": "ready", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
-    vac._is_paused = True
     vac.coordinator.sensor_values_parsed = {}
     vac._handle_coordinator_update()
-    assert vac._attr_activity is VacuumActivity.IDLE
+    assert vac._attr_activity is VacuumActivity.PAUSED
 
 
 def test_state_machine_clears_paused_on_cleaning():
     from homeassistant.components.vacuum import VacuumActivity
     vac, _ = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
-    vac._is_paused = True
     vac.coordinator.sensor_values_parsed = {}
     vac._handle_coordinator_update()
-    assert vac._is_paused is False
     assert vac._attr_activity is VacuumActivity.CLEANING
+
+
+# ── Service: start — context-aware pause/resume ───────────────────────
+
+@pytest.mark.asyncio
+async def test_start_from_paused_calls_resume():
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "ready", "charging": "unconnected", "battery_level": 75, "cleaning_parameter_set": 2})
+    vac._attr_activity = VacuumActivity.PAUSED
+    await vac.async_start()
+    coord.async_send_command.assert_called_once_with(coord.client.clean_start_or_continue)
+
+
+@pytest.mark.asyncio
+async def test_start_from_docked_calls_clean_all():
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "ready", "charging": "charging", "battery_level": 100, "cleaning_parameter_set": 2})
+    vac._attr_activity = VacuumActivity.DOCKED
+    await vac.async_start()
+    coord.async_send_command.assert_called_once()
+    assert coord.async_send_command.call_args[0][0] is coord.client.clean_all
+
+
+@pytest.mark.asyncio
+async def test_start_from_idle_calls_clean_all():
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "unknown", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    vac._attr_activity = VacuumActivity.IDLE
+    await vac.async_start()
+    coord.async_send_command.assert_called_once()
+    assert coord.async_send_command.call_args[0][0] is coord.client.clean_all
+
+
+@pytest.mark.asyncio
+async def test_pause_calls_stop_not_go_home():
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    vac._attr_activity = VacuumActivity.CLEANING
+    await vac.async_pause()
+    coord.async_send_command.assert_called_once_with(coord.client.stop)
+    coord.client.go_home.assert_not_called()
+
+
+def test_pause_feature_declared():
+    from homeassistant.components.vacuum import VacuumEntityFeature
+    vac, _ = _make_vacuum({"mode": "ready", "charging": "charging", "battery_level": 100, "cleaning_parameter_set": 2})
+    assert vac._attr_supported_features & VacuumEntityFeature.PAUSE
