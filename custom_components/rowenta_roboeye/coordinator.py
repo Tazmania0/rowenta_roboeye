@@ -144,12 +144,13 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def active_map_id(self) -> str:
-        """Runtime map ID: manual override > /get/map_status > setup-time map_id."""
-        if self._manual_map_id is not None:
-            return self._manual_map_id
-        map_status = (self.data or {}).get(DATA_MAP_STATUS, {})
-        active = str(map_status.get("active_map_id", "")).strip()
-        return active if active else self.map_id
+        """Runtime map ID: manual HA selection > setup-time config map_id.
+
+        Always follows what the user has configured in HA.  The device's own
+        /get/map_status is intentionally ignored here — the native app can
+        change the active floor at any time and HA must not silently follow it.
+        """
+        return self._manual_map_id or self.map_id
 
     @property
     def available_maps(self) -> list[dict]:
@@ -313,6 +314,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             self._last_mode = mode
 
+            # Effective map ID for this update cycle — always HA-configured,
+            # never the device's dynamically reported active map.
+            _active_map_id: str = self._manual_map_id or self.map_id
+
             # ── Every 600 s: saved-map geometry (walls, rooms, outline) ──
             # Fetched BEFORE the live-map block so that feature_map / tile_map /
             # areas_saved_map are available the very first time _build_live_map_payload
@@ -323,19 +328,19 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ) >= timedelta(seconds=SCAN_INTERVAL_MAP_GEOMETRY)
             ):
                 try:
-                    data[DATA_FEATURE_MAP] = await self.client.get_feature_map(self.active_map_id)
+                    data[DATA_FEATURE_MAP] = await self.client.get_feature_map(_active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_feature_map unavailable, skipping")
                 try:
-                    data[DATA_TILE_MAP] = await self.client.get_tile_map(self.active_map_id)
+                    data[DATA_TILE_MAP] = await self.client.get_tile_map(_active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_tile_map unavailable, skipping")
                 try:
-                    data[DATA_AREAS_SAVED_MAP] = await self.client.get_areas(self.active_map_id)
+                    data[DATA_AREAS_SAVED_MAP] = await self.client.get_areas(_active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_areas (map geometry) unavailable, skipping")
                 try:
-                    data[DATA_SEEN_POLY_SAVED_MAP] = await self.client.get_seen_polygon(self.active_map_id)
+                    data[DATA_SEEN_POLY_SAVED_MAP] = await self.client.get_seen_polygon(_active_map_id)
                 except CannotConnect:
                     LOGGER.debug("get_seen_polygon (map geometry) unavailable, skipping")
 
@@ -343,12 +348,12 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if not is_active:
                     try:
                         saved_grid = await self.client.get_cleaning_grid_map(
-                            map_id=self.active_map_id
+                            map_id=_active_map_id
                         )
                         if saved_grid.get("size_x", 0) > 0:
                             self._last_session_grid = saved_grid
                             self._last_session_map_id = str(
-                                saved_grid.get("map_id", self.active_map_id)
+                                saved_grid.get("map_id", _active_map_id)
                             )
                             if not self._session_complete:
                                 self._session_complete = True
@@ -442,7 +447,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         areas_data=data.get(DATA_AREAS_SAVED_MAP, {}),
                         seen_poly_saved_map=data.get(DATA_SEEN_POLY_SAVED_MAP, {}),
                         is_active=is_active,
-                        map_id=self.active_map_id,
+                        map_id=_active_map_id,
                         robot_path=self._robot_path,
                         last_session_grid=self._last_session_grid,
                         last_session_path=self._last_session_path,
@@ -457,10 +462,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._last_areas is None or (
                 now - self._last_areas
             ) >= timedelta(seconds=SCAN_INTERVAL_AREAS):
-                # Fetch map_status and maps FIRST so we know the correct active
-                # map_id before requesting areas.  On startup self.data is empty
-                # and active_map_id would fall back to the config-stored map_id,
-                # which may differ from the robot's current active floor.
+                # Fetch map_status and maps for informational display (map list,
+                # is_active flag in available_maps).  Not used to determine
+                # which map HA should display — that is always the HA-configured
+                # map_id (see active_map_id property).
                 try:
                     data[DATA_MAP_STATUS] = await self.client.get_map_status()
                 except CannotConnect:
@@ -471,54 +476,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except CannotConnect:
                     LOGGER.debug("get_maps unavailable, skipping")
 
-                # Resolve the effective active map ID from the freshly-fetched
-                # map_status (respecting any manual override).
-                new_active_map = (
-                    str((data.get(DATA_MAP_STATUS) or {}).get("active_map_id", "")).strip()
-                    or self.map_id
-                )
-
-                # Detect active map change (floor switch) — reset area/session state
-                if new_active_map != self._last_active_map_id:
-                    prev_map_id = self._last_active_map_id
-                    self._last_active_map_id = new_active_map
-                    if self._manual_map_id is not None:
-                        # User has an active manual map selection — respect it and
-                        # do not auto-follow the robot's reported floor.  Only update
-                        # the tracking variable so the next robot-initiated change is
-                        # still detected correctly.
-                        LOGGER.debug(
-                            "Robot reports map %s but user override %s is active — "
-                            "keeping manual selection",
-                            new_active_map,
-                            self._manual_map_id,
-                        )
-                    else:
-                        LOGGER.info(
-                            "Active map changed: %s -> %s — reloading areas",
-                            prev_map_id,
-                            new_active_map,
-                        )
-                        self._last_map_geometry = None
-                        self._areas_fetched_for_map_id = None
-                        self._known_area_ids = set()
-                        self._robot_path = []
-                        self._last_session_grid = {}
-                        self._last_session_path = []
-                        self._last_session_outline = []
-                        self._last_session_map_id = ""
-                        self._session_complete = False
-                        dashboard_manager = self.hass.data.get(DOMAIN, {}).get(
-                            f"{self.config_entry.entry_id}_dashboard"
-                        )
-                        if dashboard_manager:
-                            dashboard_manager.invalidate()
-
-                # Now fetch areas for the correct (freshly resolved) map ID.
-                # Use the locally-resolved new_active_map rather than
-                # self.active_map_id, which still reads from the old self.data
-                # (not yet committed) at this point in the update cycle.
-                _fetched_for = self._manual_map_id if self._manual_map_id is not None else new_active_map
+                # Always use the HA-configured map ID (manual override or setup map_id).
+                _fetched_for = self._manual_map_id or self.map_id
                 new_areas_blob = await self.client.get_areas(_fetched_for)
                 self._areas_fetched_for_map_id = _fetched_for
                 data[DATA_AREAS] = new_areas_blob
