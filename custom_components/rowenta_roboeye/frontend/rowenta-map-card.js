@@ -155,6 +155,8 @@ class RowentaMapCard extends HTMLElement {
                      : mapState === "returning"        ? "#FF9800"
                      : mapState === "mapping"          ? "#2196F3"
                      : mapState === "session_complete" ? "#4CAF50"
+                     : mapState === "paused"           ? "#FF9800"
+                     : mapState === "error"            ? "#F44336"
                      : "var(--secondary-text-color)";
 
     const frozen = this._frozen;
@@ -211,7 +213,11 @@ class RowentaMapCard extends HTMLElement {
       <ha-card>
         <div class="hdr">
           <span class="title">${cfg.title}</span>
-          <span class="badge">${mapState.toUpperCase()}</span>
+          <span class="badge">${({
+            cleaning: "CLEANING", exploring: "EXPLORING", returning: "RETURNING",
+            mapping: "MAPPING", session_complete: "LAST SESSION",
+            paused: "PAUSED", error: "ERROR / STUCK", idle: "IDLE",
+          })[mapState] || mapState.toUpperCase()}</span>
           <button class="fbtn" id="fbtn">${frozen ? "▶ Live" : "⏸ Freeze"}</button>
         </div>
         ${frozen ? `<div class="frozen-bar">⏸ Frozen — click Live to resume</div>` : ""}
