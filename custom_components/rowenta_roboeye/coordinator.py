@@ -457,37 +457,28 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._last_areas is None or (
                 now - self._last_areas
             ) >= timedelta(seconds=SCAN_INTERVAL_AREAS):
-                _fetched_for = self.active_map_id
-                new_areas_blob = await self.client.get_areas(_fetched_for)
-                self._areas_fetched_for_map_id = _fetched_for
-                data[DATA_AREAS] = new_areas_blob
-
-                try:
-                    data[DATA_SENSOR_STATUS] = await self.client.get_sensor_status()
-                except CannotConnect:
-                    LOGGER.debug("get_sensor_status unavailable, skipping")
-                try:
-                    data[DATA_ROBOT_FLAGS] = await self.client.get_robot_flags()
-                except CannotConnect:
-                    LOGGER.debug("get_robot_flags unavailable, skipping")
-
-                # Fetch available maps list
-                try:
-                    data[DATA_MAPS] = await self.client.get_maps()
-                except CannotConnect:
-                    LOGGER.debug("get_maps unavailable, skipping")
-
-                # Fetch active map status — drives active_map_id property
+                # Fetch map_status and maps FIRST so we know the correct active
+                # map_id before requesting areas.  On startup self.data is empty
+                # and active_map_id would fall back to the config-stored map_id,
+                # which may differ from the robot's current active floor.
                 try:
                     data[DATA_MAP_STATUS] = await self.client.get_map_status()
                 except CannotConnect:
                     LOGGER.debug("get_map_status unavailable, skipping")
 
-                # Detect active map change (floor switch) — reset area/session state
+                try:
+                    data[DATA_MAPS] = await self.client.get_maps()
+                except CannotConnect:
+                    LOGGER.debug("get_maps unavailable, skipping")
+
+                # Resolve the effective active map ID from the freshly-fetched
+                # map_status (respecting any manual override).
                 new_active_map = (
                     str((data.get(DATA_MAP_STATUS) or {}).get("active_map_id", "")).strip()
                     or self.map_id
                 )
+
+                # Detect active map change (floor switch) — reset area/session state
                 if new_active_map != self._last_active_map_id:
                     prev_map_id = self._last_active_map_id
                     self._last_active_map_id = new_active_map
@@ -508,7 +499,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             prev_map_id,
                             new_active_map,
                         )
-                        self._last_areas = None
                         self._last_map_geometry = None
                         self._areas_fetched_for_map_id = None
                         self._known_area_ids = set()
@@ -523,6 +513,24 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         if dashboard_manager:
                             dashboard_manager.invalidate()
+
+                # Now fetch areas for the correct (freshly resolved) map ID.
+                # Use the locally-resolved new_active_map rather than
+                # self.active_map_id, which still reads from the old self.data
+                # (not yet committed) at this point in the update cycle.
+                _fetched_for = self._manual_map_id if self._manual_map_id is not None else new_active_map
+                new_areas_blob = await self.client.get_areas(_fetched_for)
+                self._areas_fetched_for_map_id = _fetched_for
+                data[DATA_AREAS] = new_areas_blob
+
+                try:
+                    data[DATA_SENSOR_STATUS] = await self.client.get_sensor_status()
+                except CannotConnect:
+                    LOGGER.debug("get_sensor_status unavailable, skipping")
+                try:
+                    data[DATA_ROBOT_FLAGS] = await self.client.get_robot_flags()
+                except CannotConnect:
+                    LOGGER.debug("get_robot_flags unavailable, skipping")
 
                 self._last_areas = now
                 self._check_for_new_areas(new_areas_blob)
