@@ -314,9 +314,28 @@ class RobEyeApiClient:
         """GET /get/task_history — list of past cleaning sessions."""
         return await self._get(API_GET_TASK_HISTORY)
 
-    async def get_event_log(self) -> dict[str, Any]:
-        """GET /get/event_log — robot event log (errors, state changes)."""
-        return await self._get(API_GET_EVENT_LOG)
+    async def get_event_log(self, last_id: int = 0) -> dict[str, Any]:
+        """GET /get/event_log?last_id=N — incremental robot event log.
+
+        Confirmed response (2026-04-05):
+        {"robot_events": [
+          {"id":9, "type":"action_started", "type_id":1110,
+           "timestamp":{"year":2026,"month":4,"day":5,"hour":16,"min":6,"sec":0},
+           "current_status":"clean_map_areas", "map_id":18, "area_id":25,
+           "source_type":"user", "source_id":2, "hierarchy":1, "info":0},
+          ...
+        ]}
+
+        Returns only events with id > last_id. Pass last_id=0 for all events.
+        Poll incrementally: store the last seen id and pass it on next call.
+
+        hierarchy=1 = top-level actions (clean, go_home)
+        hierarchy=2 = sub-steps (localize, undocking, clean_area)
+        source_type="user" = from app/HA; "operation_unit" = hardware sensor
+
+        Event type IDs: see EVENT_TYPE_* constants in const.py
+        """
+        return await self._get(API_GET_EVENT_LOG, params={"last_id": last_id})
 
     # ── Map geometry (on-demand / low-frequency) ─────────────────────
 
@@ -408,15 +427,17 @@ class RobEyeApiClient:
         self,
         cleaning_parameter_set: str,
         strategy_mode: str = STRATEGY_DEFAULT,
-    ) -> None:
+    ) -> dict[str, Any]:
         """Start a full-home clean at the specified fan speed.
+
+        Returns dict with cmd_id on success or error_code on failure.
 
         Args:
             cleaning_parameter_set: Fan-speed API value "1"–"4".
             strategy_mode: One of the STRATEGY_* constants (default "4" = robot decides).
                            "1"=Normal, "2"=Walls & Corners, "3"=Deep, "4"=Default.
         """
-        await self._get(
+        return await self._get(
             API_SET_CLEAN_ALL,
             params={
                 "cleaning_parameter_set": cleaning_parameter_set,
@@ -424,15 +445,23 @@ class RobEyeApiClient:
             },
         )
 
-    async def clean_start_or_continue(self) -> None:
-        """GET /set/clean_start_or_continue — resume an interrupted clean.
+    async def clean_start_or_continue(self) -> dict[str, Any]:
+        """GET /set/clean_start_or_continue — resume interrupted clean or recover from error.
 
-        Confirmed from RobEye web UI log (live device):
-          After stop: clean_start_or_continue → {"cmd_id":68,"status":"executing"}
+        Confirmed from RobEye web UI log (live device, 2026-03-29):
+          stop → clean_start_or_continue → {"cmd_id":68,"status":"executing"}
 
-        Resumes from robot's current position. Does NOT reset to dock.
+        Resumes from current position. Does NOT reset to dock (unlike clean_all).
+        No parameters — robot uses its existing task context.
+
+        Recovery by error type:
+          brush stuck     → firmware accepts, cleaning resumes
+          dustbin missing → firmware rejects, error persists (correct)
+          not_ready       → firmware decides
+
+        /set/clean_continue is deprecated (error 106) — never use it.
         """
-        await self._get(API_SET_CLEAN_START_OR_CONTINUE)
+        return await self._get(API_SET_CLEAN_START_OR_CONTINUE)
 
     async def clean_map(
         self,
@@ -440,8 +469,10 @@ class RobEyeApiClient:
         area_ids: str,
         cleaning_parameter_set: str,
         strategy_mode: str = STRATEGY_DEFAULT,
-    ) -> None:
+    ) -> dict[str, Any]:
         """Start a room-targeted clean.
+
+        Returns dict with cmd_id on success or error_code on failure.
 
         Args:
             map_id: Map identifier (e.g. "3").
@@ -449,7 +480,7 @@ class RobEyeApiClient:
             cleaning_parameter_set: Fan-speed API value "1"–"4".
             strategy_mode: One of the STRATEGY_* constants (default "4" = robot decides).
         """
-        await self._get(
+        return await self._get(
             API_SET_CLEAN_MAP,
             params={
                 "map_id": map_id,
@@ -459,17 +490,17 @@ class RobEyeApiClient:
             },
         )
 
-    async def go_home(self) -> None:
+    async def go_home(self) -> dict[str, Any]:
         """Return the vacuum to its dock."""
-        await self._get(API_SET_GO_HOME)
+        return await self._get(API_SET_GO_HOME)
 
-    async def stop(self) -> None:
+    async def stop(self) -> dict[str, Any]:
         """Stop the vacuum immediately."""
-        await self._get(API_SET_STOP)
+        return await self._get(API_SET_STOP)
 
-    async def set_fan_speed(self, cleaning_parameter_set: str) -> None:
+    async def set_fan_speed(self, cleaning_parameter_set: str) -> dict[str, Any]:
         """Change fan speed without starting a new clean."""
-        await self._get(
+        return await self._get(
             API_SET_FAN_SPEED,
             params={"cleaning_parameter_set": cleaning_parameter_set},
         )

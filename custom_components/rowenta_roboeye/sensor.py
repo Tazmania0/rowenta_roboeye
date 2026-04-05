@@ -51,6 +51,7 @@ from .const import (
     CLEANING_MODE_ALL,
     CLEANING_MODE_ROOMS,
     DOMAIN,
+    EVENT_TYPE_LABELS,
     FAN_SPEED_LABELS,
     FAN_SPEED_MAP,
     LOGGER,
@@ -152,6 +153,27 @@ STATUS_SENSORS: tuple[RobEyeSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=True,
         value_fn=_resolve_active_map_name,
+    ),
+    RobEyeSensorDescription(
+        key="queue_eta",
+        translation_key="queue_eta",
+        icon="mdi:timer-outline",
+        native_unit_of_measurement="s",
+        device_class=SensorDeviceClass.DURATION,
+        entity_registry_enabled_default=True,
+        value_fn=lambda c: c.queue_eta_seconds,
+    ),
+    RobEyeSensorDescription(
+        key="last_event",
+        translation_key="last_event",
+        icon="mdi:history",
+        entity_registry_enabled_default=True,
+        value_fn=lambda c: (
+            EVENT_TYPE_LABELS.get(
+                c._recent_events[-1]["type_id"],
+                c._recent_events[-1].get("type", ""),
+            ) if c._recent_events else None
+        ),
     ),
 )
 
@@ -350,6 +372,9 @@ async def async_setup_entry(
 
     # Schedule sensor
     entities.append(RobEyeScheduleSensor(coordinator))
+
+    # Command queue status sensor
+    entities.append(RobEyeQueueStatusSensor(coordinator))
 
     # ── Per-room sensors (from current area list) ─────────────────────
     known_ids: set = set()
@@ -583,6 +608,48 @@ class RobEyeScheduleSensor(RobEyeEntity, SensorEntity):
             })
 
         return result
+
+
+class RobEyeQueueStatusSensor(RobEyeEntity, SensorEntity):
+    """Shows the HA-side command queue contents.
+
+    State: number of items in queue (0 = idle).
+    Attribute 'queue': list of {status, label, map_name} dicts.
+    Attribute 'recent_events': last 10 top-level robot events.
+    """
+
+    _attr_icon = "mdi:playlist-play"
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(self, coordinator: RobEyeCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"command_queue_{coordinator.device_id}"
+        self._attr_name = "Cleaning Queue"
+        self.entity_id = f"sensor.{coordinator.device_id}_cleaning_queue"
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.command_queue_items)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        events = self.coordinator._recent_events[-10:]
+        recent = [
+            {
+                "type": EVENT_TYPE_LABELS.get(e["type_id"], e.get("type", "")),
+                "time": (
+                    f"{e['timestamp']['hour']:02d}:{e['timestamp']['min']:02d}"
+                    if "timestamp" in e else ""
+                ),
+                "room": self.coordinator._resolve_room_name_by_id(e.get("area_id", 0)),
+                "map":  self.coordinator._resolve_map_name(str(e.get("map_id", ""))),
+            }
+            for e in events
+        ]
+        return {
+            "queue": self.coordinator.command_queue_items,
+            "recent_events": recent,
+        }
 
 
 def _room_name_for_id(coordinator: RobEyeCoordinator, area_id: int) -> str:
