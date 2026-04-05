@@ -116,6 +116,8 @@ def _build_config(
     e_btn_clean_all     = f"button.{_d}_clean_entire_home"
     e_btn_stop          = f"button.{_d}_stop"
     e_btn_go_home       = f"button.{_d}_return_to_base"
+    e_cleaning_queue    = f"sensor.{_d}_cleaning_queue"
+    e_queue_eta         = f"sensor.{_d}_queue_eta"
 
     live_entities = [
         {"entity": e, "name": label}
@@ -231,6 +233,30 @@ def _build_config(
                     *live_entities,
                     *live_map_entities,
                 ],
+            },
+            {
+                "type": "markdown",
+                "title": "Cleaning Queue",
+                "content": (
+                    "{% set q = state_attr('"
+                    + e_cleaning_queue
+                    + "', 'queue') %}"
+                    "{% set eta = states('"
+                    + e_queue_eta
+                    + "') | int(0) %}"
+                    "\n{% if q and q | length > 0 %}"
+                    "\n{% for item in q %}"
+                    "\n{{ '🔄' if item.status == 'active' else '⏳' }} "
+                    "**{{ item.label }}**"
+                    "{% if item.map_name %} *({{ item.map_name }})*{% endif %}"
+                    "\n{% endfor %}"
+                    "\n{% if eta > 0 %}"
+                    "\n⏱ Est. {{ (eta / 60) | round(0) | int }} min remaining"
+                    "\n{% endif %}"
+                    "\n{% else %}"
+                    "\n*Queue empty*"
+                    "\n{% endif %}"
+                ),
             },
             {
                 "type": "markdown",

@@ -199,6 +199,44 @@ SAVED_MAP_ID = "3"  # permanent saved map; all rooms are on this map
 # ── Map-geometry refresh interval ─────────────────────────────────────
 SCAN_INTERVAL_MAP_GEOMETRY = 600
 
+# ── Event log polling ─────────────────────────────────────────────────
+SCAN_INTERVAL_EVENT_LOG = 30   # seconds between /get/event_log polls
+DATA_EVENT_LOG = "event_log"
+
+# ── Event type IDs confirmed 2026-04-05 ───────────────────────────────
+EVENT_TYPE_CLEAN_AREA_STARTED    = 1010
+EVENT_TYPE_GO_HOME_STARTED       = 1030
+EVENT_TYPE_GO_HOME_SUCCEEDED     = 1031
+EVENT_TYPE_GO_HOME_INTERRUPTED   = 1032
+EVENT_TYPE_LOCALIZE_STARTED      = 1050
+EVENT_TYPE_LOCALIZE_SUCCEEDED    = 1051
+EVENT_TYPE_LOCALIZE_INTERRUPTED  = 1052
+EVENT_TYPE_CLEAN_MAP_STARTED     = 1110
+EVENT_TYPE_CLEAN_MAP_INTERRUPTED = 1112
+EVENT_TYPE_UNDOCKING_STARTED     = 1140
+EVENT_ROBOT_LIFTED               = 2010
+EVENT_ROBOT_SETBACK              = 2011
+EVENT_DUSTBIN_MISSING            = 2030
+EVENT_DUSTBIN_INSERTED           = 2031
+
+# Human-readable labels for HA logbook and sensor display
+EVENT_TYPE_LABELS: dict[int, str] = {
+    1010: "Started cleaning room",
+    1030: "Returning to dock",
+    1031: "Docked",
+    1032: "Docking interrupted",
+    1050: "Localizing",
+    1051: "Localized",
+    1052: "Localization failed",
+    1110: "Room clean started",
+    1112: "Room clean interrupted",
+    1140: "Undocking",
+    2010: "Robot lifted",
+    2011: "Robot set back down",
+    2030: "Dustbin removed",
+    2031: "Dustbin inserted",
+}
+
 # ── Resilience ────────────────────────────────────────────────────────
 MAX_POLL_FAILURES = 3
 

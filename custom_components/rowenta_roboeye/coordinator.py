@@ -31,6 +31,7 @@ from .const import (
     DATA_SENSOR_VALUES,
     DATA_AREAS_SAVED_MAP,
     DATA_CLEANING_GRID,
+    DATA_EVENT_LOG,
     DATA_EXPLORATION,
     DATA_FEATURE_MAP,
     DATA_LIVE_MAP,
@@ -50,11 +51,16 @@ from .const import (
     DATA_STATUS,
     DATA_TILE_MAP,
     DOMAIN,
+    EVENT_DUSTBIN_INSERTED,
+    EVENT_DUSTBIN_MISSING,
+    EVENT_ROBOT_LIFTED,
+    EVENT_TYPE_LABELS,
     LOGGER,
     MAX_POLL_FAILURES,
     MODE_CLEANING,
     MODE_GO_HOME,
     SCAN_INTERVAL_AREAS,
+    SCAN_INTERVAL_EVENT_LOG,
     SCAN_INTERVAL_MAP_GEOMETRY,
     SCAN_INTERVAL_ROBOT_INFO,
     SCAN_INTERVAL_STATISTICS,
@@ -142,6 +148,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Serial command queue — all commands are enqueued and dispatched one at a time
         self._command_queue: asyncio.Queue = asyncio.Queue()
         self._command_worker_task: asyncio.Task | None = None
+
+        # Event log incremental polling state
+        self._last_event_log_id: int = 0
+        self._last_event_log: datetime | None = None
+        self._recent_events: list[dict[str, Any]] = []  # last 50 top-level events
 
     # ── Device identifier ─────────────────────────────────────────────
 
@@ -535,6 +546,22 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     LOGGER.debug("get_schedule unavailable, skipping")
                 self._last_schedule = now
 
+            # ── Every 30 s: incremental event log ────────────────────
+            if self._last_event_log is None or (
+                now - self._last_event_log
+            ) >= timedelta(seconds=SCAN_INTERVAL_EVENT_LOG):
+                try:
+                    log_data = await self.client.get_event_log(
+                        last_id=self._last_event_log_id
+                    )
+                    new_events = log_data.get("robot_events", [])
+                    if new_events:
+                        self._last_event_log_id = new_events[-1]["id"]
+                        self._process_new_events(new_events)
+                except CannotConnect:
+                    LOGGER.debug("get_event_log unavailable, skipping")
+                self._last_event_log = now
+
             # ── Every 3600 s: robot identity / wifi ──────────────────
             if self._last_robot_info is None or (
                 now - self._last_robot_info
@@ -693,15 +720,39 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Process commands from the queue one at a time.
 
         Each item: (priority, coro_func, args, kwargs).
-        After dispatching, polls /get/command_result until the robot
-        reports done/error or CMD_POLL_TIMEOUT_S elapses.
+
+        Every /set/ response returns a cmd_id (success) or error_code (failure).
+        The worker captures cmd_id immediately and uses it to poll
+        /get/command_result for that exact command, rather than assuming the
+        most recent entry is the one it sent.
+
+        On error (non-zero error_code): logs and moves to next command.
         """
         while True:
             _priority, coro_func, args, kwargs = await self._command_queue.get()
             try:
                 LOGGER.debug("RobEye queue: dispatching %s", coro_func.__name__)
-                await coro_func(*args, **kwargs)
-                await self._wait_for_robot_idle()
+                response = await coro_func(*args, **kwargs)
+
+                # Capture cmd_id from the /set/ response for precise tracking.
+                # All /set/ methods return dict with cmd_id on success.
+                dispatched_cmd_id: int | None = None
+                if isinstance(response, dict):
+                    error_code = response.get("error_code", 0)
+                    if error_code != 0:
+                        LOGGER.error(
+                            "RobEye command %s failed: error_code=%s tag=%s",
+                            coro_func.__name__,
+                            error_code,
+                            response.get("error_tag", ""),
+                        )
+                        continue   # skip polling — command was rejected
+                    dispatched_cmd_id = response.get("cmd_id")
+                    LOGGER.debug(
+                        "RobEye queue: cmd_id=%s dispatched", dispatched_cmd_id
+                    )
+
+                await self._wait_for_robot_idle(cmd_id=dispatched_cmd_id)
                 await self.async_request_refresh()
             except CannotConnect as err:
                 LOGGER.error("RobEye command failed: %s", err)
@@ -711,17 +762,22 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 LOGGER.error("RobEye command worker error: %s", err)
             finally:
                 self._command_queue.task_done()
+                # Notify listeners (e.g. queue status sensor) of state change
+                self.async_update_listeners()
 
-    async def _wait_for_robot_idle(self) -> None:
-        """Poll /get/command_result until the last command is no longer executing.
+    async def _wait_for_robot_idle(self, cmd_id: int | None = None) -> None:
+        """Poll /get/command_result until the dispatched command finishes.
 
         Confirmed response shape (2026-04-05):
           {"commands": [{"cmd_id": N, "status": "executing"/"done"/"error"}]}
 
-        Polls every 5 s for up to 30 s. Robot operations (return to dock) take
-        10–15 s — do not poll more frequently than 5 s intervals.
+        If cmd_id is provided (captured from the /set/ response), polls for
+        that exact command — eliminates ambiguity if commands overlap.
+        If cmd_id is None, falls back to checking whether any command is executing.
 
-        Proceeds immediately on CannotConnect or timeout — never blocks queue.
+        Polls every CMD_POLL_INTERVAL_S (5s) for up to CMD_POLL_TIMEOUT_S (30s).
+        Robot operations (return to dock) take 10-15s.
+        Proceeds on CannotConnect or timeout — never blocks the queue forever.
         """
         deadline = asyncio.get_event_loop().time() + CMD_POLL_TIMEOUT_S
         while asyncio.get_event_loop().time() < deadline:
@@ -730,14 +786,26 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 commands = result.get("commands", [])
                 if not commands:
                     return
-                if commands[0].get("status", "done") != "executing":
-                    return
+
+                if cmd_id is not None:
+                    # Precise: find our exact cmd_id in the results
+                    for cmd in commands:
+                        if cmd.get("cmd_id") == cmd_id:
+                            if cmd.get("status") != "executing":
+                                return   # our command finished
+                            break   # still executing — keep polling
+                    else:
+                        return   # cmd_id no longer in results — completed
+                else:
+                    # Fallback: check whether any command is still executing
+                    if commands[0].get("status", "done") != "executing":
+                        return
             except CannotConnect:
                 return
             await asyncio.sleep(CMD_POLL_INTERVAL_S)
         LOGGER.warning(
-            "RobEye: command did not complete within %ds — proceeding",
-            CMD_POLL_TIMEOUT_S,
+            "RobEye: cmd_id=%s did not complete within %ds — moving to next",
+            cmd_id, CMD_POLL_TIMEOUT_S,
         )
 
     async def async_send_command(self, coro_func, *args: Any, **kwargs: Any) -> None:
@@ -762,6 +830,167 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     break
 
         await self._command_queue.put((0 if is_stop else 1, coro_func, args, kwargs))
+
+    # ── Queue status ──────────────────────────────────────────────────
+
+    @property
+    def command_queue_items(self) -> list[dict[str, Any]]:
+        """Return a snapshot of pending queue items for dashboard display.
+
+        Each item: {"status": "active"|"pending", "label": str, "map_name": str}
+        First item is the one currently being dispatched by the worker.
+        Remaining items are waiting.
+
+        Used by the queue_status sensor for dashboard rendering.
+        """
+        try:
+            items = list(self._command_queue._queue)  # deque, safe to read
+        except AttributeError:
+            return []
+
+        result = []
+        for i, (_priority, coro_func, args, kwargs) in enumerate(items):
+            label = _describe_command(coro_func, kwargs)
+            map_name = self._resolve_map_name(str(kwargs.get("map_id", "")))
+            result.append({
+                "status": "active" if i == 0 else "pending",
+                "label":    label,
+                "map_name": map_name,
+            })
+        return result
+
+    @property
+    def queue_eta_seconds(self) -> int | None:
+        """Estimated seconds to complete all queued cleaning commands.
+
+        Sums estimated_cleaning_time from /get/areas for each queued room.
+        Returns None if no area data or no clean commands queued.
+
+        estimated_cleaning_time in /get/areas is in milliseconds.
+        """
+        try:
+            items = list(self._command_queue._queue)
+        except AttributeError:
+            return None
+
+        total_ms = 0
+        found = False
+        for _priority, coro_func, args, kwargs in items:
+            name = getattr(coro_func, "__name__", "")
+            area_ids_str = str(kwargs.get("area_ids", ""))
+            if name not in ("clean_map", "clean_all"):
+                continue
+            found = True
+            if not area_ids_str:
+                continue
+            for area_id_s in area_ids_str.split(","):
+                try:
+                    area_id = int(area_id_s.strip())
+                except ValueError:
+                    continue
+                for area in self.areas:
+                    if area.get("id") == area_id:
+                        stats = area.get("statistics", {})
+                        # Use average if available, else estimated
+                        t = stats.get("average_cleaning_time") or \
+                            stats.get("estimated_cleaning_time", 0)
+                        total_ms += t
+                        break
+
+        return int(total_ms / 1000) if found else None
+
+    def _resolve_map_name(self, map_id: str) -> str:
+        """Return display name for a map_id from available_maps."""
+        for m in self.available_maps:
+            if m["map_id"] == map_id:
+                return m["display_name"]
+        return f"Map {map_id}" if map_id else ""
+
+    def _resolve_room_name_by_id(self, area_id: int) -> str | None:
+        """Return room name for an area_id from current areas data."""
+        import json as _json
+        for area in self.areas:
+            if area.get("id") == area_id:
+                meta_raw = area.get("area_meta_data", "")
+                if meta_raw:
+                    try:
+                        meta = _json.loads(meta_raw)
+                        return meta.get("name", "").strip() or None
+                    except Exception:  # noqa: BLE001
+                        pass
+        return None
+
+    def _process_new_events(self, events: list[dict[str, Any]]) -> None:
+        """Process new event log entries.
+
+        - Fires persistent notifications for hardware alerts.
+        - Keeps last 50 top-level events in self._recent_events for the sensor.
+        - Logs top-level events (hierarchy=1) to HA logbook.
+        """
+        from homeassistant.components import persistent_notification
+
+        for event in events:
+            type_id = event.get("type_id")
+            hierarchy = event.get("hierarchy", 0)
+
+            # Hardware alerts → persistent notification
+            if type_id == EVENT_DUSTBIN_MISSING:
+                persistent_notification.async_create(
+                    self.hass,
+                    "The dustbin is missing. Please reinsert it before cleaning.",
+                    title="Rowenta — Dustbin Missing",
+                    notification_id="rowenta_dustbin_missing",
+                )
+            elif type_id == EVENT_DUSTBIN_INSERTED:
+                persistent_notification.async_dismiss(
+                    self.hass, "rowenta_dustbin_missing"
+                )
+            elif type_id == EVENT_ROBOT_LIFTED:
+                LOGGER.warning("RobEye: robot was lifted during operation")
+
+            # Logbook entry for top-level user actions
+            if hierarchy == 1 and event.get("source_type") == "user":
+                label = EVENT_TYPE_LABELS.get(type_id, event.get("type", ""))
+                area_id = event.get("area_id", 0)
+                map_id  = str(event.get("map_id", ""))
+                detail  = ""
+                if area_id:
+                    detail = f" — room {area_id}"
+                    room_name = self._resolve_room_name_by_id(area_id)
+                    if room_name:
+                        detail = f" — {room_name}"
+                if map_id:
+                    map_name = self._resolve_map_name(map_id)
+                    if map_name:
+                        detail += f" ({map_name})"
+                LOGGER.info("RobEye event: %s%s", label, detail)
+
+        # Keep last 50 top-level events for the sensor attribute
+        top_level = [
+            e for e in events if e.get("hierarchy", 0) == 1
+        ]
+        self._recent_events = (self._recent_events + top_level)[-50:]
+
+
+# ── Command helpers ───────────────────────────────────────────────────
+
+def _describe_command(coro_func: Any, kwargs: dict) -> str:
+    """Return a human-readable label for a queued command coroutine."""
+    name = getattr(coro_func, "__name__", "") or getattr(
+        getattr(coro_func, "__func__", None), "__name__", "command"
+    )
+    area_ids = kwargs.get("area_ids", "")
+    if name == "clean_map" and area_ids:
+        return f"Clean room {area_ids}"
+    if name == "clean_all":
+        return "Clean entire home"
+    if name == "go_home":
+        return "Return to base"
+    if name == "stop":
+        return "Stop"
+    if name == "clean_start_or_continue":
+        return "Resume"
+    return name.replace("_", " ").capitalize()
 
 
 # ── Map helpers ───────────────────────────────────────────────────────
