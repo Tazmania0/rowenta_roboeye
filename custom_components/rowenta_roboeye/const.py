@@ -33,6 +33,10 @@ SCAN_INTERVAL_STATISTICS = 600
 SCAN_INTERVAL_AREAS = 300
 SCAN_INTERVAL_ROBOT_INFO = 3600
 
+# Command result polling — used by _wait_for_robot_idle after each queued command
+CMD_POLL_INTERVAL_S = 5.0    # seconds between /get/command_result polls
+CMD_POLL_TIMEOUT_S  = 30.0   # max wait per command before moving to next
+
 # ── Config entry keys ─────────────────────────────────────────────────
 CONF_MAP_ID = "map_id"
 CONF_HOSTNAME = "hostname"

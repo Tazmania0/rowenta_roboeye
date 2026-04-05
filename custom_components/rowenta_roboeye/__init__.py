@@ -64,6 +64,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     hass.data.setdefault(DOMAIN, {})[config_entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
+    coordinator.async_start_command_worker()
 
     # One manager per config entry — holds hash + dashboard object reference.
     # Stored in hass.data so async_remove_entry can call async_delete() on it.
@@ -209,6 +210,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     dashboard_manager: RobEyeDashboardManager | None = hass.data[DOMAIN].get(
         f"{entry.entry_id}_dashboard"
     )
+
+    coordinator = hass.data[DOMAIN].get(entry.entry_id)
+    if coordinator and coordinator._command_worker_task:
+        coordinator._command_worker_task.cancel()
 
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id, None)
