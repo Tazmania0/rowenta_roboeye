@@ -30,8 +30,10 @@ from .const import (
     STRATEGY_DEFAULT,
     STRATEGY_DEEP,
     STRATEGY_LABELS,
+    STRATEGY_NORMAL,
     STRATEGY_OPTIONS,
     STRATEGY_REVERSE_MAP,
+    STRATEGY_WALLS_CORNERS,
 )
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity, async_remove_stale_room_entities
@@ -217,6 +219,18 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         if (last_state := await self.async_get_last_state()) is not None:
             if last_state.state in FAN_SPEEDS:
                 self._selected = last_state.state
+                return
+        # Seed from robot's stored value on first run (no prior HA state).
+        for area in self.coordinator.areas:
+            if str(area.get("id", "")) == self._area_id:
+                raw = area.get("cleaning_parameter_set")
+                if raw is not None and str(raw) in FAN_SPEED_MAP:
+                    self._selected = FAN_SPEED_MAP[str(raw)]
+                    LOGGER.debug(
+                        "Room %s fan speed seeded from robot: %s",
+                        self._area_id, self._selected,
+                    )
+                break
 
     async def async_select_option(self, option: str) -> None:
         if option not in FAN_SPEEDS:
@@ -224,6 +238,15 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
             return
         self._selected = option
         self.async_write_ha_state()
+        # Persist the new fan speed to the robot's saved map immediately.
+        raw = FAN_SPEED_REVERSE_MAP.get(option)
+        if raw:
+            await self.coordinator.async_send_command(
+                self.coordinator.client.modify_area,
+                map_id=self.coordinator.active_map_id,
+                area_id=self._area_id,
+                cleaning_parameter_set=raw,
+            )
 
 
 # ── Active map select ─────────────────────────────────────────────────
@@ -384,6 +407,25 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
         if (last_state := await self.async_get_last_state()) is not None:
             if last_state.state in STRATEGY_OPTIONS:
                 self._selected = last_state.state
+                return
+        # Seed from robot's stored strategy_mode on first run.
+        # "deep" is owned by the per-room deep-clean switch — not shown here.
+        _robot_to_label: dict[str, str] = {
+            "normal":        STRATEGY_LABELS[STRATEGY_NORMAL],
+            "walls_corners": STRATEGY_LABELS[STRATEGY_WALLS_CORNERS],
+        }
+        for area in self.coordinator.areas:
+            if str(area.get("id", "")) == self._area_id:
+                robot_val = str(area.get("strategy_mode", "")).lower()
+                label = _robot_to_label.get(robot_val)
+                if label is not None:
+                    self._selected = label
+                    LOGGER.debug(
+                        "Room %s strategy seeded from robot: %s",
+                        self._area_id, self._selected,
+                    )
+                # "deep" and unknown values → keep default label
+                break
 
     async def async_select_option(self, option: str) -> None:
         if option not in STRATEGY_OPTIONS:
@@ -391,3 +433,11 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
             return
         self._selected = option
         self.async_write_ha_state()
+        # Robot only accepts "normal" or "deep" for strategy_mode.
+        # All three non-deep options (Default, Normal, Walls & Corners) → "normal".
+        await self.coordinator.async_send_command(
+            self.coordinator.client.modify_area,
+            map_id=self.coordinator.active_map_id,
+            area_id=self._area_id,
+            strategy_mode="normal",
+        )

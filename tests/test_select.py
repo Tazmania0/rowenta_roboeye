@@ -20,8 +20,10 @@ from custom_components.rowenta_roboeye.const import (
     STRATEGY_DEFAULT,
     STRATEGY_DEEP,
     STRATEGY_LABELS,
+    STRATEGY_NORMAL,
     STRATEGY_OPTIONS,
     STRATEGY_REVERSE_MAP,
+    STRATEGY_WALLS_CORNERS,
 )
 
 from .conftest import MOCK_MAPS, MOCK_STATUS, MOCK_AREAS
@@ -470,12 +472,36 @@ async def test_strategy_restore_deep_state_ignored():
 # ══════════════════════════════════════════════════════════════════════
 
 
-def _make_room_coordinator(active_map_id="3"):
+_CONFIRMED_AREA_SPALNYA = {
+    "id": 3,
+    "area_type": "room",
+    "area_state": "clean",
+    "area_meta_data": '{"name":"Спалня"}',
+    "cleaning_parameter_set": 3,
+    "strategy_mode": "deep",
+    "room_type": "sleeping",
+}
+
+_CONFIRMED_AREA_HOL = {
+    "id": 2,
+    "area_type": "room",
+    "area_state": "clean",
+    "area_meta_data": '{"name":"Хол"}',
+    "cleaning_parameter_set": 1,
+    "strategy_mode": "normal",
+    "room_type": "living",
+}
+
+
+def _make_room_coordinator(active_map_id="3", areas=None):
     coord = MagicMock()
     coord.device_id = "dev123"
     coord.config_entry = MagicMock()
     coord.config_entry.entry_id = "test_entry"
     coord.active_map_id = active_map_id
+    coord.areas = areas if areas is not None else []
+    # async_send_command must be an AsyncMock so it can be awaited in select_option
+    coord.async_send_command = AsyncMock()
     return coord
 
 
@@ -573,6 +599,93 @@ async def test_room_fan_speed_restore_invalid_ignored():
 
     await entity.async_added_to_hass()
     assert entity._selected == "normal"
+
+
+@pytest.mark.asyncio
+async def test_room_fan_speed_seeded_high_from_robot():
+    """cleaning_parameter_set=3 → 'high' seeded on first run (no prior HA state)."""
+    coord = _make_room_coordinator(areas=[_CONFIRMED_AREA_SPALNYA])
+    entity = _room_fan_entity(coord=coord, area_id="3")
+    entity.async_get_last_state = AsyncMock(return_value=None)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await entity.async_added_to_hass()
+    assert entity._selected == "high"
+
+
+@pytest.mark.asyncio
+async def test_room_fan_speed_seeded_normal_from_robot():
+    """cleaning_parameter_set=1 → 'normal' seeded on first run."""
+    coord = _make_room_coordinator(areas=[_CONFIRMED_AREA_HOL])
+    entity = _room_fan_entity(coord=coord, area_id="2")
+    entity.async_get_last_state = AsyncMock(return_value=None)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await entity.async_added_to_hass()
+    assert entity._selected == "normal"
+
+
+@pytest.mark.asyncio
+async def test_room_fan_speed_prior_state_wins_over_robot():
+    """Prior HA state takes priority over robot's cleaning_parameter_set."""
+    coord = _make_room_coordinator(areas=[_CONFIRMED_AREA_SPALNYA])  # robot says "high"
+    entity = _room_fan_entity(coord=coord, area_id="3")
+    last_state = MagicMock()
+    last_state.state = "eco"  # HA remembered "eco"
+    entity.async_get_last_state = AsyncMock(return_value=last_state)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await entity.async_added_to_hass()
+    assert entity._selected == "eco"
+
+
+@pytest.mark.asyncio
+async def test_room_fan_speed_write_back_calls_modify_area():
+    """Selecting a fan speed persists it to the robot via async_send_command."""
+    coord = _make_room_coordinator()
+    entity = _room_fan_entity(coord=coord, area_id="3")
+
+    await entity.async_select_option("eco")
+
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id=coord.active_map_id,
+        area_id="3",
+        cleaning_parameter_set="2",  # eco → "2"
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_fan_speed_write_back_high():
+    """'high' maps to cleaning_parameter_set='3' in modify_area."""
+    coord = _make_room_coordinator()
+    entity = _room_fan_entity(coord=coord, area_id="5")
+
+    await entity.async_select_option("high")
+
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id=coord.active_map_id,
+        area_id="5",
+        cleaning_parameter_set="3",
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_fan_speed_invalid_does_not_write_back():
+    """Invalid option is rejected — no modify_area call made."""
+    coord = _make_room_coordinator()
+    entity = _room_fan_entity(coord=coord, area_id="3")
+
+    await entity.async_select_option("turbo")
+
+    coord.async_send_command.assert_not_called()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -674,6 +787,110 @@ async def test_room_strategy_restore_invalid_ignored():
 
     await entity.async_added_to_hass()
     assert entity._selected == STRATEGY_LABELS[STRATEGY_DEFAULT]
+
+
+@pytest.mark.asyncio
+async def test_room_strategy_seeded_normal_from_robot():
+    """strategy_mode='normal' → seeds 'Normal' label on first run."""
+    coord = _make_room_coordinator(areas=[_CONFIRMED_AREA_HOL])
+    entity = _room_strategy_entity(coord=coord, area_id="2")
+    entity.async_get_last_state = AsyncMock(return_value=None)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await entity.async_added_to_hass()
+    assert entity._selected == STRATEGY_LABELS[STRATEGY_NORMAL]
+
+
+@pytest.mark.asyncio
+async def test_room_strategy_seeded_deep_falls_back_to_default():
+    """strategy_mode='deep' keeps default label — deep is owned by the switch."""
+    coord = _make_room_coordinator(areas=[_CONFIRMED_AREA_SPALNYA])
+    entity = _room_strategy_entity(coord=coord, area_id="3")
+    entity.async_get_last_state = AsyncMock(return_value=None)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await entity.async_added_to_hass()
+    assert entity._selected == STRATEGY_LABELS[STRATEGY_DEFAULT]
+
+
+@pytest.mark.asyncio
+async def test_room_strategy_prior_state_wins_over_robot():
+    """Prior HA state takes priority over robot's strategy_mode."""
+    coord = _make_room_coordinator(areas=[_CONFIRMED_AREA_HOL])  # robot says "normal"
+    entity = _room_strategy_entity(coord=coord, area_id="2")
+    last_state = MagicMock()
+    last_state.state = "Walls & Corners"  # HA remembered "Walls & Corners"
+    entity.async_get_last_state = AsyncMock(return_value=last_state)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await entity.async_added_to_hass()
+    assert entity._selected == "Walls & Corners"
+
+
+@pytest.mark.asyncio
+async def test_room_strategy_write_back_sends_normal():
+    """Selecting 'Normal' sends strategy_mode='normal' to firmware."""
+    coord = _make_room_coordinator()
+    entity = _room_strategy_entity(coord=coord, area_id="3")
+
+    await entity.async_select_option(STRATEGY_LABELS[STRATEGY_NORMAL])
+
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id=coord.active_map_id,
+        area_id="3",
+        strategy_mode="normal",
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_strategy_walls_corners_sends_normal():
+    """'Walls & Corners' also sends 'normal' — robot can't store it distinctly."""
+    coord = _make_room_coordinator()
+    entity = _room_strategy_entity(coord=coord, area_id="3")
+
+    await entity.async_select_option(STRATEGY_LABELS[STRATEGY_WALLS_CORNERS])
+
+    assert entity._selected == STRATEGY_LABELS[STRATEGY_WALLS_CORNERS]  # HA keeps user choice
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id=coord.active_map_id,
+        area_id="3",
+        strategy_mode="normal",
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_strategy_default_sends_normal():
+    """'Default' also sends 'normal' to firmware."""
+    coord = _make_room_coordinator()
+    entity = _room_strategy_entity(coord=coord, area_id="3")
+
+    await entity.async_select_option(STRATEGY_LABELS[STRATEGY_DEFAULT])
+
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id=coord.active_map_id,
+        area_id="3",
+        strategy_mode="normal",
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_strategy_invalid_does_not_write_back():
+    """Invalid option is rejected — no modify_area call made."""
+    coord = _make_room_coordinator()
+    entity = _room_strategy_entity(coord=coord, area_id="3")
+
+    await entity.async_select_option("Turbo")
+
+    coord.async_send_command.assert_not_called()
 
 
 # ══════════════════════════════════════════════════════════════════════

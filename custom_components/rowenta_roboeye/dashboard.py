@@ -263,13 +263,22 @@ def _build_config(
         ],
     }
 
+    _ROOM_TYPE_ICONS: dict[str, str] = {
+        "corridor": "mdi:door-open",
+        "kitchen":  "mdi:chef-hat",
+        "sleeping": "mdi:bed",
+        "living":   "mdi:sofa",
+        "bathroom": "mdi:shower",
+    }
+
     room_cards: list[dict[str, Any]] = []
     for room in rooms:
         rid = room["id"]
+        room_icon = _ROOM_TYPE_ICONS.get(room.get("room_type", ""), "mdi:door")
         room_cards.append({
             "type": "entities",
             "title": room["name"],
-            "icon": "mdi:door",
+            "icon": room_icon,
             "entities": [
                 {
                     "entity": f"select.{device_id}_{_m}room_{rid}_fan_speed",
@@ -783,7 +792,7 @@ def _extract_rooms(areas: list[dict[str, Any]]) -> list[dict[str, Any]]:
         name = meta.get("name", "").strip()
         if not name:
             continue
-        rooms.append({"id": area["id"], "name": name})
+        rooms.append({"id": area["id"], "name": name, "room_type": area.get("room_type", "")})
     return rooms
 
 

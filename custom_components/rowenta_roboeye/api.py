@@ -79,6 +79,7 @@ from .const import (
     API_SET_CLEAN_MAP,
     API_SET_FAN_SPEED,
     API_SET_GO_HOME,
+    API_SET_MODIFY_AREA,
     API_SET_STOP,
     API_SET_CLEAN_START_OR_CONTINUE,
     DEFAULT_PORT,
@@ -191,6 +192,32 @@ class RobEyeApiClient:
         """GET /get/areas[?map_id=X] — room objects with statistics and area_meta_data."""
         params = {"map_id": map_id} if map_id is not None else None
         return await self._get(API_GET_AREAS, params=params)
+
+    async def modify_area(
+        self,
+        map_id: str,
+        area_id: str,
+        cleaning_parameter_set: str | None = None,
+        strategy_mode: str | None = None,
+    ) -> dict[str, Any]:
+        """GET /set/modify_area — write per-room fan speed and/or strategy to robot map.
+
+        Confirmed working (2026-04-05):
+          /set/modify_area?map_id=3&area_id=3&cleaning_parameter_set=3&strategy_mode=deep
+
+        cleaning_parameter_set: 1=Normal, 2=Eco, 3=High, 4=Silent
+        strategy_mode: only "normal" or "deep" accepted by firmware — anything else
+                       returns a parameter error.
+
+        Omit any parameter you do not want to change.
+        Changes persist to the robot's saved map immediately.
+        """
+        params: dict[str, str] = {"map_id": map_id, "area_id": area_id}
+        if cleaning_parameter_set is not None:
+            params["cleaning_parameter_set"] = cleaning_parameter_set
+        if strategy_mode is not None:
+            params["strategy_mode"] = strategy_mode
+        return await self._get(API_SET_MODIFY_AREA, params=params)
 
     async def get_maps(self) -> dict[str, Any]:
         """GET /get/maps — list of all saved floor-plan maps.
