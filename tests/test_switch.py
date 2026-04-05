@@ -27,6 +27,8 @@ def _make_coordinator(device_id="dev123", cleaning_strategy=STRATEGY_DEFAULT, ac
     coord.active_map_id = active_map_id
     coord.areas_map_id = active_map_id
     coord.areas = []
+    coord.async_send_command = AsyncMock()
+    coord.client = MagicMock()
     return coord
 
 
@@ -187,19 +189,33 @@ def test_room_switch_is_off_by_default():
 
 @pytest.mark.asyncio
 async def test_room_switch_turn_on():
-    sw = _make_room_switch()
+    coord = _make_coordinator()
+    sw = _make_room_switch(coord=coord, area_id="3")
     await sw.async_turn_on()
     assert sw.is_on is True
     sw.async_write_ha_state.assert_called_once()
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id=coord.active_map_id,
+        area_id="3",
+        strategy_mode="deep",
+    )
 
 
 @pytest.mark.asyncio
 async def test_room_switch_turn_off():
-    sw = _make_room_switch()
+    coord = _make_coordinator()
+    sw = _make_room_switch(coord=coord, area_id="3")
     sw._is_on = True
     await sw.async_turn_off()
     assert sw.is_on is False
     sw.async_write_ha_state.assert_called_once()
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id=coord.active_map_id,
+        area_id="3",
+        strategy_mode="normal",
+    )
 
 
 def test_room_switch_available_same_map():
@@ -259,3 +275,89 @@ async def test_room_switch_restore_no_prior_state():
 
     await sw.async_added_to_hass()
     assert sw._is_on is False
+
+
+@pytest.mark.asyncio
+async def test_room_switch_seeded_deep_from_robot():
+    """strategy_mode='deep' in areas seeds the switch ON on first run."""
+    coord = _make_coordinator()
+    coord.areas = [{"id": 3, "area_type": "room", "area_state": "clean",
+                    "area_meta_data": '{"name":"Bedroom"}',
+                    "cleaning_parameter_set": 3, "strategy_mode": "deep"}]
+    sw = _make_room_switch(coord=coord, area_id="3")
+    sw.async_get_last_state = AsyncMock(return_value=None)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await sw.async_added_to_hass()
+    assert sw._is_on is True
+    assert sw._last_robot_strategy == "deep"
+
+
+@pytest.mark.asyncio
+async def test_room_switch_seeded_normal_stays_off():
+    """strategy_mode='normal' on first run leaves switch OFF."""
+    coord = _make_coordinator()
+    coord.areas = [{"id": 2, "area_type": "room", "area_state": "clean",
+                    "area_meta_data": '{"name":"Living"}',
+                    "cleaning_parameter_set": 1, "strategy_mode": "normal"}]
+    sw = _make_room_switch(coord=coord, area_id="2")
+    sw.async_get_last_state = AsyncMock(return_value=None)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await sw.async_added_to_hass()
+    assert sw._is_on is False
+    assert sw._last_robot_strategy == "normal"
+
+
+def test_room_switch_coordinator_update_syncs_deep():
+    """Native app sets deep → switch turns ON on next areas refresh."""
+    coord = _make_coordinator()
+    coord.areas = [{"id": 3, "strategy_mode": "normal"}]
+    sw = _make_room_switch(coord=coord, area_id="3")
+    sw._last_robot_strategy = "normal"
+    sw._is_on = False
+
+    coord.areas = [{"id": 3, "strategy_mode": "deep"}]
+    sw._handle_coordinator_update()
+
+    assert sw._is_on is True
+    assert sw._last_robot_strategy == "deep"
+
+
+def test_room_switch_coordinator_update_normal_does_not_clear_switch():
+    """Robot reporting 'normal' never turns the switch OFF.
+
+    All non-deep strategies read back as 'normal' from the robot, so we
+    cannot tell whether the native app turned off deep or the mode was
+    always non-deep.  The HA switch is the sole authority for turning OFF.
+    """
+    coord = _make_coordinator()
+    coord.areas = [{"id": 3, "strategy_mode": "deep"}]
+    sw = _make_room_switch(coord=coord, area_id="3")
+    sw._last_robot_strategy = "deep"
+    sw._is_on = True
+
+    # Robot now reports "normal" (e.g. native app changed, or HA wrote "normal")
+    coord.areas = [{"id": 3, "strategy_mode": "normal"}]
+    sw._handle_coordinator_update()
+
+    # Switch must stay ON — "normal" is ambiguous, HA is authoritative for OFF
+    assert sw._is_on is True
+    assert sw._last_robot_strategy == "normal"
+
+
+def test_room_switch_coordinator_update_no_change_no_overwrite():
+    """Mid-cycle: robot still reports 'normal', user just turned ON in HA — not reverted."""
+    coord = _make_coordinator()
+    coord.areas = [{"id": 3, "strategy_mode": "normal"}]
+    sw = _make_room_switch(coord=coord, area_id="3")
+    sw._last_robot_strategy = "normal"   # baseline
+    sw._is_on = True                     # user just toggled in HA (write-back pending)
+
+    sw._handle_coordinator_update()      # stale cache still shows "normal"
+
+    assert sw._is_on is True  # must NOT be reverted

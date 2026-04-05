@@ -688,6 +688,51 @@ async def test_room_fan_speed_invalid_does_not_write_back():
     coord.async_send_command.assert_not_called()
 
 
+def test_room_fan_speed_coordinator_update_syncs_changed_value():
+    """Native-app change is picked up when coordinator.areas refreshes."""
+    # Robot initially reports high (3); entity seeded to "high".
+    area = {**_CONFIRMED_AREA_SPALNYA, "cleaning_parameter_set": 3}
+    coord = _make_room_coordinator(areas=[area])
+    entity = _room_fan_entity(coord=coord, area_id="3")
+    entity._last_robot_raw = "3"
+    entity._selected = "high"
+
+    # Robot now reports eco (2) — native app changed it.
+    coord.areas = [{**area, "cleaning_parameter_set": 2}]
+    entity._handle_coordinator_update()
+
+    assert entity._selected == "eco"
+    assert entity._last_robot_raw == "2"
+
+
+def test_room_fan_speed_coordinator_update_no_change_no_overwrite():
+    """Mid-cycle update with unchanged robot value does not touch _selected."""
+    area = {**_CONFIRMED_AREA_SPALNYA, "cleaning_parameter_set": 3}
+    coord = _make_room_coordinator(areas=[area])
+    entity = _room_fan_entity(coord=coord, area_id="3")
+    entity._last_robot_raw = "3"   # baseline = high
+    entity._selected = "eco"       # user just picked eco in HA (write-back pending)
+
+    # Coordinator ticks but areas cache still shows old value (3 = high).
+    entity._handle_coordinator_update()
+
+    # _selected must NOT be reverted to "high" — robot hasn't confirmed yet.
+    assert entity._selected == "eco"
+
+
+def test_room_fan_speed_coordinator_update_first_read_sets_baseline():
+    """When _last_robot_raw is None, first coordinator tick sets the baseline."""
+    area = {**_CONFIRMED_AREA_HOL, "cleaning_parameter_set": 2}  # eco
+    coord = _make_room_coordinator(areas=[area])
+    entity = _room_fan_entity(coord=coord, area_id="2")
+    entity._last_robot_raw = None  # as-constructed, before async_added_to_hass
+
+    entity._handle_coordinator_update()
+
+    assert entity._selected == "eco"
+    assert entity._last_robot_raw == "2"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # RobEyeRoomStrategySelect
 # ══════════════════════════════════════════════════════════════════════

@@ -137,7 +137,19 @@ class RobEyeDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
 class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
     """Per-room deep clean toggle.
 
-    entity_id is forced to switch.rowenta_xplorer_120_room_{id}_deep_clean
+    Bidirectional sync: toggling the switch writes strategy_mode to the robot
+    immediately via modify_area ("deep" when ON, "normal" when OFF).  The
+    coordinator's 300 s areas poll reads the robot's stored strategy_mode back,
+    so changes made in the native app are reflected in HA.
+
+    Only "deep" is synced from the robot — when the robot reports "normal" the
+    switch turns OFF if it was ON, but the strategy select is never touched
+    (non-deep mode granularity is HA-only; the robot cannot store it).
+
+    _last_robot_strategy guards against mid-cycle overwrites using the same
+    pattern as RobEyeRoomFanSpeedSelect._last_robot_raw.
+
+    entity_id is forced to switch.{device_id}_map{map_id}_room_{area_id}_deep_clean
     so the dashboard can reference it regardless of room name language.
     Display name uses the actual (possibly Cyrillic) room name.
     """
@@ -159,6 +171,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         self._attr_name = room_name + " Deep Clean"
         self.entity_id = f"switch.{coordinator.device_id}_map{_map}_room_{area_id}_deep_clean"
         self._is_on: bool = False
+        self._last_robot_strategy: str | None = None  # last strategy_mode read from robot
 
     @property
     def available(self) -> bool:
@@ -172,11 +185,70 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         await super().async_added_to_hass()
         if (last := await self.async_get_last_state()) is not None:
             self._is_on = last.state == "on"
+            # Record the robot's current strategy as baseline so
+            # _handle_coordinator_update knows not to overwrite the restored
+            # state until the robot actually changes.
+            for area in self.coordinator.areas:
+                if str(area.get("id", "")) == self._area_id:
+                    self._last_robot_strategy = str(area.get("strategy_mode", "") or "")
+                    break
+            return
+        # Seed from robot's stored strategy_mode on first run (no prior HA state).
+        for area in self.coordinator.areas:
+            if str(area.get("id", "")) == self._area_id:
+                robot_val = str(area.get("strategy_mode", "") or "").lower()
+                self._last_robot_strategy = robot_val
+                self._is_on = robot_val == "deep"
+                if self._is_on:
+                    LOGGER.debug("Room %s deep clean seeded ON from robot", self._area_id)
+                break
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Sync deep-clean state from robot on every areas refresh.
+
+        Only "deep" is acted on — when the robot reports "deep" and the switch
+        is currently OFF, the switch is turned ON.  When the robot reports
+        "normal" the switch is never touched: all non-deep strategies read back
+        as "normal" from the robot, so we cannot distinguish "native app turned
+        off deep" from "was always non-deep".  The HA switch is the sole
+        authority for turning deep clean OFF.
+
+        _last_robot_strategy prevents redundant work between polls.
+        """
+        for area in self.coordinator.areas:
+            if str(area.get("id", "")) == self._area_id:
+                robot_val = str(area.get("strategy_mode", "") or "").lower()
+                if robot_val != self._last_robot_strategy:
+                    self._last_robot_strategy = robot_val
+                    if robot_val == "deep" and not self._is_on:
+                        self._is_on = True
+                        LOGGER.debug(
+                            "Room %s deep clean synced ON from robot",
+                            self._area_id,
+                        )
+                    # "normal" → leave _is_on unchanged
+                break
+        self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs) -> None:  # type: ignore[override]
         self._is_on = True
         self.async_write_ha_state()
+        await self.coordinator.async_send_command(
+            self.coordinator.client.modify_area,
+            map_id=self.coordinator.active_map_id,
+            area_id=self._area_id,
+            strategy_mode="deep",
+        )
 
     async def async_turn_off(self, **kwargs) -> None:  # type: ignore[override]
         self._is_on = False
         self.async_write_ha_state()
+        # "normal" is the only non-deep value the robot accepts.
+        # The strategy select holds the granular choice (Default/Normal/Walls&Corners).
+        await self.coordinator.async_send_command(
+            self.coordinator.client.modify_area,
+            map_id=self.coordinator.active_map_id,
+            area_id=self._area_id,
+            strategy_mode="normal",
+        )

@@ -184,7 +184,16 @@ class RobEyeCleaningModeSelect(RobEyeEntity, SelectEntity, RestoreEntity):
 # ── Per-room fan speed select ─────────────────────────────────────────
 
 class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
-    """Stores the desired fan speed for a single room (local only)."""
+    """Per-room fan speed select.
+
+    Bidirectional sync: changes are written to the robot immediately via
+    modify_area; the coordinator's 300 s areas poll reads the robot's stored
+    value back, so external changes made in the native app are reflected in HA.
+
+    _last_robot_raw guards against mid-cycle overwrites: the entity only updates
+    _selected when the robot's reported value actually changes, so a user's
+    just-made HA choice is never clobbered by the stale pre-poll cache.
+    """
 
     _attr_icon = "mdi:speedometer"
     _attr_options = FAN_SPEEDS
@@ -205,6 +214,7 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         self._attr_name = f"{room_name} Fan Speed"
         self.entity_id = f"select.{coordinator.device_id}_map{_map}_room_{area_id}_fan_speed"
         self._selected: str = "normal"
+        self._last_robot_raw: str | None = None  # last cleaning_parameter_set read from robot
 
     @property
     def available(self) -> bool:
@@ -219,18 +229,53 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         if (last_state := await self.async_get_last_state()) is not None:
             if last_state.state in FAN_SPEEDS:
                 self._selected = last_state.state
+                # Still record the robot's current value so _handle_coordinator_update
+                # knows the baseline and won't overwrite the restored state until the
+                # robot actually changes.
+                for area in self.coordinator.areas:
+                    if str(area.get("id", "")) == self._area_id:
+                        raw = area.get("cleaning_parameter_set")
+                        if raw is not None:
+                            self._last_robot_raw = str(raw)
+                        break
                 return
         # Seed from robot's stored value on first run (no prior HA state).
         for area in self.coordinator.areas:
             if str(area.get("id", "")) == self._area_id:
                 raw = area.get("cleaning_parameter_set")
                 if raw is not None and str(raw) in FAN_SPEED_MAP:
+                    self._last_robot_raw = str(raw)
                     self._selected = FAN_SPEED_MAP[str(raw)]
                     LOGGER.debug(
                         "Room %s fan speed seeded from robot: %s",
                         self._area_id, self._selected,
                     )
                 break
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Sync fan speed from robot on every areas refresh.
+
+        coordinator.areas is re-fetched every 300 s. Between refreshes the cache
+        holds the same data, so _last_robot_raw stays equal to the cached value
+        and this method is a no-op — meaning a user's just-made HA selection is
+        never overwritten by the stale pre-poll cache.
+        Once the areas poll returns a changed value (e.g. the native app set a
+        different speed), _last_robot_raw differs → _selected is updated.
+        """
+        for area in self.coordinator.areas:
+            if str(area.get("id", "")) == self._area_id:
+                raw = area.get("cleaning_parameter_set")
+                raw_str = str(raw) if raw is not None else None
+                if raw_str is not None and raw_str != self._last_robot_raw and raw_str in FAN_SPEED_MAP:
+                    self._last_robot_raw = raw_str
+                    self._selected = FAN_SPEED_MAP[raw_str]
+                    LOGGER.debug(
+                        "Room %s fan speed updated from robot: %s",
+                        self._area_id, self._selected,
+                    )
+                break
+        self.async_write_ha_state()
 
     async def async_select_option(self, option: str) -> None:
         if option not in FAN_SPEEDS:
