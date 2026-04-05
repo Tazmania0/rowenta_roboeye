@@ -328,18 +328,25 @@ def test_room_switch_coordinator_update_syncs_deep():
     assert sw._last_robot_strategy == "deep"
 
 
-def test_room_switch_coordinator_update_syncs_normal_clears_deep():
-    """Native app removes deep → switch turns OFF on next areas refresh."""
+def test_room_switch_coordinator_update_normal_does_not_clear_switch():
+    """Robot reporting 'normal' never turns the switch OFF.
+
+    All non-deep strategies read back as 'normal' from the robot, so we
+    cannot tell whether the native app turned off deep or the mode was
+    always non-deep.  The HA switch is the sole authority for turning OFF.
+    """
     coord = _make_coordinator()
     coord.areas = [{"id": 3, "strategy_mode": "deep"}]
     sw = _make_room_switch(coord=coord, area_id="3")
     sw._last_robot_strategy = "deep"
     sw._is_on = True
 
+    # Robot now reports "normal" (e.g. native app changed, or HA wrote "normal")
     coord.areas = [{"id": 3, "strategy_mode": "normal"}]
     sw._handle_coordinator_update()
 
-    assert sw._is_on is False
+    # Switch must stay ON — "normal" is ambiguous, HA is authoritative for OFF
+    assert sw._is_on is True
     assert sw._last_robot_strategy == "normal"
 
 

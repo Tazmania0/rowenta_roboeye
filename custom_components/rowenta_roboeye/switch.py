@@ -207,22 +207,27 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
     def _handle_coordinator_update(self) -> None:
         """Sync deep-clean state from robot on every areas refresh.
 
-        Only the "deep" ↔ non-deep boundary is synced; granular non-deep
-        strategy (Default / Normal / Walls & Corners) is HA-only.
-        _last_robot_strategy prevents stale-cache overwrites between polls.
+        Only "deep" is acted on — when the robot reports "deep" and the switch
+        is currently OFF, the switch is turned ON.  When the robot reports
+        "normal" the switch is never touched: all non-deep strategies read back
+        as "normal" from the robot, so we cannot distinguish "native app turned
+        off deep" from "was always non-deep".  The HA switch is the sole
+        authority for turning deep clean OFF.
+
+        _last_robot_strategy prevents redundant work between polls.
         """
         for area in self.coordinator.areas:
             if str(area.get("id", "")) == self._area_id:
                 robot_val = str(area.get("strategy_mode", "") or "").lower()
                 if robot_val != self._last_robot_strategy:
                     self._last_robot_strategy = robot_val
-                    new_on = robot_val == "deep"
-                    if new_on != self._is_on:
-                        self._is_on = new_on
+                    if robot_val == "deep" and not self._is_on:
+                        self._is_on = True
                         LOGGER.debug(
-                            "Room %s deep clean synced from robot: %s",
-                            self._area_id, "ON" if new_on else "OFF",
+                            "Room %s deep clean synced ON from robot",
+                            self._area_id,
                         )
+                    # "normal" → leave _is_on unchanged
                 break
         self.async_write_ha_state()
 
