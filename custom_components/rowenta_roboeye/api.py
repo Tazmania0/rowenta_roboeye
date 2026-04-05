@@ -297,7 +297,17 @@ class RobEyeApiClient:
     # ── Operational history (polled every 600 s) ─────────────────────
 
     async def get_command_result(self) -> dict[str, Any]:
-        """GET /get/command_result — outcome of the last issued command."""
+        """GET /get/command_result — status of the last command sent to the robot.
+
+        Confirmed response (2026-04-05):
+          {"commands": [{"cmd_id": 154, "status": "executing", "error_code": 0}]}
+
+        IMPORTANT: "commands" is an ARRAY. Read commands[0]["status"].
+        Do NOT read response["status"] — that key does not exist.
+
+        status: "executing" | "done" | "error"
+        cmd_id matches "id" in /get/ui_cmd_log.
+        """
         return await self._get(API_GET_COMMAND_RESULT)
 
     async def get_task_history(self) -> dict[str, Any]:

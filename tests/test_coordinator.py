@@ -1,6 +1,7 @@
 """Unit tests for the RobEye DataUpdateCoordinator."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -190,23 +191,160 @@ async def test_failure_counter_resets_on_success(coordinator, mock_client):
     assert coordinator._consecutive_failures == 0
 
 
-# ── async_send_command ────────────────────────────────────────────────
+# ── async_send_command / command queue ───────────────────────────────
+
+async def _start_worker(coordinator):
+    """Start the queue worker as a real asyncio task (bypassing hass mock)."""
+    task = asyncio.ensure_future(coordinator._command_queue_worker())
+    return task
+
+
+async def _drain_and_cancel(coordinator, task):
+    """Drain the queue then cancel the worker task."""
+    await coordinator._command_queue.join()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
 
 @pytest.mark.asyncio
 async def test_send_command_calls_fn_and_refreshes(coordinator, mock_client):
+    """Command put into queue is dispatched by the worker and triggers refresh."""
     coordinator.async_request_refresh = AsyncMock()
+    mock_client.get_command_result.return_value = {
+        "commands": [{"cmd_id": 1, "status": "done", "error_code": 0}]
+    }
+    task = await _start_worker(coordinator)
     await coordinator.async_send_command(mock_client.go_home)
+    await _drain_and_cancel(coordinator, task)
     mock_client.go_home.assert_called_once()
     coordinator.async_request_refresh.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_send_command_passes_kwargs(coordinator, mock_client):
+    """kwargs are forwarded to the command coroutine."""
     coordinator.async_request_refresh = AsyncMock()
+    mock_client.get_command_result.return_value = {
+        "commands": [{"cmd_id": 1, "status": "done", "error_code": 0}]
+    }
+    task = await _start_worker(coordinator)
     await coordinator.async_send_command(
         mock_client.clean_all, cleaning_parameter_set="3"
     )
+    await _drain_and_cancel(coordinator, task)
     mock_client.clean_all.assert_called_once_with(cleaning_parameter_set="3")
+
+
+# ── _wait_for_robot_idle ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_robot_idle_returns_when_done(coordinator, mock_client):
+    """_wait_for_robot_idle exits immediately when status is done."""
+    mock_client.get_command_result.return_value = {
+        "commands": [{"cmd_id": 10, "status": "done", "error_code": 0}]
+    }
+    await coordinator._wait_for_robot_idle()
+    mock_client.get_command_result.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_robot_idle_polls_while_executing(coordinator, mock_client):
+    """Polls until status transitions from executing to done."""
+    mock_client.get_command_result.side_effect = [
+        {"commands": [{"cmd_id": 10, "status": "executing", "error_code": 0}]},
+        {"commands": [{"cmd_id": 10, "status": "executing", "error_code": 0}]},
+        {"commands": [{"cmd_id": 10, "status": "done",      "error_code": 0}]},
+    ]
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr("asyncio.sleep", AsyncMock())
+        await coordinator._wait_for_robot_idle()
+    assert mock_client.get_command_result.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_robot_idle_proceeds_on_cannot_connect(coordinator, mock_client):
+    """CannotConnect is swallowed — never blocks the queue."""
+    mock_client.get_command_result.side_effect = CannotConnect("timeout")
+    await coordinator._wait_for_robot_idle()   # must not raise or block
+
+
+@pytest.mark.asyncio
+async def test_robot_idle_reads_commands_array(coordinator, mock_client):
+    """Must read commands[0].status — top-level status key does not exist."""
+    mock_client.get_command_result.return_value = {
+        "commands": [{"cmd_id": 5, "status": "done", "error_code": 0}]
+    }
+    await coordinator._wait_for_robot_idle()   # must not KeyError
+
+
+@pytest.mark.asyncio
+async def test_robot_idle_returns_immediately_on_empty_commands(coordinator, mock_client):
+    """Empty commands array → return immediately."""
+    mock_client.get_command_result.return_value = {"commands": []}
+    await coordinator._wait_for_robot_idle()
+    mock_client.get_command_result.assert_called_once()
+
+
+# ── Queue ordering and stop-drain behaviour ───────────────────────────
+
+@pytest.mark.asyncio
+async def test_commands_serialised_in_queue_order(coordinator, mock_client):
+    """Multiple commands are dispatched in press order, one at a time."""
+    dispatched: list[str] = []
+    coordinator.async_request_refresh = AsyncMock()
+    mock_client.get_command_result.return_value = {
+        "commands": [{"cmd_id": 1, "status": "done", "error_code": 0}]
+    }
+
+    async def make_cmd(name):
+        async def _cmd():
+            dispatched.append(name)
+        return _cmd
+
+    cmd1 = await make_cmd("room1")
+    cmd2 = await make_cmd("room2")
+    cmd3 = await make_cmd("room3")
+
+    task = await _start_worker(coordinator)
+    await coordinator.async_send_command(cmd1)
+    await coordinator.async_send_command(cmd2)
+    await coordinator.async_send_command(cmd3)
+    await _drain_and_cancel(coordinator, task)
+
+    assert dispatched == ["room1", "room2", "room3"]
+
+
+@pytest.mark.asyncio
+async def test_stop_drains_pending_cleans(coordinator, mock_client):
+    """Pressing Stop clears queued room cleans and stop runs next."""
+    coordinator.async_request_refresh = AsyncMock()
+    mock_client.get_command_result.return_value = {
+        "commands": [{"cmd_id": 1, "status": "done", "error_code": 0}]
+    }
+    dispatched: list[str] = []
+
+    async def clean_r1():
+        dispatched.append("room1")
+
+    async def clean_r2():
+        dispatched.append("room2")
+
+    # Pre-fill queue with two room cleans (worker not started yet)
+    await coordinator._command_queue.put((1, clean_r1, (), {}))
+    await coordinator._command_queue.put((1, clean_r2, (), {}))
+
+    # Enqueue stop — must drain the pending cleans
+    await coordinator.async_send_command(coordinator.client.stop)
+
+    task = await _start_worker(coordinator)
+    await _drain_and_cancel(coordinator, task)
+
+    mock_client.stop.assert_called_once()
+    assert "room1" not in dispatched   # drained before running
+    assert "room2" not in dispatched
 
 
 # ── Convenience properties ────────────────────────────────────────────

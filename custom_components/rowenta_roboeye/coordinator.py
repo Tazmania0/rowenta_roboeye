@@ -10,6 +10,7 @@ Key improvements over v1:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta
 from typing import Any
@@ -24,6 +25,8 @@ from .api import CannotConnect, RobEyeApiClient
 from .const import (
     AREA_STATE_BLOCKING,
     AREA_TYPE_AVOIDANCE,
+    CMD_POLL_INTERVAL_S,
+    CMD_POLL_TIMEOUT_S,
     DATA_AREAS,
     DATA_SENSOR_VALUES,
     DATA_AREAS_SAVED_MAP,
@@ -135,6 +138,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_mode: str = ""
         self._session_complete: bool = False
         self._last_rob_pose_ts: int = 0   # last seen /get/rob_pose timestamp value
+
+        # Serial command queue — all commands are enqueued and dispatched one at a time
+        self._command_queue: asyncio.Queue = asyncio.Queue()
+        self._command_worker_task: asyncio.Task | None = None
 
     # ── Device identifier ─────────────────────────────────────────────
 
@@ -672,11 +679,89 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def session_complete(self) -> bool:
         return self._session_complete
 
-    # ── Command helper ────────────────────────────────────────────────
+    # ── Command queue ─────────────────────────────────────────────────
+
+    def async_start_command_worker(self) -> None:
+        """Start the background command queue worker. Call once after setup."""
+        if self._command_worker_task is None or self._command_worker_task.done():
+            self._command_worker_task = self.hass.async_create_task(
+                self._command_queue_worker(),
+                name=f"rowenta_roboeye_{self.config_entry.entry_id}_cmd_worker",
+            )
+
+    async def _command_queue_worker(self) -> None:
+        """Process commands from the queue one at a time.
+
+        Each item: (priority, coro_func, args, kwargs).
+        After dispatching, polls /get/command_result until the robot
+        reports done/error or CMD_POLL_TIMEOUT_S elapses.
+        """
+        while True:
+            _priority, coro_func, args, kwargs = await self._command_queue.get()
+            try:
+                LOGGER.debug("RobEye queue: dispatching %s", coro_func.__name__)
+                await coro_func(*args, **kwargs)
+                await self._wait_for_robot_idle()
+                await self.async_request_refresh()
+            except CannotConnect as err:
+                LOGGER.error("RobEye command failed: %s", err)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                LOGGER.error("RobEye command worker error: %s", err)
+            finally:
+                self._command_queue.task_done()
+
+    async def _wait_for_robot_idle(self) -> None:
+        """Poll /get/command_result until the last command is no longer executing.
+
+        Confirmed response shape (2026-04-05):
+          {"commands": [{"cmd_id": N, "status": "executing"/"done"/"error"}]}
+
+        Polls every 5 s for up to 30 s. Robot operations (return to dock) take
+        10–15 s — do not poll more frequently than 5 s intervals.
+
+        Proceeds immediately on CannotConnect or timeout — never blocks queue.
+        """
+        deadline = asyncio.get_event_loop().time() + CMD_POLL_TIMEOUT_S
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                result = await self.client.get_command_result()
+                commands = result.get("commands", [])
+                if not commands:
+                    return
+                if commands[0].get("status", "done") != "executing":
+                    return
+            except CannotConnect:
+                return
+            await asyncio.sleep(CMD_POLL_INTERVAL_S)
+        LOGGER.warning(
+            "RobEye: command did not complete within %ds — proceeding",
+            CMD_POLL_TIMEOUT_S,
+        )
 
     async def async_send_command(self, coro_func, *args: Any, **kwargs: Any) -> None:
-        await coro_func(*args, **kwargs)
-        await self.async_request_refresh()
+        """Enqueue a command for serial dispatch by _command_queue_worker.
+
+        Commands execute in the order they are enqueued — one at a time.
+        The worker polls /get/command_result between each command so the
+        robot fully finishes before the next command is sent.
+
+        /set/stop drains all pending non-stop commands and runs next,
+        cancelling queued work. Pressing Stop always takes effect immediately.
+        """
+        is_stop = (coro_func is self.client.stop)
+
+        if is_stop:
+            # Drain queued non-stop commands — stop cancels pending work
+            while not self._command_queue.empty():
+                try:
+                    self._command_queue.get_nowait()
+                    self._command_queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+
+        await self._command_queue.put((0 if is_stop else 1, coro_func, args, kwargs))
 
 
 # ── Map helpers ───────────────────────────────────────────────────────

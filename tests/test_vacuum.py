@@ -107,9 +107,56 @@ async def test_async_stop():
 
 @pytest.mark.asyncio
 async def test_async_return_to_base():
+    """From CLEANING state: stop first, then go_home (two enqueued commands)."""
+    from homeassistant.components.vacuum import VacuumActivity
     vac, coord = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    vac._attr_activity = VacuumActivity.CLEANING
     await vac.async_return_to_base()
-    coord.async_send_command.assert_called_once_with(coord.client.go_home)
+    assert coord.async_send_command.call_count == 2
+    assert coord.async_send_command.call_args_list[0][0][0] is coord.client.stop
+    assert coord.async_send_command.call_args_list[1][0][0] is coord.client.go_home
+
+
+@pytest.mark.asyncio
+async def test_return_to_base_from_cleaning_stops_first():
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    vac._attr_activity = VacuumActivity.CLEANING
+    await vac.async_return_to_base()
+    assert coord.async_send_command.call_args_list[0][0][0] is coord.client.stop
+    assert coord.async_send_command.call_args_list[1][0][0] is coord.client.go_home
+
+
+@pytest.mark.asyncio
+async def test_return_to_base_from_paused_stops_first():
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "ready", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    vac._attr_activity = VacuumActivity.PAUSED
+    await vac.async_return_to_base()
+    assert coord.async_send_command.call_count == 2
+    assert coord.async_send_command.call_args_list[0][0][0] is coord.client.stop
+    assert coord.async_send_command.call_args_list[1][0][0] is coord.client.go_home
+
+
+@pytest.mark.asyncio
+async def test_return_to_base_from_error_stops_first():
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "not_ready", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    vac._attr_activity = VacuumActivity.ERROR
+    await vac.async_return_to_base()
+    assert coord.async_send_command.call_count == 2
+    assert coord.async_send_command.call_args_list[0][0][0] is coord.client.stop
+    assert coord.async_send_command.call_args_list[1][0][0] is coord.client.go_home
+
+
+@pytest.mark.asyncio
+async def test_return_to_base_from_docked_skips_stop():
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "ready", "charging": "charging", "battery_level": 100, "cleaning_parameter_set": 2})
+    vac._attr_activity = VacuumActivity.DOCKED
+    await vac.async_return_to_base()
+    assert coord.async_send_command.call_count == 1
+    assert coord.async_send_command.call_args_list[0][0][0] is coord.client.go_home
 
 
 # ── Service: set_fan_speed ────────────────────────────────────────────
@@ -220,6 +267,17 @@ async def test_start_from_idle_calls_clean_all():
     await vac.async_start()
     coord.async_send_command.assert_called_once()
     assert coord.async_send_command.call_args[0][0] is coord.client.clean_all
+
+
+@pytest.mark.asyncio
+async def test_start_from_error_attempts_resume():
+    """ERROR → clean_start_or_continue. Firmware decides if recoverable."""
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "not_ready", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    vac._attr_activity = VacuumActivity.ERROR
+    await vac.async_start()
+    coord.async_send_command.assert_called_once_with(coord.client.clean_start_or_continue)
+    coord.client.clean_all.assert_not_called()
 
 
 @pytest.mark.asyncio
