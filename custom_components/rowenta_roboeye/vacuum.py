@@ -15,7 +15,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 import homeassistant.helpers.entity_platform as ep
 
 from .const import (
@@ -61,7 +61,7 @@ CLEAN_ROOM_SCHEMA = cv.make_entity_service_schema(
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
-    async_add_entities: AddConfigEntryEntitiesCallback,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the vacuum entity and register the clean_room service."""
     coordinator: RobEyeCoordinator = hass.data[DOMAIN][config_entry.entry_id]

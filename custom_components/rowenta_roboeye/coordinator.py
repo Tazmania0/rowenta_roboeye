@@ -145,13 +145,17 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._session_complete: bool = False
         self._last_rob_pose_ts: int = 0   # last seen /get/rob_pose timestamp value
 
-        # Serial command queue — all commands are enqueued and dispatched one at a time
-        self._command_queue: asyncio.Queue = asyncio.Queue()
+        # Serial command queue — all commands are enqueued and dispatched one at a time.
+        # PriorityQueue lets /set/stop jump ahead of normal commands.
+        # Item shape: (priority, sequence, coro_func, args, kwargs)
+        self._command_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
+        self._command_sequence: int = 0
         self._command_worker_task: asyncio.Task | None = None
 
         # Event log incremental polling state
         self._last_event_log_id: int = 0
         self._last_event_log: datetime | None = None
+        self._event_log_seeded: bool = False
         self._recent_events: list[dict[str, Any]] = []  # last 50 top-level events
 
     # ── Device identifier ─────────────────────────────────────────────
@@ -554,10 +558,20 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     log_data = await self.client.get_event_log(
                         last_id=self._last_event_log_id
                     )
-                    new_events = log_data.get("robot_events", [])
+                    new_events = (
+                        log_data.get("robot_events", [])
+                        if isinstance(log_data, dict)
+                        else []
+                    )
                     if new_events:
                         self._last_event_log_id = new_events[-1]["id"]
-                        self._process_new_events(new_events)
+                        # First fetch may contain historical entries from before HA
+                        # boot; use it to seed the cursor without surfacing stale
+                        # notifications/logs.
+                        if self._event_log_seeded:
+                            self._process_new_events(new_events)
+                        else:
+                            self._event_log_seeded = True
                 except CannotConnect:
                     LOGGER.debug("get_event_log unavailable, skipping")
                 self._last_event_log = now
@@ -711,7 +725,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def async_start_command_worker(self) -> None:
         """Start the background command queue worker. Call once after setup."""
         if self._command_worker_task is None or self._command_worker_task.done():
-            self._command_worker_task = self.hass.async_create_task(
+            self._command_worker_task = self.hass.async_create_background_task(
                 self._command_queue_worker(),
                 name=f"rowenta_roboeye_{self.config_entry.entry_id}_cmd_worker",
             )
@@ -729,7 +743,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         On error (non-zero error_code): logs and moves to next command.
         """
         while True:
-            _priority, coro_func, args, kwargs = await self._command_queue.get()
+            _priority, _seq, coro_func, args, kwargs = await self._command_queue.get()
             try:
                 LOGGER.debug("RobEye queue: dispatching %s", coro_func.__name__)
                 response = await coro_func(*args, **kwargs)
@@ -763,7 +777,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             finally:
                 self._command_queue.task_done()
                 # Notify listeners (e.g. queue status sensor) of state change
-                self.async_update_listeners()
+                if hasattr(self, "async_update_listeners"):
+                    self.async_update_listeners()
 
     async def _wait_for_robot_idle(self, cmd_id: int | None = None) -> None:
         """Poll /get/command_result until the dispatched command finishes.
@@ -829,7 +844,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except asyncio.QueueEmpty:
                     break
 
-        await self._command_queue.put((0 if is_stop else 1, coro_func, args, kwargs))
+        self._command_sequence += 1
+        await self._command_queue.put(
+            (0 if is_stop else 1, self._command_sequence, coro_func, args, kwargs)
+        )
 
     # ── Queue status ──────────────────────────────────────────────────
 
@@ -844,12 +862,13 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Used by the queue_status sensor for dashboard rendering.
         """
         try:
-            items = list(self._command_queue._queue)  # deque, safe to read
+            # PriorityQueue stores a heap; sort to present true dispatch order.
+            items = sorted(list(self._command_queue._queue))
         except AttributeError:
             return []
 
         result = []
-        for i, (_priority, coro_func, args, kwargs) in enumerate(items):
+        for i, (_priority, _seq, coro_func, args, kwargs) in enumerate(items):
             label = _describe_command(coro_func, kwargs)
             map_name = self._resolve_map_name(str(kwargs.get("map_id", "")))
             result.append({
@@ -869,13 +888,13 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         estimated_cleaning_time in /get/areas is in milliseconds.
         """
         try:
-            items = list(self._command_queue._queue)
+            items = sorted(list(self._command_queue._queue))
         except AttributeError:
             return None
 
         total_ms = 0
         found = False
-        for _priority, coro_func, args, kwargs in items:
+        for _priority, _seq, coro_func, args, kwargs in items:
             name = getattr(coro_func, "__name__", "")
             area_ids_str = str(kwargs.get("area_ids", ""))
             if name not in ("clean_map", "clean_all"):

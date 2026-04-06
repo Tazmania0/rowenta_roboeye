@@ -168,6 +168,7 @@ ha_device_reg = _make_module(
 # homeassistant.helpers.entity_platform
 ha_ep = _make_module(
     "homeassistant.helpers.entity_platform",
+    AddEntitiesCallback=MagicMock,
     AddConfigEntryEntitiesCallback=MagicMock,
 )
 

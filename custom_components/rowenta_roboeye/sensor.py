@@ -44,7 +44,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     AREA_STATE_BLOCKING,
@@ -356,7 +356,7 @@ ALL_STATIC_SENSORS: tuple[tuple[RobEyeSensorDescription, ...], ...] = (
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
-    async_add_entities: AddConfigEntryEntitiesCallback,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up static and dynamic (per-room) sensor entities."""
     coordinator: RobEyeCoordinator = hass.data[DOMAIN][config_entry.entry_id]

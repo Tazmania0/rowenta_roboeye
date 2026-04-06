@@ -333,8 +333,8 @@ async def test_stop_drains_pending_cleans(coordinator, mock_client):
         dispatched.append("room2")
 
     # Pre-fill queue with two room cleans (worker not started yet)
-    await coordinator._command_queue.put((1, clean_r1, (), {}))
-    await coordinator._command_queue.put((1, clean_r2, (), {}))
+    await coordinator._command_queue.put((1, 1, clean_r1, (), {}))
+    await coordinator._command_queue.put((1, 2, clean_r2, (), {}))
 
     # Enqueue stop — must drain the pending cleans
     await coordinator.async_send_command(coordinator.client.stop)
