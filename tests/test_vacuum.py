@@ -220,6 +220,7 @@ async def test_async_pause_calls_stop():
     vac._attr_activity = VacuumActivity.CLEANING
     await vac.async_pause()
     coord.async_send_command.assert_called_once_with(coord.client.stop)
+    assert vac._attr_activity is VacuumActivity.PAUSED
 
 
 def test_state_machine_paused():

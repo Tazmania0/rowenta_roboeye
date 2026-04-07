@@ -360,7 +360,7 @@ async def test_cleaning_command_waits_for_active_mode_to_finish_before_next(
 
 @pytest.mark.asyncio
 async def test_stop_drains_pending_cleans(coordinator, mock_client):
-    """Pressing Stop clears queued room cleans and is promoted to go_home."""
+    """Pressing Stop clears queued room cleans and dispatches stop in place."""
     coordinator.async_request_refresh = AsyncMock()
     mock_client.get_command_result.return_value = {
         "commands": [{"cmd_id": 1, "status": "done", "error_code": 0}]
@@ -383,8 +383,8 @@ async def test_stop_drains_pending_cleans(coordinator, mock_client):
     task = await _start_worker(coordinator)
     await _drain_and_cancel(coordinator, task)
 
-    mock_client.stop.assert_not_called()
-    mock_client.go_home.assert_called_once()
+    mock_client.stop.assert_called_once()
+    mock_client.go_home.assert_not_called()
     assert "room1" not in dispatched   # drained before running
     assert "room2" not in dispatched
 

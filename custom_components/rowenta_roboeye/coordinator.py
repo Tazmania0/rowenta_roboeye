@@ -908,14 +908,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         The worker polls /get/command_result between each command so the
         robot fully finishes before the next command is sent.
 
-        /set/stop is promoted to /set/go_home to cancel current work and dock.
+        /set/stop is dispatched as-is (hard stop in place).
         /set/go_home drains pending queued work and runs next.
         /set/clean_start_or_continue is also prioritised to run next.
         """
         is_stop = (coro_func is self.client.stop or getattr(coro_func, "__name__", "") == "stop")
-        if is_stop:
-            LOGGER.debug("RobEye queue: stop requested; promoting to go_home")
-            coro_func = self.client.go_home
 
         is_go_home = (
             coro_func is self.client.go_home
