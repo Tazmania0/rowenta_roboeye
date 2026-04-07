@@ -10,6 +10,7 @@ import pytest
 from custom_components.rowenta_roboeye.api import CannotConnect
 from custom_components.rowenta_roboeye.const import (
     DATA_AREAS,
+    DATA_AREAS_SAVED_MAP,
     DATA_LIVE_PARAMETERS,
     DATA_ROB_POSE,
     DATA_ROBOT_INFO,
@@ -364,9 +365,56 @@ def test_areas_property_empty_when_no_data(coordinator):
     assert coordinator.areas == []
 
 
+def test_resolve_room_name_by_id_falls_back_to_saved_map_areas(coordinator):
+    coordinator.data = {
+        DATA_AREAS: {"areas": []},
+        DATA_AREAS_SAVED_MAP: {
+            "areas": [{"id": 42, "area_meta_data": '{"name":"Office"}'}]
+        },
+    }
+    assert coordinator._resolve_room_name_by_id(42) == "Office"
+
+
 def test_live_parameters_property(coordinator):
     coordinator.data = {DATA_LIVE_PARAMETERS: {"area_cleaned": 100}}
     assert coordinator.live_parameters["area_cleaned"] == 100
+
+
+def test_command_queue_items_keeps_inflight_clean_visible(coordinator, mock_client):
+    coordinator._inflight_clean_command = (
+        mock_client.clean_map,
+        {"map_id": "3", "area_ids": "11"},
+    )
+    items = coordinator.command_queue_items
+    assert len(items) == 1
+    assert items[0]["status"] == "active"
+    assert items[0]["label"] == "Clean room 11"
+
+
+def test_command_queue_items_shows_external_active_session_and_keeps_ha_pending(
+    coordinator, mock_client
+):
+    coordinator.data = {DATA_STATUS: {"mode": "cleaning"}}
+    coordinator._command_queue.put_nowait(
+        (1, 1, mock_client.clean_map, (), {"map_id": "3", "area_ids": "3"})
+    )
+
+    items = coordinator.command_queue_items
+    assert len(items) == 2
+    assert items[0]["status"] == "active"
+    assert items[0]["label"] == "Current cleaning session"
+    assert items[1]["status"] == "pending"
+    assert items[1]["label"] == "Clean room 3"
+
+
+def test_parsed_current_session_resolves_room_names_from_status_area_ids(coordinator):
+    coordinator.data = {
+        DATA_STATUS: {"mode": "cleaning", "area_ids": [3]},
+        DATA_AREAS: {"areas": [{"id": 3, "area_meta_data": '{"name":"Bedroom"}'}]},
+    }
+    item = coordinator._parsed_current_session_item()
+    assert item is not None
+    assert item["label"] == "Clean Bedroom"
 
 
 def test_robot_info_property(coordinator):
