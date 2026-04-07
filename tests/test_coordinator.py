@@ -360,7 +360,7 @@ async def test_cleaning_command_waits_for_active_mode_to_finish_before_next(
 
 @pytest.mark.asyncio
 async def test_stop_drains_pending_cleans(coordinator, mock_client):
-    """Pressing Stop clears queued room cleans and stop runs next."""
+    """Pressing Stop clears queued room cleans and is promoted to go_home."""
     coordinator.async_request_refresh = AsyncMock()
     mock_client.get_command_result.return_value = {
         "commands": [{"cmd_id": 1, "status": "done", "error_code": 0}]
@@ -383,9 +383,49 @@ async def test_stop_drains_pending_cleans(coordinator, mock_client):
     task = await _start_worker(coordinator)
     await _drain_and_cancel(coordinator, task)
 
-    mock_client.stop.assert_called_once()
+    mock_client.stop.assert_not_called()
+    mock_client.go_home.assert_called_once()
     assert "room1" not in dispatched   # drained before running
     assert "room2" not in dispatched
+
+
+@pytest.mark.asyncio
+async def test_go_home_drains_pending_cleans(coordinator, mock_client):
+    """Pressing Return to Dock clears queued room cleans and go_home runs next."""
+    coordinator.async_request_refresh = AsyncMock()
+    mock_client.get_command_result.return_value = {
+        "commands": [{"cmd_id": 1, "status": "done", "error_code": 0}]
+    }
+    dispatched: list[str] = []
+
+    async def clean_r1():
+        dispatched.append("room1")
+
+    async def clean_r2():
+        dispatched.append("room2")
+
+    await coordinator._command_queue.put((1, 1, clean_r1, (), {}))
+    await coordinator._command_queue.put((1, 2, clean_r2, (), {}))
+
+    await coordinator.async_send_command(coordinator.client.go_home)
+
+    task = await _start_worker(coordinator)
+    await _drain_and_cancel(coordinator, task)
+
+    mock_client.go_home.assert_called_once()
+    assert "room1" not in dispatched
+    assert "room2" not in dispatched
+
+
+@pytest.mark.asyncio
+async def test_immediate_command_interrupts_active_operation_wait(coordinator, mock_client):
+    """Queued immediate command should break active-operation wait loop promptly."""
+    mock_client.get_status.return_value = {"mode": "cleaning"}
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr("asyncio.sleep", AsyncMock())
+        await coordinator._command_queue.put((0, 1, coordinator.client.stop, (), {}))
+        await coordinator._wait_for_active_operation_end()
+    mock_client.get_status.assert_called_once()
 
 
 # ── Convenience properties ────────────────────────────────────────────
