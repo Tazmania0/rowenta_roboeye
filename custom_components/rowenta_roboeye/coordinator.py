@@ -152,6 +152,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._command_sequence: int = 0
         self._active_command: tuple[int, int, Any, tuple[Any, ...], dict[str, Any]] | None = None
         self._command_worker_task: asyncio.Task | None = None
+        # Last dispatched cleaning command shown as "active" until robot
+        # actually leaves active modes (cleaning/go_home).
+        self._inflight_clean_command: tuple[Any, dict[str, Any]] | None = None
 
         # Event log incremental polling state
         self._last_event_log_id: int = 0
@@ -304,6 +307,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             mode = data[DATA_STATUS].get("mode", "")
             is_active = mode in (MODE_CLEANING, MODE_GO_HOME)
+            if not is_active:
+                self._inflight_clean_command = None
 
             # ── Dynamically adjust polling rate ───────────────────────
             target_interval = UPDATE_INTERVAL_CLEANING if is_active else UPDATE_INTERVAL_IDLE
@@ -746,6 +751,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         while True:
             _priority, _seq, coro_func, args, kwargs = await self._command_queue.get()
             self._active_command = (_priority, _seq, coro_func, args, kwargs)
+            if getattr(coro_func, "__name__", "") in ("clean_map", "clean_all"):
+                self._inflight_clean_command = (coro_func, dict(kwargs))
+            elif getattr(coro_func, "__name__", "") in ("stop", "go_home"):
+                self._inflight_clean_command = None
             if hasattr(self, "async_update_listeners"):
                 self.async_update_listeners()
             try:
@@ -874,19 +883,33 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except AttributeError:
             return []
 
-        items = []
+        active_item: dict[str, str] | None = None
         if self._active_command is not None:
-            items.append(self._active_command)
-        items.extend(pending_items)
+            _priority, _seq, coro_func, args, kwargs = self._active_command
+            active_item = {
+                "status": "active",
+                "label": _describe_command(coro_func, kwargs),
+                "map_name": self._resolve_map_name(str(kwargs.get("map_id", ""))),
+            }
+        elif self._inflight_clean_command is not None:
+            coro_func, kwargs = self._inflight_clean_command
+            active_item = {
+                "status": "active",
+                "label": _describe_command(coro_func, kwargs),
+                "map_name": self._resolve_map_name(str(kwargs.get("map_id", ""))),
+            }
+        else:
+            active_item = self._parsed_current_session_item()
 
         result = []
-        for i, (_priority, _seq, coro_func, args, kwargs) in enumerate(items):
-            label = _describe_command(coro_func, kwargs)
-            map_name = self._resolve_map_name(str(kwargs.get("map_id", "")))
+        if active_item is not None:
+            result.append(active_item)
+
+        for idx, (_priority, _seq, coro_func, args, kwargs) in enumerate(pending_items):
             result.append({
-                "status": "active" if i == 0 else "pending",
-                "label":    label,
-                "map_name": map_name,
+                "status": "pending" if active_item is not None or idx > 0 else "active",
+                "label": _describe_command(coro_func, kwargs),
+                "map_name": self._resolve_map_name(str(kwargs.get("map_id", ""))),
             })
         return result
 
@@ -945,16 +968,68 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _resolve_room_name_by_id(self, area_id: int) -> str | None:
         """Return room name for an area_id from current areas data."""
         import json as _json
-        for area in self.areas:
-            if area.get("id") == area_id:
-                meta_raw = area.get("area_meta_data", "")
-                if meta_raw:
-                    try:
-                        meta = _json.loads(meta_raw)
-                        return meta.get("name", "").strip() or None
-                    except Exception:  # noqa: BLE001
-                        pass
+        areas_sources = [self.areas]
+        saved_blob = (self.data or {}).get(DATA_AREAS_SAVED_MAP, {})
+        if isinstance(saved_blob, dict):
+            areas_sources.append(saved_blob.get("areas", []))
+
+        for areas in areas_sources:
+            for area in areas:
+                if area.get("id") == area_id:
+                    meta_raw = area.get("area_meta_data", "")
+                    if meta_raw:
+                        try:
+                            meta = _json.loads(meta_raw)
+                            return meta.get("name", "").strip() or None
+                        except Exception:  # noqa: BLE001
+                            pass
         return None
+
+    def _parsed_current_session_item(self) -> dict[str, str] | None:
+        """Return an active queue-like item for a robot-run session.
+
+        Used when robot is already cleaning (e.g. started from native app) and
+        HA queue has no active command. This keeps dashboard status coherent and
+        leaves newly queued HA actions as pending.
+        """
+        mode = str(self.status.get("mode", ""))
+        if mode not in (MODE_CLEANING, MODE_GO_HOME):
+            return None
+
+        if mode == MODE_GO_HOME:
+            return {
+                "status": "active",
+                "label": "Return to base",
+                "map_name": self._resolve_map_name(self.active_map_id),
+            }
+
+        area_ids_raw = self.status.get("area_ids")
+        if isinstance(area_ids_raw, list) and area_ids_raw:
+            resolved = []
+            for area_id in area_ids_raw:
+                try:
+                    name = self._resolve_room_name_by_id(int(area_id))
+                except (ValueError, TypeError):
+                    continue
+                if name:
+                    resolved.append(name)
+            if resolved:
+                label = "Clean " + " + ".join(resolved)
+            else:
+                label = "Current cleaning session"
+        else:
+            label = "Current cleaning session"
+
+        map_id = str(
+            self.status.get("map_id")
+            or self.status.get("operation_map_id")
+            or self.active_map_id
+        )
+        return {
+            "status": "active",
+            "label": label,
+            "map_name": self._resolve_map_name(map_id),
+        }
 
     def _process_new_events(self, events: list[dict[str, Any]]) -> None:
         """Process new event log entries.
