@@ -163,6 +163,26 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._event_log_seeded: bool = False
         self._recent_events: list[dict[str, Any]] = []  # last 50 top-level events
 
+    def _is_immediate_command(self, coro_func: Any) -> bool:
+        """Return True for commands that must bypass normal queue waiting."""
+        command_name = getattr(coro_func, "__name__", "")
+        return (
+            coro_func in (
+                self.client.stop,
+                self.client.go_home,
+                self.client.clean_start_or_continue,
+            )
+            or command_name in ("stop", "go_home", "clean_start_or_continue")
+        )
+
+    def _has_immediate_command_pending(self) -> bool:
+        """Return True when a high-priority command is waiting in the queue."""
+        try:
+            pending_items = list(self._command_queue._queue)
+        except AttributeError:
+            return False
+        return any(priority == 0 for priority, *_rest in pending_items)
+
     # ── Device identifier ─────────────────────────────────────────────
 
     @property
@@ -870,6 +890,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 mode = status.get("mode", "")
                 if mode not in (MODE_CLEANING, MODE_GO_HOME):
                     return
+                if self._has_immediate_command_pending():
+                    LOGGER.debug(
+                        "RobEye: immediate command pending; interrupting active-operation wait"
+                    )
+                    return
             except CannotConnect:
                 LOGGER.debug(
                     "RobEye: get_status failed while waiting for active operation end; retrying"
@@ -883,13 +908,23 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         The worker polls /get/command_result between each command so the
         robot fully finishes before the next command is sent.
 
-        /set/stop drains all pending non-stop commands and runs next,
-        cancelling queued work. Pressing Stop always takes effect immediately.
+        /set/stop is promoted to /set/go_home to cancel current work and dock.
+        /set/go_home drains pending queued work and runs next.
+        /set/clean_start_or_continue is also prioritised to run next.
         """
-        is_stop = (coro_func is self.client.stop)
-
+        is_stop = (coro_func is self.client.stop or getattr(coro_func, "__name__", "") == "stop")
         if is_stop:
-            # Drain queued non-stop commands — stop cancels pending work
+            LOGGER.debug("RobEye queue: stop requested; promoting to go_home")
+            coro_func = self.client.go_home
+
+        is_go_home = (
+            coro_func is self.client.go_home
+            or getattr(coro_func, "__name__", "") == "go_home"
+        )
+        is_immediate = self._is_immediate_command(coro_func)
+
+        if is_stop or is_go_home:
+            # Drain queued commands — emergency controls cancel pending work
             while not self._command_queue.empty():
                 try:
                     self._command_queue.get_nowait()
@@ -899,7 +934,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         self._command_sequence += 1
         await self._command_queue.put(
-            (0 if is_stop else 1, self._command_sequence, coro_func, args, kwargs)
+            (0 if is_immediate else 1, self._command_sequence, coro_func, args, kwargs)
         )
         if hasattr(self, "async_update_listeners"):
             self.async_update_listeners()
