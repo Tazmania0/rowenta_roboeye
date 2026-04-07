@@ -32,6 +32,7 @@ from .const import (
     MODE_NOT_READY,
     MODE_READY,
     SERVICE_CLEAN_ROOM,
+    SERVICE_REMOVE_QUEUE_ENTRY,
 )
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
@@ -57,6 +58,14 @@ CLEAN_ROOM_SCHEMA = cv.make_entity_service_schema(
     }
 )
 
+REMOVE_QUEUE_ENTRY_SCHEMA = cv.make_entity_service_schema(
+    {
+        vol.Optional("pending_index", default=0): vol.All(
+            vol.Coerce(int), vol.Range(min=0)
+        ),
+    }
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -73,6 +82,11 @@ async def async_setup_entry(
         SERVICE_CLEAN_ROOM,
         CLEAN_ROOM_SCHEMA,
         "_async_clean_room",
+    )
+    platform.async_register_entity_service(
+        SERVICE_REMOVE_QUEUE_ENTRY,
+        REMOVE_QUEUE_ENTRY_SCHEMA,
+        "_async_remove_queue_entry",
     )
 
 
@@ -278,3 +292,14 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
             cleaning_parameter_set=raw,
             strategy_mode=strategy,
         )
+
+    async def _async_remove_queue_entry(self, pending_index: int = 0) -> None:
+        """Service handler for rowenta_roboeye.remove_queue_entry."""
+        removed = await self.coordinator.async_remove_queued_command(
+            pending_index=pending_index
+        )
+        if not removed:
+            LOGGER.warning(
+                "remove_queue_entry: no pending queue entry at index %s",
+                pending_index,
+            )

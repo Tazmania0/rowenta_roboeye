@@ -59,6 +59,7 @@ from .const import (
     MAX_POLL_FAILURES,
     MODE_CLEANING,
     MODE_GO_HOME,
+    QUEUE_POST_DOCK_DELAY_S,
     SCAN_INTERVAL_AREAS,
     SCAN_INTERVAL_EVENT_LOG,
     SCAN_INTERVAL_MAP_GEOMETRY,
@@ -795,6 +796,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self._wait_for_robot_idle(cmd_id=dispatched_cmd_id)
                 if is_cleaning_dispatch or coro_func is self.client.go_home or command_name == "go_home":
                     await self._wait_for_active_operation_end()
+                    await asyncio.sleep(QUEUE_POST_DOCK_DELAY_S)
                 await self.async_request_refresh()
             except CannotConnect as err:
                 LOGGER.error("RobEye command failed: %s", err)
@@ -901,6 +903,46 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if hasattr(self, "async_update_listeners"):
             self.async_update_listeners()
+
+    async def async_remove_queued_command(self, pending_index: int = 0) -> bool:
+        """Remove one pending queue entry by index.
+
+        Indexing is zero-based and applies to pending commands only (never the
+        currently active command). Returns True when an entry is removed.
+        """
+        try:
+            pending_items = sorted(list(self._command_queue._queue))
+        except AttributeError:
+            return False
+
+        if pending_index < 0 or pending_index >= len(pending_items):
+            return False
+
+        target = pending_items[pending_index]
+        removed = False
+        rebuilt_items = []
+        for item in pending_items:
+            if not removed and item == target:
+                removed = True
+                continue
+            rebuilt_items.append(item)
+
+        if not removed:
+            return False
+
+        while not self._command_queue.empty():
+            try:
+                self._command_queue.get_nowait()
+                self._command_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+        for item in rebuilt_items:
+            await self._command_queue.put(item)
+
+        if hasattr(self, "async_update_listeners"):
+            self.async_update_listeners()
+        return True
 
     # ── Queue status ──────────────────────────────────────────────────
 
@@ -1041,7 +1083,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 room_name = self._resolve_room_name_by_id(area_id)
                 names.append(room_name or f"room {area_id}")
             if names:
-                return "Clean " + " + ".join(names)
+                return "Cleaning " + " + ".join(names)
         return _describe_command(coro_func, kwargs)
 
     def _parsed_current_session_item(self) -> dict[str, str] | None:
@@ -1073,7 +1115,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if name:
                     resolved.append(name)
             if resolved:
-                label = "Clean " + " + ".join(resolved)
+                label = "Cleaning " + " + ".join(resolved)
             else:
                 label = "Current cleaning session"
         else:
@@ -1149,9 +1191,9 @@ def _describe_command(coro_func: Any, kwargs: dict) -> str:
     name = _command_name(coro_func)
     area_ids = kwargs.get("area_ids", "")
     if name == "clean_map" and area_ids:
-        return f"Clean room {area_ids}"
+        return f"Cleaning room {area_ids}"
     if name == "clean_all":
-        return "Clean entire home"
+        return "Cleaning entire home"
     if name == "go_home":
         return "Return to base"
     if name == "stop":
