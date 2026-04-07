@@ -150,6 +150,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Item shape: (priority, sequence, coro_func, args, kwargs)
         self._command_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
         self._command_sequence: int = 0
+        self._active_command: tuple[int, int, Any, tuple[Any, ...], dict[str, Any]] | None = None
         self._command_worker_task: asyncio.Task | None = None
 
         # Event log incremental polling state
@@ -744,6 +745,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         while True:
             _priority, _seq, coro_func, args, kwargs = await self._command_queue.get()
+            self._active_command = (_priority, _seq, coro_func, args, kwargs)
+            if hasattr(self, "async_update_listeners"):
+                self.async_update_listeners()
             try:
                 LOGGER.debug("RobEye queue: dispatching %s", coro_func.__name__)
                 response = await coro_func(*args, **kwargs)
@@ -775,6 +779,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except Exception as err:  # noqa: BLE001
                 LOGGER.error("RobEye command worker error: %s", err)
             finally:
+                self._active_command = None
                 self._command_queue.task_done()
                 # Notify listeners (e.g. queue status sensor) of state change
                 if hasattr(self, "async_update_listeners"):
@@ -848,6 +853,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._command_queue.put(
             (0 if is_stop else 1, self._command_sequence, coro_func, args, kwargs)
         )
+        if hasattr(self, "async_update_listeners"):
+            self.async_update_listeners()
 
     # ── Queue status ──────────────────────────────────────────────────
 
@@ -863,9 +870,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         try:
             # PriorityQueue stores a heap; sort to present true dispatch order.
-            items = sorted(list(self._command_queue._queue))
+            pending_items = sorted(list(self._command_queue._queue))
         except AttributeError:
             return []
+
+        items = []
+        if self._active_command is not None:
+            items.append(self._active_command)
+        items.extend(pending_items)
 
         result = []
         for i, (_priority, _seq, coro_func, args, kwargs) in enumerate(items):
@@ -888,9 +900,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         estimated_cleaning_time in /get/areas is in milliseconds.
         """
         try:
-            items = sorted(list(self._command_queue._queue))
+            pending_items = sorted(list(self._command_queue._queue))
         except AttributeError:
             return None
+
+        items = []
+        if self._active_command is not None:
+            items.append(self._active_command)
+        items.extend(pending_items)
 
         total_ms = 0
         found = False
