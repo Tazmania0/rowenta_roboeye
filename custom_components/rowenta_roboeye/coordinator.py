@@ -751,9 +751,22 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         while True:
             _priority, _seq, coro_func, args, kwargs = await self._command_queue.get()
             self._active_command = (_priority, _seq, coro_func, args, kwargs)
-            if getattr(coro_func, "__name__", "") in ("clean_map", "clean_all"):
+            command_name = getattr(coro_func, "__name__", "")
+            is_cleaning_dispatch = (
+                coro_func in (
+                    self.client.clean_map,
+                    self.client.clean_all,
+                    self.client.clean_start_or_continue,
+                )
+                or command_name in ("clean_map", "clean_all", "clean_start_or_continue")
+            )
+            is_return_or_stop = (
+                coro_func in (self.client.stop, self.client.go_home)
+                or command_name in ("stop", "go_home")
+            )
+            if is_cleaning_dispatch:
                 self._inflight_clean_command = (coro_func, dict(kwargs))
-            elif getattr(coro_func, "__name__", "") in ("stop", "go_home"):
+            elif is_return_or_stop:
                 self._inflight_clean_command = None
             if hasattr(self, "async_update_listeners"):
                 self.async_update_listeners()
@@ -780,6 +793,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
 
                 await self._wait_for_robot_idle(cmd_id=dispatched_cmd_id)
+                if is_cleaning_dispatch or coro_func is self.client.go_home or command_name == "go_home":
+                    await self._wait_for_active_operation_end()
                 await self.async_request_refresh()
             except CannotConnect as err:
                 LOGGER.error("RobEye command failed: %s", err)
@@ -836,6 +851,28 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "RobEye: cmd_id=%s did not complete within %ds — moving to next",
             cmd_id, CMD_POLL_TIMEOUT_S,
         )
+
+    async def _wait_for_active_operation_end(self) -> None:
+        """Wait until robot leaves active modes before dispatching next queued command.
+
+        /get/command_result confirms command acceptance/completion, but the robot can
+        continue physically cleaning for much longer. For cleaning/go-home operations,
+        keep the queue blocked until /get/status mode is no longer cleaning/go_home.
+
+        This poll intentionally has no hard timeout because cleaning duration depends
+        on home size. Connectivity errors are treated as transient; the queue retries.
+        """
+        while True:
+            try:
+                status = await self.client.get_status()
+                mode = status.get("mode", "")
+                if mode not in (MODE_CLEANING, MODE_GO_HOME):
+                    return
+            except CannotConnect:
+                LOGGER.debug(
+                    "RobEye: get_status failed while waiting for active operation end; retrying"
+                )
+            await asyncio.sleep(CMD_POLL_INTERVAL_S)
 
     async def async_send_command(self, coro_func, *args: Any, **kwargs: Any) -> None:
         """Enqueue a command for serial dispatch by _command_queue_worker.

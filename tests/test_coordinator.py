@@ -319,6 +319,46 @@ async def test_commands_serialised_in_queue_order(coordinator, mock_client):
 
 
 @pytest.mark.asyncio
+async def test_cleaning_command_waits_for_active_mode_to_finish_before_next(
+    coordinator, mock_client
+):
+    """Second queued clean must wait until first cleaning session actually ends."""
+    coordinator.async_request_refresh = AsyncMock()
+    order: list[str] = []
+    cmd_ids = iter([101, 102])
+
+    async def _clean_map(**kwargs):
+        order.append(str(kwargs.get("area_ids")))
+        return {"cmd_id": next(cmd_ids), "error_code": 0}
+
+    mock_client.get_command_result.side_effect = [
+        {"commands": [{"cmd_id": 101, "status": "done", "error_code": 0}]},
+        {"commands": [{"cmd_id": 102, "status": "done", "error_code": 0}]},
+    ]
+    mock_client.get_status.side_effect = [
+        {"mode": "cleaning"},
+        {"mode": "cleaning"},
+        {"mode": "ready"},
+        {"mode": "ready"},
+    ]
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr("asyncio.sleep", AsyncMock())
+        mock_client.clean_map.side_effect = _clean_map
+        task = await _start_worker(coordinator)
+        await coordinator.async_send_command(
+            mock_client.clean_map, map_id="3", area_ids="3"
+        )
+        await coordinator.async_send_command(
+            mock_client.clean_map, map_id="3", area_ids="11"
+        )
+        await _drain_and_cancel(coordinator, task)
+
+    assert order == ["3", "11"]
+    assert mock_client.get_status.call_count == 4
+
+
+@pytest.mark.asyncio
 async def test_stop_drains_pending_cleans(coordinator, mock_client):
     """Pressing Stop clears queued room cleans and stop runs next."""
     coordinator.async_request_refresh = AsyncMock()
