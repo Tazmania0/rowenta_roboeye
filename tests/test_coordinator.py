@@ -375,6 +375,13 @@ def test_resolve_room_name_by_id_falls_back_to_saved_map_areas(coordinator):
     assert coordinator._resolve_room_name_by_id(42) == "Office"
 
 
+def test_resolve_room_name_by_id_handles_string_area_ids(coordinator):
+    coordinator.data = {
+        DATA_AREAS: {"areas": [{"id": "31", "area_meta_data": '{"name":"Детска"}'}]},
+    }
+    assert coordinator._resolve_room_name_by_id(31) == "Детска"
+
+
 def test_live_parameters_property(coordinator):
     coordinator.data = {DATA_LIVE_PARAMETERS: {"area_cleaned": 100}}
     assert coordinator.live_parameters["area_cleaned"] == 100
@@ -405,6 +412,18 @@ def test_command_queue_items_shows_external_active_session_and_keeps_ha_pending(
     assert items[0]["label"] == "Current cleaning session"
     assert items[1]["status"] == "pending"
     assert items[1]["label"] == "Clean room 3"
+
+
+def test_command_queue_items_resolves_pending_room_names(coordinator, mock_client):
+    coordinator.data = {
+        DATA_AREAS: {"areas": [{"id": "31", "area_meta_data": '{"name":"Детска"}'}]},
+    }
+    coordinator._command_queue.put_nowait(
+        (1, 1, mock_client.clean_map, (), {"map_id": "3", "area_ids": "31"})
+    )
+    items = coordinator.command_queue_items
+    assert len(items) == 1
+    assert items[0]["label"] == "Clean Детска"
 
 
 def test_parsed_current_session_resolves_room_names_from_status_area_ids(coordinator):

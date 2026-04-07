@@ -888,14 +888,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _priority, _seq, coro_func, args, kwargs = self._active_command
             active_item = {
                 "status": "active",
-                "label": _describe_command(coro_func, kwargs),
+                "label": self._describe_command_for_display(coro_func, kwargs),
                 "map_name": self._resolve_map_name(str(kwargs.get("map_id", ""))),
             }
         elif self._inflight_clean_command is not None:
             coro_func, kwargs = self._inflight_clean_command
             active_item = {
                 "status": "active",
-                "label": _describe_command(coro_func, kwargs),
+                "label": self._describe_command_for_display(coro_func, kwargs),
                 "map_name": self._resolve_map_name(str(kwargs.get("map_id", ""))),
             }
         else:
@@ -908,7 +908,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for idx, (_priority, _seq, coro_func, args, kwargs) in enumerate(pending_items):
             result.append({
                 "status": "pending" if active_item is not None or idx > 0 else "active",
-                "label": _describe_command(coro_func, kwargs),
+                "label": self._describe_command_for_display(coro_func, kwargs),
                 "map_name": self._resolve_map_name(str(kwargs.get("map_id", ""))),
             })
         return result
@@ -975,7 +975,12 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         for areas in areas_sources:
             for area in areas:
-                if area.get("id") == area_id:
+                raw_id = area.get("id")
+                try:
+                    current_area_id = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                if current_area_id == area_id:
                     meta_raw = area.get("area_meta_data", "")
                     if meta_raw:
                         try:
@@ -984,6 +989,23 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         except Exception:  # noqa: BLE001
                             pass
         return None
+
+    def _describe_command_for_display(self, coro_func: Any, kwargs: dict[str, Any]) -> str:
+        """Return a queue label with resolved room names whenever possible."""
+        name = _command_name(coro_func)
+        area_ids_raw = kwargs.get("area_ids", "")
+        if name == "clean_map" and area_ids_raw:
+            names: list[str] = []
+            for raw in str(area_ids_raw).split(","):
+                try:
+                    area_id = int(raw.strip())
+                except ValueError:
+                    continue
+                room_name = self._resolve_room_name_by_id(area_id)
+                names.append(room_name or f"room {area_id}")
+            if names:
+                return "Clean " + " + ".join(names)
+        return _describe_command(coro_func, kwargs)
 
     def _parsed_current_session_item(self) -> dict[str, str] | None:
         """Return an active queue-like item for a robot-run session.
@@ -1087,9 +1109,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
 def _describe_command(coro_func: Any, kwargs: dict) -> str:
     """Return a human-readable label for a queued command coroutine."""
-    name = getattr(coro_func, "__name__", "") or getattr(
-        getattr(coro_func, "__func__", None), "__name__", "command"
-    )
+    name = _command_name(coro_func)
     area_ids = kwargs.get("area_ids", "")
     if name == "clean_map" and area_ids:
         return f"Clean room {area_ids}"
@@ -1102,6 +1122,18 @@ def _describe_command(coro_func: Any, kwargs: dict) -> str:
     if name == "clean_start_or_continue":
         return "Resume"
     return name.replace("_", " ").capitalize()
+
+
+def _command_name(coro_func: Any) -> str:
+    """Extract a stable coroutine name from bound methods and AsyncMocks."""
+    name = getattr(coro_func, "__name__", "") or getattr(
+        getattr(coro_func, "__func__", None), "__name__", ""
+    )
+    if str(name).lower() == "asyncmock":
+        mock_name = getattr(coro_func, "_mock_name", "")
+        if mock_name:
+            return str(mock_name)
+    return str(name) or "command"
 
 
 # ── Map helpers ───────────────────────────────────────────────────────
