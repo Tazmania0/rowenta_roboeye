@@ -36,6 +36,7 @@ SCAN_INTERVAL_ROBOT_INFO = 3600
 # Command result polling — used by _wait_for_robot_idle after each queued command
 CMD_POLL_INTERVAL_S = 5.0    # seconds between /get/command_result polls
 CMD_POLL_TIMEOUT_S  = 30.0   # max wait per command before moving to next
+QUEUE_POST_DOCK_DELAY_S = 8.0  # short settle delay after dock before next queued clean
 
 # ── Config entry keys ─────────────────────────────────────────────────
 CONF_MAP_ID = "map_id"
@@ -94,6 +95,7 @@ API_SET_MODIFY_AREA = "/set/modify_area"  # write per-room fan speed / strategy 
 
 # ── HA service names ──────────────────────────────────────────────────
 SERVICE_CLEAN_ROOM = "clean_room"
+SERVICE_REMOVE_QUEUE_ENTRY = "remove_queue_entry"
 
 # ── cleaning_strategy_mode values ────────────────────────────────────
 # Values confirmed from RobEye web UI HTML source (option tags).
