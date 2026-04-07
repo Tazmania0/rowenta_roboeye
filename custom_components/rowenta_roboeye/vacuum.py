@@ -221,6 +221,9 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         A subsequent async_start will call clean_start_or_continue to resume.
         """
         LOGGER.debug("async_pause: stopping in place")
+        self._is_paused = True
+        self._attr_activity = VacuumActivity.PAUSED
+        self.async_write_ha_state()
         await self.coordinator.async_send_command(self.coordinator.client.stop)
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
