@@ -252,6 +252,16 @@ async def test_robot_idle_returns_when_done(coordinator, mock_client):
 
 
 @pytest.mark.asyncio
+async def test_robot_idle_returns_when_aborted(coordinator, mock_client):
+    """Aborted command is terminal and should unblock queue."""
+    mock_client.get_command_result.return_value = {
+        "commands": [{"cmd_id": 10, "status": "aborted", "error_code": 0}]
+    }
+    await coordinator._wait_for_robot_idle(cmd_id=10)
+    mock_client.get_command_result.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_robot_idle_polls_while_executing(coordinator, mock_client):
     """Polls until status transitions from executing to done."""
     mock_client.get_command_result.side_effect = [
@@ -263,6 +273,16 @@ async def test_robot_idle_polls_while_executing(coordinator, mock_client):
         mp.setattr("asyncio.sleep", AsyncMock())
         await coordinator._wait_for_robot_idle()
     assert mock_client.get_command_result.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_robot_idle_returns_on_nonzero_error_code(coordinator, mock_client):
+    """Non-zero error_code should be treated as terminal regardless of status value."""
+    mock_client.get_command_result.return_value = {
+        "commands": [{"cmd_id": 10, "status": "done", "error_code": 106}]
+    }
+    await coordinator._wait_for_robot_idle(cmd_id=10)
+    mock_client.get_command_result.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -471,11 +491,32 @@ def test_command_queue_items_keeps_inflight_clean_visible(coordinator, mock_clie
     coordinator._inflight_clean_command = (
         mock_client.clean_map,
         {"map_id": "3", "area_ids": "11"},
+        127,
     )
     items = coordinator.command_queue_items
     assert len(items) == 1
     assert items[0]["status"] == "active"
-    assert items[0]["label"] == "Clean room 11"
+    assert items[0]["label"] == "Cleaning room 11"
+    assert items[0]["cmd_id"] == 127
+
+
+def test_command_queue_items_shows_paused_session_and_pending_resume(coordinator, mock_client):
+    coordinator._paused_clean_command = (
+        mock_client.clean_map,
+        {"map_id": "3", "area_ids": "31"},
+        127,
+    )
+    coordinator._command_queue.put_nowait(
+        (0, 2, mock_client.clean_start_or_continue, (), {"cleaning_parameter_set": "2"})
+    )
+
+    items = coordinator.command_queue_items
+    assert len(items) == 2
+    assert items[0]["status"] == "paused"
+    assert items[0]["label"] == "Cleaning room 31"
+    assert items[0]["cmd_id"] == 127
+    assert items[1]["status"] == "pending"
+    assert items[1]["label"] == "Resume"
 
 
 def test_command_queue_items_shows_external_active_session_and_keeps_ha_pending(
@@ -491,7 +532,7 @@ def test_command_queue_items_shows_external_active_session_and_keeps_ha_pending(
     assert items[0]["status"] == "active"
     assert items[0]["label"] == "Current cleaning session"
     assert items[1]["status"] == "pending"
-    assert items[1]["label"] == "Clean room 3"
+    assert items[1]["label"] == "Cleaning room 3"
 
 
 def test_command_queue_items_resolves_pending_room_names(coordinator, mock_client):
@@ -503,7 +544,7 @@ def test_command_queue_items_resolves_pending_room_names(coordinator, mock_clien
     )
     items = coordinator.command_queue_items
     assert len(items) == 1
-    assert items[0]["label"] == "Clean Детска"
+    assert items[0]["label"] == "Cleaning Детска"
 
 
 def test_parsed_current_session_resolves_room_names_from_status_area_ids(coordinator):
@@ -513,7 +554,7 @@ def test_parsed_current_session_resolves_room_names_from_status_area_ids(coordin
     }
     item = coordinator._parsed_current_session_item()
     assert item is not None
-    assert item["label"] == "Clean Bedroom"
+    assert item["label"] == "Cleaning Bedroom"
 
 
 def test_robot_info_property(coordinator):
