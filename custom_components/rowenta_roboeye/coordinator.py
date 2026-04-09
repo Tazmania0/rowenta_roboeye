@@ -75,6 +75,14 @@ from .const import (
 
 _MAX_PATH_POINTS = 2000
 _MIN_MOVE_UNITS  = 5   # ~1 cm threshold before appending a new path point
+# Keep this strict to values we have actually observed on devices/logs.
+# Unknown values are treated as terminal to preserve queue liveness.
+_ACTIVE_COMMAND_RESULT_STATUSES = {"executing"}
+_TERMINAL_COMMAND_RESULT_STATUSES = {
+    "done",
+    "error",
+    "aborted",
+}
 
 
 class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -155,7 +163,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._command_worker_task: asyncio.Task | None = None
         # Last dispatched cleaning command shown as "active" until robot
         # actually leaves active modes (cleaning/go_home).
-        self._inflight_clean_command: tuple[Any, dict[str, Any]] | None = None
+        self._inflight_clean_command: tuple[Any, dict[str, Any], int | None] | None = None
+        # Snapshot of a cleaning task that was paused via /set/stop.
+        # Kept visible in the queue sensor as "paused" until resume/go_home/new clean.
+        self._paused_clean_command: tuple[Any, dict[str, Any], int | None] | None = None
 
         # Event log incremental polling state
         self._last_event_log_id: int = 0
@@ -786,8 +797,13 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 or command_name in ("stop", "go_home")
             )
             if is_cleaning_dispatch:
-                self._inflight_clean_command = (coro_func, dict(kwargs))
+                self._inflight_clean_command = (coro_func, dict(kwargs), None)
+                self._paused_clean_command = None
             elif is_return_or_stop:
+                if command_name == "stop" and self._inflight_clean_command is not None:
+                    self._paused_clean_command = self._inflight_clean_command
+                elif command_name == "go_home":
+                    self._paused_clean_command = None
                 self._inflight_clean_command = None
             if hasattr(self, "async_update_listeners"):
                 self.async_update_listeners()
@@ -809,6 +825,13 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         continue   # skip polling — command was rejected
                     dispatched_cmd_id = response.get("cmd_id")
+                    if is_cleaning_dispatch and self._inflight_clean_command is not None:
+                        inflight_coro, inflight_kwargs, _ = self._inflight_clean_command
+                        self._inflight_clean_command = (
+                            inflight_coro,
+                            inflight_kwargs,
+                            dispatched_cmd_id,
+                        )
                     LOGGER.debug(
                         "RobEye queue: cmd_id=%s dispatched", dispatched_cmd_id
                     )
@@ -835,7 +858,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Poll /get/command_result until the dispatched command finishes.
 
         Confirmed response shape (2026-04-05):
-          {"commands": [{"cmd_id": N, "status": "executing"/"done"/"error"}]}
+          {"commands": [{"cmd_id": N, "status": "executing"/"done"/"error"/"aborted"}]}
 
         If cmd_id is provided (captured from the /set/ response), polls for
         that exact command — eliminates ambiguity if commands overlap.
@@ -857,14 +880,46 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     # Precise: find our exact cmd_id in the results
                     for cmd in commands:
                         if cmd.get("cmd_id") == cmd_id:
-                            if cmd.get("status") != "executing":
+                            status = str(cmd.get("status", "")).lower()
+                            try:
+                                error_code = int(cmd.get("error_code", 0) or 0)
+                            except (TypeError, ValueError):
+                                error_code = 0
+                            if error_code != 0:
+                                LOGGER.warning(
+                                    "RobEye: cmd_id=%s finished with error_code=%s status=%s",
+                                    cmd_id,
+                                    error_code,
+                                    status or "<empty>",
+                                )
+                                return
+                            if status in _ACTIVE_COMMAND_RESULT_STATUSES:
+                                break   # still active — keep polling
+                            if status and status not in _TERMINAL_COMMAND_RESULT_STATUSES:
+                                LOGGER.debug(
+                                    "RobEye: cmd_id=%s unexpected status=%s; treating as terminal",
+                                    cmd_id,
+                                    status,
+                                )
                                 return   # our command finished
-                            break   # still executing — keep polling
+                            return
                     else:
                         return   # cmd_id no longer in results — completed
                 else:
                     # Fallback: check whether any command is still executing
-                    if commands[0].get("status", "done") != "executing":
+                    status = str(commands[0].get("status", "done")).lower()
+                    try:
+                        error_code = int(commands[0].get("error_code", 0) or 0)
+                    except (TypeError, ValueError):
+                        error_code = 0
+                    if error_code != 0:
+                        LOGGER.warning(
+                            "RobEye: latest command finished with error_code=%s status=%s",
+                            error_code,
+                            status or "<empty>",
+                        )
+                        return
+                    if status not in _ACTIVE_COMMAND_RESULT_STATUSES:
                         return
             except CannotConnect:
                 return
@@ -982,7 +1037,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def command_queue_items(self) -> list[dict[str, Any]]:
         """Return a snapshot of pending queue items for dashboard display.
 
-        Each item: {"status": "active"|"pending", "label": str, "map_name": str}
+        Each item: {"status": "active"|"paused"|"pending", "label": str, "map_name": str}
         First item is the one currently being dispatched by the worker.
         Remaining items are waiting.
 
@@ -994,21 +1049,30 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except AttributeError:
             return []
 
-        active_item: dict[str, str] | None = None
+        active_item: dict[str, Any] | None = None
         if self._active_command is not None:
             _priority, _seq, coro_func, args, kwargs = self._active_command
-            active_item = {
-                "status": "active",
-                "label": self._describe_command_for_display(coro_func, kwargs),
-                "map_name": self._resolve_map_name(str(kwargs.get("map_id", ""))),
-            }
+            active_item = self._queue_item_for_command(
+                coro_func,
+                kwargs,
+                status="active",
+            )
         elif self._inflight_clean_command is not None:
-            coro_func, kwargs = self._inflight_clean_command
-            active_item = {
-                "status": "active",
-                "label": self._describe_command_for_display(coro_func, kwargs),
-                "map_name": self._resolve_map_name(str(kwargs.get("map_id", ""))),
-            }
+            coro_func, kwargs, cmd_id = self._inflight_clean_command
+            active_item = self._queue_item_for_command(
+                coro_func,
+                kwargs,
+                status="active",
+                cmd_id=cmd_id,
+            )
+        elif self._paused_clean_command is not None:
+            coro_func, kwargs, cmd_id = self._paused_clean_command
+            active_item = self._queue_item_for_command(
+                coro_func,
+                kwargs,
+                status="paused",
+                cmd_id=cmd_id,
+            )
         else:
             active_item = self._parsed_current_session_item()
 
@@ -1017,12 +1081,32 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result.append(active_item)
 
         for idx, (_priority, _seq, coro_func, args, kwargs) in enumerate(pending_items):
-            result.append({
-                "status": "pending" if active_item is not None or idx > 0 else "active",
-                "label": self._describe_command_for_display(coro_func, kwargs),
-                "map_name": self._resolve_map_name(str(kwargs.get("map_id", ""))),
-            })
+            result.append(
+                self._queue_item_for_command(
+                    coro_func,
+                    kwargs,
+                    status="pending" if active_item is not None or idx > 0 else "active",
+                )
+            )
         return result
+
+    def _queue_item_for_command(
+        self,
+        coro_func: Any,
+        kwargs: dict[str, Any],
+        *,
+        status: str,
+        cmd_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Build one queue-status item for dashboard/sensor consumers."""
+        item: dict[str, Any] = {
+            "status": status,
+            "label": self._describe_command_for_display(coro_func, kwargs),
+            "map_name": self._resolve_map_name(str(kwargs.get("map_id", ""))),
+        }
+        if cmd_id is not None:
+            item["cmd_id"] = cmd_id
+        return item
 
     @property
     def queue_eta_seconds(self) -> int | None:

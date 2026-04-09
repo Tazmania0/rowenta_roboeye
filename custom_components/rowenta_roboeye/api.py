@@ -305,7 +305,7 @@ class RobEyeApiClient:
         IMPORTANT: "commands" is an ARRAY. Read commands[0]["status"].
         Do NOT read response["status"] — that key does not exist.
 
-        status: "executing" | "done" | "error"
+        status: "executing" | "done" | "error" | "aborted"
         cmd_id matches "id" in /get/ui_cmd_log.
         """
         return await self._get(API_GET_COMMAND_RESULT)
