@@ -83,6 +83,11 @@ _TERMINAL_COMMAND_RESULT_STATUSES = {
     "error",
     "aborted",
 }
+# Control commands that must not appear as work items in the queue display.
+# These are instant robot-state transitions; only cleaning jobs are user-visible.
+_QUEUE_CONTROL_COMMANDS: frozenset[str] = frozenset(
+    {"stop", "go_home", "clean_start_or_continue", "set_fan_speed"}
+)
 
 
 class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -898,6 +903,12 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         deadline = asyncio.get_event_loop().time() + CMD_POLL_TIMEOUT_S
         while asyncio.get_event_loop().time() < deadline:
+            # Exit immediately so the worker can dispatch an urgent stop/go_home.
+            if self._has_immediate_command_pending():
+                LOGGER.debug(
+                    "RobEye: immediate command pending; aborting command-result poll"
+                )
+                return
             try:
                 result = await self.client.get_command_result()
                 commands = result.get("commands", [])
@@ -1047,13 +1058,22 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
         elif is_go_home:
-            # Full stop — drain queue AND discard any paused jobs; no resume
+            # Full stop — drain work items; preserve any already-queued immediate
+            # commands (e.g., a stop() enqueued just before this go_home by
+            # async_stop / async_return_to_base).  Discarding a stop that was
+            # already enqueued would leave the robot cleaning while go_home waits.
+            _preserved: list[tuple] = []
             while not self._command_queue.empty():
                 try:
-                    self._command_queue.get_nowait()
+                    item = self._command_queue.get_nowait()
                     self._command_queue.task_done()
+                    if item[0] == 0:  # priority 0 = immediate control command — keep
+                        _preserved.append(item)
+                    # else: normal work item — discard
                 except asyncio.QueueEmpty:
                     break
+            for item in _preserved:
+                await self._command_queue.put(item)
             self._paused_jobs = []
             self._is_paused = False
             self._paused_fan_speed = None
@@ -1130,6 +1150,12 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         First item is the one currently being dispatched by the worker.
         Remaining items are waiting.
 
+        Control commands (stop, go_home, clean_start_or_continue, set_fan_speed) are
+        excluded from the display — only cleaning work items are shown.  When a
+        control command is the active_command the display falls through to
+        _inflight_clean_command / _paused_clean_command so the room label stays
+        visible with the correct status ("active" or "paused").
+
         Used by the queue_status sensor for dashboard rendering.
         """
         try:
@@ -1141,42 +1167,50 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         active_item: dict[str, Any] | None = None
         if self._active_command is not None:
             _priority, _seq, coro_func, args, kwargs = self._active_command
-            active_item = self._queue_item_for_command(
-                coro_func,
-                kwargs,
-                status="active",
-            )
-        elif self._inflight_clean_command is not None:
-            coro_func, kwargs, cmd_id = self._inflight_clean_command
-            active_item = self._queue_item_for_command(
-                coro_func,
-                kwargs,
-                status="active",
-                cmd_id=cmd_id,
-            )
-        elif self._paused_clean_command is not None:
-            coro_func, kwargs, cmd_id = self._paused_clean_command
-            active_item = self._queue_item_for_command(
-                coro_func,
-                kwargs,
-                status="paused",
-                cmd_id=cmd_id,
-            )
-        else:
-            active_item = self._parsed_current_session_item()
+            if getattr(coro_func, "__name__", "") not in _QUEUE_CONTROL_COMMANDS:
+                active_item = self._queue_item_for_command(
+                    coro_func,
+                    kwargs,
+                    status="active",
+                )
+            # else: control command is executing — fall through to inflight/paused below
+
+        if active_item is None:
+            if self._inflight_clean_command is not None:
+                coro_func, kwargs, cmd_id = self._inflight_clean_command
+                active_item = self._queue_item_for_command(
+                    coro_func,
+                    kwargs,
+                    status="active",
+                    cmd_id=cmd_id,
+                )
+            elif self._paused_clean_command is not None:
+                coro_func, kwargs, cmd_id = self._paused_clean_command
+                active_item = self._queue_item_for_command(
+                    coro_func,
+                    kwargs,
+                    status="paused",
+                    cmd_id=cmd_id,
+                )
+            else:
+                active_item = self._parsed_current_session_item()
 
         result = []
         if active_item is not None:
             result.append(active_item)
 
-        for idx, (_priority, _seq, coro_func, args, kwargs) in enumerate(pending_items):
+        work_idx = 0
+        for _priority, _seq, coro_func, args, kwargs in pending_items:
+            if getattr(coro_func, "__name__", "") in _QUEUE_CONTROL_COMMANDS:
+                continue  # never show stop/go_home/resume/fan-speed as queue items
             result.append(
                 self._queue_item_for_command(
                     coro_func,
                     kwargs,
-                    status="pending" if active_item is not None or idx > 0 else "active",
+                    status="pending" if active_item is not None or work_idx > 0 else "active",
                 )
             )
+            work_idx += 1
         return result
 
     def _queue_item_for_command(
