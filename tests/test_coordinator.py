@@ -1124,3 +1124,129 @@ def test_check_for_new_areas_no_signal_when_unchanged(coordinator):
     coordinator._check_for_new_areas(areas_blob)
 
     coordinator.hass.loop.call_soon.assert_not_called()
+
+
+# ── Pause / Resume — command queue drain and restore ──────────────────
+
+@pytest.mark.asyncio
+async def test_stop_drains_queue_to_paused_jobs(coordinator, mock_client):
+    """Stop saves pending clean commands to _paused_jobs instead of discarding."""
+    # Pre-fill queue with a clean_map job (worker not started)
+    coordinator._command_sequence = 0
+    await coordinator._command_queue.put(
+        (1, 1, coordinator.client.clean_map, (),
+         {"map_id": "3", "area_ids": "30", "cleaning_parameter_set": "2",
+          "strategy_mode": "4"})
+    )
+    assert coordinator._command_queue.qsize() == 1
+
+    # Enqueue stop — should drain clean_map into _paused_jobs
+    await coordinator.async_send_command(
+        coordinator.client.stop, label="stop(pause)"
+    )
+
+    assert coordinator._is_paused is True
+    assert len(coordinator._paused_jobs) == 1
+    # The saved job should be the clean_map we pre-filled
+    _p, _s, saved_func, _a, _kw = coordinator._paused_jobs[0]
+    assert saved_func is coordinator.client.clean_map
+    # Queue now only has the stop command
+    assert coordinator._command_queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_stop_sets_paused_fan_speed(coordinator, mock_client):
+    """Fan speed is captured from coordinator.ha_fan_speed when stop is pressed."""
+    coordinator.ha_fan_speed = "3"
+    await coordinator.async_send_command(coordinator.client.stop, label="stop(pause)")
+    assert coordinator._paused_fan_speed == "3"
+
+
+@pytest.mark.asyncio
+async def test_resume_clears_pause_state_and_re_enqueues(coordinator, mock_client):
+    """clean_start_or_continue clears _is_paused and re-enqueues saved jobs."""
+    # Set up paused state with one saved job
+    coordinator._is_paused = True
+    coordinator._paused_jobs = [
+        (1, 99, coordinator.client.clean_map, (),
+         {"map_id": "3", "area_ids": "32", "cleaning_parameter_set": "2"})
+    ]
+
+    await coordinator.async_send_command(
+        coordinator.client.clean_start_or_continue,
+        label="clean_start_or_continue",
+        cleaning_parameter_set="2",
+    )
+
+    assert coordinator._is_paused is False
+    assert coordinator._paused_jobs == []
+    # Queue: resume command + re-enqueued clean_map
+    assert coordinator._command_queue.qsize() == 2
+
+
+@pytest.mark.asyncio
+async def test_go_home_discards_paused_jobs(coordinator, mock_client):
+    """go_home clears both the queue and _paused_jobs — full stop, no resume."""
+    coordinator._is_paused = True
+    coordinator._paused_jobs = [
+        (1, 99, coordinator.client.clean_map, (), {"map_id": "3", "area_ids": "30"})
+    ]
+    # Pre-fill queue with a pending command too
+    await coordinator._command_queue.put(
+        (1, 100, coordinator.client.clean_map, (), {"map_id": "3", "area_ids": "32"})
+    )
+
+    await coordinator.async_send_command(coordinator.client.go_home, label="go_home")
+
+    assert coordinator._paused_jobs == []
+    assert coordinator._is_paused is False
+    # Queue should only have go_home
+    assert coordinator._command_queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_is_paused_property(coordinator, mock_client):
+    """is_paused property reflects _is_paused."""
+    assert coordinator.is_paused is False
+    coordinator._is_paused = True
+    assert coordinator.is_paused is True
+
+
+@pytest.mark.asyncio
+async def test_paused_fan_speed_property(coordinator, mock_client):
+    """paused_fan_speed property reflects _paused_fan_speed."""
+    assert coordinator.paused_fan_speed is None
+    coordinator._paused_fan_speed = "3"
+    assert coordinator.paused_fan_speed == "3"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_robot_idle_treats_aborted_as_done(coordinator, mock_client):
+    """'aborted' is a terminal status — must not keep polling."""
+    mock_client.get_command_result.return_value = {
+        "commands": [
+            {"cmd_id": 127, "status": "aborted", "error_code": 0},
+            {"cmd_id": 128, "status": "done", "error_code": 0},
+        ]
+    }
+    await coordinator._wait_for_robot_idle(cmd_id=127)
+    # Should return after a single poll — aborted is terminal
+    mock_client.get_command_result.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_stop_does_not_drain_existing_stop_from_queue(coordinator, mock_client):
+    """A stop already in the queue should not be saved to _paused_jobs."""
+    # Put a stop in the queue
+    coordinator._command_sequence = 5
+    await coordinator._command_queue.put(
+        (0, 5, coordinator.client.stop, (), {})
+    )
+    # Enqueue another stop — the existing stop should be discarded, not saved
+    await coordinator.async_send_command(coordinator.client.stop, label="stop(pause)")
+
+    # _paused_jobs should NOT contain the earlier stop
+    assert all(
+        getattr(item[2], "__name__", "") != "stop"
+        for item in coordinator._paused_jobs
+    )

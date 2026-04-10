@@ -168,6 +168,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Kept visible in the queue sensor as "paused" until resume/go_home/new clean.
         self._paused_clean_command: tuple[Any, dict[str, Any], int | None] | None = None
 
+        # Pause state — set when stop() drains the queue mid-clean.
+        # Cleared on resume (clean_start_or_continue) or full stop (go_home).
+        # _paused_jobs holds queue tuples (priority, seq, coro_func, args, kwargs)
+        # that were pending when stop was pressed, for re-enqueue on resume.
+        self._is_paused: bool = False
+        self._paused_jobs: list[tuple] = []
+        self._paused_fan_speed: str | None = None
+
         # Event log incremental polling state
         self._last_event_log_id: int = 0
         self._last_event_log: datetime | None = None
@@ -758,6 +766,16 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def session_complete(self) -> bool:
         return self._session_complete
 
+    @property
+    def is_paused(self) -> bool:
+        """True when a cleaning job was stopped mid-run and can be resumed."""
+        return self._is_paused
+
+    @property
+    def paused_fan_speed(self) -> str | None:
+        """Fan speed API value ("1"–"4") that was active when the robot was paused."""
+        return self._paused_fan_speed
+
     # ── Command queue ─────────────────────────────────────────────────
 
     def async_start_command_worker(self) -> None:
@@ -956,38 +974,99 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             await asyncio.sleep(CMD_POLL_INTERVAL_S)
 
-    async def async_send_command(self, coro_func, *args: Any, **kwargs: Any) -> None:
+    async def async_send_command(
+        self, coro_func, *args: Any, label: str = "", **kwargs: Any
+    ) -> None:
         """Enqueue a command for serial dispatch by _command_queue_worker.
 
         Commands execute in the order they are enqueued — one at a time.
         The worker polls /get/command_result between each command so the
         robot fully finishes before the next command is sent.
 
-        /set/stop is dispatched as-is (hard stop in place).
-        /set/go_home drains pending queued work and runs next.
-        /set/clean_start_or_continue is also prioritised to run next.
-        """
-        is_stop = (coro_func is self.client.stop or getattr(coro_func, "__name__", "") == "stop")
+        stop (pause):
+          Drains all non-stop/non-go_home pending items into _paused_jobs
+          (for resume), sets _is_paused = True, captures current fan speed.
 
+        go_home (full stop):
+          Drains AND discards _paused_jobs — full stop, no resume possible.
+          Clears _is_paused.
+
+        clean_start_or_continue (resume):
+          Clears _is_paused, re-enqueues _paused_jobs after the resume command.
+
+        /set/stop and /set/clean_start_or_continue and /set/go_home are all
+        dispatched at priority 0 (immediate), ahead of normal clean commands.
+        """
+        is_stop = (
+            coro_func is self.client.stop
+            or getattr(coro_func, "__name__", "") == "stop"
+        )
         is_go_home = (
             coro_func is self.client.go_home
             or getattr(coro_func, "__name__", "") == "go_home"
         )
+        is_resume = (
+            coro_func is self.client.clean_start_or_continue
+            or getattr(coro_func, "__name__", "") == "clean_start_or_continue"
+        )
         is_immediate = self._is_immediate_command(coro_func)
 
-        if is_stop or is_go_home:
-            # Drain queued commands — emergency controls cancel pending work
+        if is_stop:
+            # Drain all pending non-stop/non-go_home commands → save for resume
+            drained: list[tuple] = []
+            while not self._command_queue.empty():
+                try:
+                    item = self._command_queue.get_nowait()
+                    self._command_queue.task_done()
+                    _p, _s, item_func, _a, _kw = item
+                    item_name = getattr(item_func, "__name__", "")
+                    if "stop" not in item_name and "go_home" not in item_name:
+                        drained.append(item)
+                    # discard other stops and go_homes already in queue
+                except asyncio.QueueEmpty:
+                    break
+            if drained:
+                self._paused_jobs = drained
+                LOGGER.debug(
+                    "RobEye pause: saved %d pending job(s) for resume", len(drained)
+                )
+            self._is_paused = True
+            # Capture current fan speed so resume can re-use it
+            self._paused_fan_speed = self.ha_fan_speed or str(
+                self.status.get("cleaning_parameter_set", "2")
+            )
+
+        elif is_go_home:
+            # Full stop — drain queue AND discard any paused jobs; no resume
             while not self._command_queue.empty():
                 try:
                     self._command_queue.get_nowait()
                     self._command_queue.task_done()
                 except asyncio.QueueEmpty:
                     break
+            self._paused_jobs = []
+            self._is_paused = False
+            self._paused_fan_speed = None
+
+        elif is_resume:
+            # Resume — clear pause state, re-enqueue saved jobs after resume cmd
+            self._is_paused = False
+            saved = self._paused_jobs[:]
+            self._paused_jobs = []
 
         self._command_sequence += 1
         await self._command_queue.put(
             (0 if is_immediate else 1, self._command_sequence, coro_func, args, kwargs)
         )
+
+        if is_resume and saved:
+            for saved_item in saved:
+                await self._command_queue.put(saved_item)
+                LOGGER.debug(
+                    "RobEye resume: re-queued %s",
+                    getattr(saved_item[2], "__name__", "command"),
+                )
+
         if hasattr(self, "async_update_listeners"):
             self.async_update_listeners()
 
