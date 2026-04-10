@@ -18,6 +18,8 @@ def _make_vacuum(status: dict):
     coord.config_entry = entry
     coord.active_map_id = "3"
     coord.ha_fan_speed = None  # explicit None so fallback to status value works
+    coord.is_paused = False    # pause state owned by coordinator, not entity
+    coord.paused_fan_speed = None
     coord.async_send_command = AsyncMock()
     coord.client = MagicMock()
     coord.client.clean_all = AsyncMock()
@@ -34,9 +36,7 @@ def _make_vacuum(status: dict):
     vac._attr_fan_speed = None
     vac._attr_battery_level = None
     vac._attr_activity = None
-    vac._is_paused = False
     vac._error_status = None
-    vac._was_cleaning_when_errored = False
     vac.async_write_ha_state = lambda: None
     return vac, coord
 
@@ -98,9 +98,12 @@ async def test_async_start_defaults_to_normal_if_no_fan_speed():
 
 @pytest.mark.asyncio
 async def test_async_stop():
+    """async_stop sends stop then go_home (full stop — discards paused jobs)."""
     vac, coord = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
     await vac.async_stop()
-    coord.async_send_command.assert_called_once_with(coord.client.stop)
+    assert coord.async_send_command.call_count == 2
+    assert coord.async_send_command.call_args_list[0][0][0] is coord.client.stop
+    assert coord.async_send_command.call_args_list[1][0][0] is coord.client.go_home
 
 
 # ── Service: return_to_base ───────────────────────────────────────────
@@ -215,12 +218,13 @@ async def test_clean_room_fan_speed_override():
 
 @pytest.mark.asyncio
 async def test_async_pause_calls_stop():
+    """async_pause enqueues stop; coordinator sets _is_paused via async_send_command."""
     from homeassistant.components.vacuum import VacuumActivity
     vac, coord = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
     vac._attr_activity = VacuumActivity.CLEANING
     await vac.async_pause()
-    coord.async_send_command.assert_called_once_with(coord.client.stop)
-    assert vac._attr_activity is VacuumActivity.PAUSED
+    coord.async_send_command.assert_called_once()
+    assert coord.async_send_command.call_args[0][0] is coord.client.stop
 
 
 def test_state_machine_paused():
@@ -243,11 +247,13 @@ def test_state_machine_clears_paused_on_cleaning():
 
 @pytest.mark.asyncio
 async def test_start_from_paused_calls_resume():
+    """PAUSED → async_start enqueues clean_start_or_continue with fan speed."""
     from homeassistant.components.vacuum import VacuumActivity
     vac, coord = _make_vacuum({"mode": "ready", "charging": "unconnected", "battery_level": 75, "cleaning_parameter_set": 2})
     vac._attr_activity = VacuumActivity.PAUSED
     await vac.async_start()
-    coord.async_send_command.assert_called_once_with(coord.client.clean_start_or_continue)
+    coord.async_send_command.assert_called_once()
+    assert coord.async_send_command.call_args[0][0] is coord.client.clean_start_or_continue
 
 
 @pytest.mark.asyncio
@@ -277,18 +283,95 @@ async def test_start_from_error_attempts_resume():
     vac, coord = _make_vacuum({"mode": "not_ready", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
     vac._attr_activity = VacuumActivity.ERROR
     await vac.async_start()
-    coord.async_send_command.assert_called_once_with(coord.client.clean_start_or_continue)
+    coord.async_send_command.assert_called_once()
+    assert coord.async_send_command.call_args[0][0] is coord.client.clean_start_or_continue
     coord.client.clean_all.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_pause_calls_stop_not_go_home():
+    """async_pause only enqueues stop (not go_home) — robot stays in place."""
     from homeassistant.components.vacuum import VacuumActivity
     vac, coord = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
     vac._attr_activity = VacuumActivity.CLEANING
     await vac.async_pause()
-    coord.async_send_command.assert_called_once_with(coord.client.stop)
-    coord.client.go_home.assert_not_called()
+    coord.async_send_command.assert_called_once()
+    assert coord.async_send_command.call_args[0][0] is coord.client.stop
+    # go_home must NOT be called — robot should stay where it is
+    assert not any(
+        call[0][0] is coord.client.go_home
+        for call in coord.async_send_command.call_args_list
+    )
+
+
+# ── Pause / Resume — coordinator-owned state ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_start_from_paused_uses_saved_fan_speed():
+    """Resume passes the coordinator's paused_fan_speed to clean_start_or_continue."""
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "ready", "charging": "unconnected", "battery_level": 75, "cleaning_parameter_set": 2})
+    coord.is_paused = True
+    coord.paused_fan_speed = "3"  # High — saved on pause
+    vac._attr_activity = VacuumActivity.PAUSED
+
+    await vac.async_start()
+
+    coord.async_send_command.assert_called_once()
+    assert coord.async_send_command.call_args[0][0] is coord.client.clean_start_or_continue
+    # Confirm fan speed is forwarded
+    assert coord.async_send_command.call_args[1].get("cleaning_parameter_set") == "3"
+
+
+@pytest.mark.asyncio
+async def test_start_from_paused_falls_back_to_ha_fan_speed():
+    """If paused_fan_speed is None, resume falls back to ha_fan_speed."""
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "ready", "charging": "unconnected", "battery_level": 75, "cleaning_parameter_set": 2})
+    coord.is_paused = True
+    coord.paused_fan_speed = None
+    coord.ha_fan_speed = "2"  # Eco
+    vac._attr_activity = VacuumActivity.PAUSED
+
+    await vac.async_start()
+
+    coord.async_send_command.assert_called_once()
+    assert coord.async_send_command.call_args[1].get("cleaning_parameter_set") == "2"
+
+
+@pytest.mark.asyncio
+async def test_return_to_base_discards_paused_jobs():
+    """Return to base sends stop+go_home; go_home path discards _paused_jobs."""
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "ready", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    coord.is_paused = True
+    vac._attr_activity = VacuumActivity.PAUSED
+
+    await vac.async_return_to_base()
+
+    assert coord.async_send_command.call_count == 2
+    assert coord.async_send_command.call_args_list[0][0][0] is coord.client.stop
+    assert coord.async_send_command.call_args_list[1][0][0] is coord.client.go_home
+
+
+def test_coordinator_is_paused_shows_paused_state():
+    """When coordinator.is_paused=True and mode=ready, entity shows PAUSED."""
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "ready", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    coord.is_paused = True
+    coord.sensor_values_parsed = {}
+    vac._handle_coordinator_update()
+    assert vac._attr_activity is VacuumActivity.PAUSED
+
+
+def test_coordinator_is_paused_false_and_idle_mode_shows_idle():
+    """When coordinator.is_paused=False and mode is unknown, entity shows IDLE."""
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({"mode": "unknown", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    coord.is_paused = False
+    coord.sensor_values_parsed = {}
+    vac._handle_coordinator_update()
+    assert vac._attr_activity is VacuumActivity.IDLE
 
 
 def test_pause_feature_declared():

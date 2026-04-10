@@ -445,14 +445,21 @@ class RobEyeApiClient:
             },
         )
 
-    async def clean_start_or_continue(self) -> dict[str, Any]:
+    async def clean_start_or_continue(
+        self,
+        cleaning_parameter_set: str | None = None,
+    ) -> dict[str, Any]:
         """GET /set/clean_start_or_continue — resume interrupted clean or recover from error.
 
         Confirmed from RobEye web UI log (live device, 2026-03-29):
           stop → clean_start_or_continue → {"cmd_id":68,"status":"executing"}
 
+        Confirmed (2026-04-07): returns a NEW cmd_id distinct from the original job's
+        cmd_id (which transitions to 'aborted' on stop). The resumed session runs under
+        the new cmd_id.
+
         Resumes from current position. Does NOT reset to dock (unlike clean_all).
-        No parameters — robot uses its existing task context.
+        Pass cleaning_parameter_set to preserve fan speed through pause/resume.
 
         Recovery by error type:
           brush stuck     → firmware accepts, cleaning resumes
@@ -461,7 +468,10 @@ class RobEyeApiClient:
 
         /set/clean_continue is deprecated (error 106) — never use it.
         """
-        return await self._get(API_SET_CLEAN_START_OR_CONTINUE)
+        params: dict[str, str] = {}
+        if cleaning_parameter_set is not None:
+            params["cleaning_parameter_set"] = cleaning_parameter_set
+        return await self._get(API_SET_CLEAN_START_OR_CONTINUE, params=params or None)
 
     async def clean_map(
         self,

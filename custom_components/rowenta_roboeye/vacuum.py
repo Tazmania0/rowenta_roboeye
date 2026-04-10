@@ -103,11 +103,6 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         self._attr_unique_id = coordinator.device_id
         self.entity_id = f"vacuum.{coordinator.device_id}"
         self._error_status: str | None = None
-        self._is_paused: bool = False
-        # True when an error occurred while a cleaning session was active.
-        # The next Start command will use clean_start_or_continue to resume
-        # from the interrupted position instead of starting a fresh whole-home clean.
-        self._was_cleaning_when_errored: bool = False
 
     @property
     def extra_state_attributes(self) -> dict[str, str] | None:
@@ -144,31 +139,22 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         _hardware_error = bool(_error_conditions) or mode == MODE_NOT_READY
 
         if _hardware_error:
-            # Track whether the error interrupted an active cleaning session so
-            # the next Start command can resume rather than start from scratch.
-            if self._attr_activity in (VacuumActivity.CLEANING, VacuumActivity.PAUSED):
-                self._was_cleaning_when_errored = True
             self._attr_activity = VacuumActivity.ERROR
             self._error_status = ", ".join(_error_conditions) if _error_conditions else "Not ready"
         else:
             self._error_status = None
             if mode == MODE_CLEANING:
-                self._is_paused = False
-                self._was_cleaning_when_errored = False
                 self._attr_activity = VacuumActivity.CLEANING
-            elif mode == MODE_READY and charging in (CHARGING_CHARGING, CHARGING_CONNECTED):
-                self._is_paused = False
-                # Only clear the error-resume flag when the robot fully docks after a
-                # non-error session; if it docked *because* of an error, keep the flag
-                # so the user can still resume when they fix the issue.
-                if not self._was_cleaning_when_errored:
-                    pass  # flag already False; nothing to do
-                self._attr_activity = VacuumActivity.DOCKED
-            elif mode == MODE_READY and charging == CHARGING_UNCONNECTED:
-                self._attr_activity = VacuumActivity.PAUSED
             elif mode == MODE_GO_HOME:
-                self._is_paused = False
                 self._attr_activity = VacuumActivity.RETURNING
+            elif mode == MODE_READY and charging in (CHARGING_CHARGING, CHARGING_CONNECTED):
+                self._attr_activity = VacuumActivity.DOCKED
+            elif self.coordinator.is_paused or (
+                mode == MODE_READY and charging == CHARGING_UNCONNECTED
+            ):
+                # coordinator.is_paused: stopped via HA pause button (queue drain happened)
+                # mode=ready+unconnected: stopped via native app or external source
+                self._attr_activity = VacuumActivity.PAUSED
             else:
                 self._attr_activity = VacuumActivity.IDLE
 
@@ -179,7 +165,8 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
     async def async_start(self, **kwargs: Any) -> None:
         """Start a new clean, resume a paused clean, or recover from error.
 
-        PAUSED  → clean_start_or_continue (resume from current position)
+        PAUSED  → clean_start_or_continue with saved fan speed.
+                  Re-queues any jobs pending when pause was pressed.
         ERROR   → clean_start_or_continue (firmware decides if recoverable:
                   brush stuck → accepts; dustbin missing → rejects, error persists)
         DOCKED / IDLE / other → clean_all (fresh whole-home clean)
@@ -189,63 +176,83 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         if self._attr_activity in (VacuumActivity.PAUSED, VacuumActivity.ERROR):
             LOGGER.debug(
                 "async_start: resume/recover via clean_start_or_continue "
-                "(activity=%s)", self._attr_activity,
+                "(activity=%s is_paused=%s)",
+                self._attr_activity, self.coordinator.is_paused,
             )
-            self._was_cleaning_when_errored = False
+            # Use fan speed that was active when paused; fall back to current
+            fan_speed = (
+                self.coordinator.paused_fan_speed
+                or self.coordinator.ha_fan_speed
+                or FAN_SPEED_REVERSE_MAP.get(self._attr_fan_speed or "normal", "2")
+            )
             await self.coordinator.async_send_command(
-                self.coordinator.client.clean_start_or_continue
+                self.coordinator.client.clean_start_or_continue,
+                label="clean_start_or_continue",
+                cleaning_parameter_set=fan_speed,
             )
         else:
             LOGGER.debug("async_start: starting new clean (activity=%s)", self._attr_activity)
-            self._is_paused = False
             raw = self.coordinator.ha_fan_speed or FAN_SPEED_REVERSE_MAP.get(
                 self._attr_fan_speed or "normal", "2"
             )
             await self.coordinator.async_send_command(
                 self.coordinator.client.clean_all,
+                label="clean_all",
                 cleaning_parameter_set=raw,
                 strategy_mode=self.coordinator.cleaning_strategy,
             )
 
     async def async_stop(self, **kwargs: Any) -> None:
-        """Stop the vacuum immediately."""
-        LOGGER.debug("async_stop")
-        self._is_paused = False
-        self._was_cleaning_when_errored = False
-        await self.coordinator.async_send_command(self.coordinator.client.stop)
+        """Stop immediately then return to dock (full stop — does not save state for resume).
+
+        Sends stop first, then go_home. The go_home path in async_send_command
+        discards any _paused_jobs so no resume is possible after this.
+        Use async_pause for stop-in-place with resume capability.
+        """
+        LOGGER.debug("async_stop: full stop + go home")
+        await self.coordinator.async_send_command(
+            self.coordinator.client.stop,
+            label="stop(full)",
+        )
+        await self.coordinator.async_send_command(
+            self.coordinator.client.go_home,
+            label="go_home",
+        )
 
     async def async_pause(self, **kwargs: Any) -> None:
-        """Pause cleaning by stopping the robot in place.
+        """Pause cleaning — stop in place, save pending jobs for resume.
 
-        Uses /set/stop — robot halts at current position without returning to dock.
-        A subsequent async_start will call clean_start_or_continue to resume.
+        Coordinator drains the queue into _paused_jobs and sets _is_paused=True.
+        Resume (async_start from PAUSED) re-enqueues them after clean_start_or_continue.
         """
-        LOGGER.debug("async_pause: stopping in place")
-        self._is_paused = True
-        self._attr_activity = VacuumActivity.PAUSED
-        self.async_write_ha_state()
-        await self.coordinator.async_send_command(self.coordinator.client.stop)
+        LOGGER.debug("async_pause: stopping in place, saving queue for resume")
+        await self.coordinator.async_send_command(
+            self.coordinator.client.stop,
+            label="stop(pause)",
+        )
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
-        """Stop any active operation then return to dock.
+        """Stop any active operation and return to dock.
 
-        If cleaning / paused / in error: sends stop first, then go_home.
-        The command queue serialises this correctly: stop drains pending items
-        and runs next; go_home enters the queue after stop and waits for it to
-        complete before dispatching.
-
-        If already docked or idle: sends go_home directly.
+        Discards paused jobs (go_home path clears _paused_jobs — full stop, no resume).
+        If cleaning/paused/error: stop first, then dock.
+        If already docked/idle: dock directly.
         """
-        LOGGER.debug("async_return_to_base")
+        LOGGER.debug("async_return_to_base (activity=%s)", self._attr_activity)
         if self._attr_activity in (
             VacuumActivity.CLEANING,
             VacuumActivity.PAUSED,
             VacuumActivity.ERROR,
         ):
             LOGGER.debug("async_return_to_base: stopping before go_home")
-            await self.coordinator.async_send_command(self.coordinator.client.stop)
-
-        await self.coordinator.async_send_command(self.coordinator.client.go_home)
+            await self.coordinator.async_send_command(
+                self.coordinator.client.stop,
+                label="stop(return_to_base)",
+            )
+        await self.coordinator.async_send_command(
+            self.coordinator.client.go_home,
+            label="go_home",
+        )
 
     async def async_set_fan_speed(self, fan_speed: str, **kwargs: Any) -> None:
         """Change the fan / suction intensity."""
@@ -290,6 +297,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
 
         await self.coordinator.async_send_command(
             self.coordinator.client.clean_map,
+            label=f"clean_map(areas={area_ids_str})",
             map_id=map_id,
             area_ids=area_ids_str,
             cleaning_parameter_set=raw,
