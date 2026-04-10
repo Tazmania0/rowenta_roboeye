@@ -1013,7 +1013,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
           Clears _is_paused.
 
         clean_start_or_continue (resume):
-          Clears _is_paused, re-enqueues _paused_jobs after the resume command.
+          Clears _is_paused.  When a HA-initiated pause is in effect
+          (_paused_clean_command set), re-enqueues the original clean_map
+          as a normal work item — clean_start_or_continue is NOT dispatched
+          because the firmware may have abandoned the session after /set/stop,
+          which would race the queue worker into skipping the paused room.
+          When no HA pause is in effect (error recovery / external resume),
+          clean_start_or_continue is dispatched normally.
+          In both branches, _paused_jobs are re-enqueued behind the resumed
+          room so the rest of the queue continues after.
 
         /set/stop and /set/clean_start_or_continue and /set/go_home are all
         dispatched at priority 0 (immediate), ahead of normal clean commands.
@@ -1083,6 +1091,41 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._is_paused = False
             saved = self._paused_jobs[:]
             self._paused_jobs = []
+
+            if self._paused_clean_command is not None:
+                # HA-initiated pause: re-dispatch the original clean_map as a
+                # fresh queue item instead of relying on
+                # /set/clean_start_or_continue.  After /set/stop the firmware
+                # frequently abandons the cleaning session, so continue would
+                # have nothing to resume; the queue worker then sees mode=ready
+                # and immediately advances to the next pending room, silently
+                # skipping the paused one.  Re-dispatching the original
+                # clean_map guarantees the room actually gets cleaned (it
+                # restarts from the beginning rather than resuming mid-sweep).
+                paused_coro, paused_kwargs, _ = self._paused_clean_command
+                self._paused_clean_command = None
+                self._paused_fan_speed = None
+
+                resume_kwargs = dict(paused_kwargs)
+                self._command_sequence += 1
+                await self._command_queue.put(
+                    (1, self._command_sequence, paused_coro, (), resume_kwargs)
+                )
+                for saved_item in saved:
+                    await self._command_queue.put(saved_item)
+                    LOGGER.debug(
+                        "RobEye resume: re-queued %s",
+                        getattr(saved_item[2], "__name__", "command"),
+                    )
+                LOGGER.debug(
+                    "RobEye resume: re-dispatched paused clean_map "
+                    "(area_ids=%s) ahead of %d saved job(s)",
+                    resume_kwargs.get("area_ids", ""),
+                    len(saved),
+                )
+                if hasattr(self, "async_update_listeners"):
+                    self.async_update_listeners()
+                return
 
         self._command_sequence += 1
         await self._command_queue.put(
@@ -1211,6 +1254,21 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             )
             work_idx += 1
+
+        # While paused, _paused_jobs holds jobs that were drained from the
+        # queue when stop was pressed.  They have not yet been re-enqueued
+        # (resume re-enqueues them) but the user expects to see them as
+        # pending in the queue display so they understand the queue is intact.
+        for _priority, _seq, coro_func, args, kwargs in self._paused_jobs:
+            if getattr(coro_func, "__name__", "") in _QUEUE_CONTROL_COMMANDS:
+                continue
+            result.append(
+                self._queue_item_for_command(
+                    coro_func,
+                    kwargs,
+                    status="pending",
+                )
+            )
         return result
 
     def _queue_item_for_command(
