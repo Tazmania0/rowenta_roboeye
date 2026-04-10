@@ -501,15 +501,18 @@ def test_command_queue_items_keeps_inflight_clean_visible(coordinator, mock_clie
     assert items[0]["cmd_id"] == 127
 
 
-def test_command_queue_items_shows_paused_session_and_pending_resume(coordinator, mock_client):
+def test_command_queue_items_shows_paused_session_and_pending_jobs(coordinator, mock_client):
+    """While paused, the display must show the paused room AND any drained
+    _paused_jobs as pending so the user sees the queue is intact."""
     coordinator._paused_clean_command = (
         mock_client.clean_map,
         {"map_id": "3", "area_ids": "31"},
         127,
     )
-    coordinator._command_queue.put_nowait(
-        (0, 2, mock_client.clean_start_or_continue, (), {"cleaning_parameter_set": "2"})
-    )
+    # Job that was pending when stop was pressed → drained into _paused_jobs
+    coordinator._paused_jobs = [
+        (1, 2, mock_client.clean_map, (), {"map_id": "3", "area_ids": "32"})
+    ]
 
     items = coordinator.command_queue_items
     assert len(items) == 2
@@ -517,7 +520,7 @@ def test_command_queue_items_shows_paused_session_and_pending_resume(coordinator
     assert items[0]["label"] == "Cleaning room 31"
     assert items[0]["cmd_id"] == 127
     assert items[1]["status"] == "pending"
-    assert items[1]["label"] == "Resume"
+    assert items[1]["label"] == "Cleaning room 32"
 
 
 def test_command_queue_items_shows_external_active_session_and_keeps_ha_pending(
@@ -1165,7 +1168,12 @@ async def test_stop_sets_paused_fan_speed(coordinator, mock_client):
 
 @pytest.mark.asyncio
 async def test_resume_clears_pause_state_and_re_enqueues(coordinator, mock_client):
-    """clean_start_or_continue clears _is_paused and re-enqueues saved jobs."""
+    """clean_start_or_continue clears _is_paused and re-enqueues saved jobs.
+
+    With no _paused_clean_command (e.g. error recovery / external pause), the
+    legacy path is used: clean_start_or_continue is dispatched followed by
+    the re-enqueued saved jobs.
+    """
     # Set up paused state with one saved job
     coordinator._is_paused = True
     coordinator._paused_jobs = [
@@ -1183,6 +1191,62 @@ async def test_resume_clears_pause_state_and_re_enqueues(coordinator, mock_clien
     assert coordinator._paused_jobs == []
     # Queue: resume command + re-enqueued clean_map
     assert coordinator._command_queue.qsize() == 2
+
+
+@pytest.mark.asyncio
+async def test_resume_after_ha_pause_redispatches_clean_map(coordinator, mock_client):
+    """After HA-initiated pause (_paused_clean_command set), resume must
+    re-dispatch the original clean_map and re-enqueue saved jobs after it.
+
+    Regression test for: pressing resume on the vacuum card after pausing
+    a multi-room queue caused the robot to skip the paused room and start
+    the next pending room. clean_start_or_continue is unreliable after
+    /set/stop because the firmware may have abandoned the cleaning session.
+    """
+    # Simulate state right after async_pause has run:
+    coordinator._is_paused = True
+    coordinator._paused_clean_command = (
+        coordinator.client.clean_map,
+        {"map_id": "3", "area_ids": "31",
+         "cleaning_parameter_set": "2", "strategy_mode": "4"},
+        42,
+    )
+    # Коридор was pending when stop was pressed → drained to _paused_jobs
+    coordinator._paused_jobs = [
+        (1, 99, coordinator.client.clean_map, (),
+         {"map_id": "3", "area_ids": "32",
+          "cleaning_parameter_set": "2", "strategy_mode": "4"})
+    ]
+    coordinator._paused_fan_speed = "2"
+
+    await coordinator.async_send_command(
+        coordinator.client.clean_start_or_continue,
+        label="clean_start_or_continue",
+        cleaning_parameter_set="2",
+    )
+
+    # Pause state fully cleared
+    assert coordinator._is_paused is False
+    assert coordinator._paused_jobs == []
+    assert coordinator._paused_clean_command is None
+    assert coordinator._paused_fan_speed is None
+
+    # Queue must contain the re-dispatched clean_map for the paused room
+    # FOLLOWED by the previously saved job — and NO clean_start_or_continue.
+    queue_items = sorted(list(coordinator._command_queue._queue))
+    assert len(queue_items) == 2
+    func_names = [_command_name(item[2]) for item in queue_items]
+    assert func_names == ["clean_map", "clean_map"]
+    # The re-dispatched paused room (Кухня) must come first
+    assert queue_items[0][4]["area_ids"] == "31"
+    # Followed by the saved pending job (Коридор)
+    assert queue_items[1][4]["area_ids"] == "32"
+
+    # clean_start_or_continue must NOT have been enqueued
+    assert all(
+        _command_name(item[2]) != "clean_start_or_continue"
+        for item in queue_items
+    )
 
 
 @pytest.mark.asyncio
@@ -1254,56 +1318,51 @@ async def test_stop_does_not_drain_existing_stop_from_queue(coordinator, mock_cl
 
 
 @pytest.mark.asyncio
-async def test_resume_worker_inherits_original_command_context(coordinator, mock_client):
-    """After stop+resume, _inflight_clean_command shows the original room context.
+async def test_resume_worker_dispatches_paused_clean_map(coordinator, mock_client):
+    """After HA stop+resume the worker must dispatch the original clean_map.
 
-    Regression test for: resume (clean_start_or_continue) overwrote _inflight_clean_command
-    with its own empty kwargs, causing the queue sensor to display "Resume" instead of the
-    original room label (e.g., "Cleaning Kitchen") and losing cmd_id tracking context.
+    Regression test for: pressing resume on the vacuum card after pausing a
+    multi-room queue caused the robot to skip the paused room and start the
+    next pending room. The fix re-dispatches the paused clean_map directly
+    instead of relying on /set/clean_start_or_continue, which is unreliable
+    after /set/stop.
     """
     coordinator.async_request_refresh = AsyncMock()
 
-    # Resume command returns a new cmd_id (original cmd_id=42 was aborted by stop)
-    mock_client.clean_start_or_continue.return_value = {"cmd_id": 67, "error_code": 0}
+    # The re-dispatched clean_map returns a fresh cmd_id
+    mock_client.clean_map.return_value = {"cmd_id": 67, "error_code": 0}
     mock_client.get_command_result.return_value = {
         "commands": [{"cmd_id": 67, "status": "done", "error_code": 0}]
     }
-    # Robot already not cleaning when polled by _wait_for_active_operation_end
+    # Robot returns to ready quickly so the worker exits its wait loop
     mock_client.get_status.return_value = {"mode": "ready"}
 
     # Simulate state after stop was pressed: original clean_map context saved in paused slot
     coordinator._paused_clean_command = (
         mock_client.clean_map,
-        {"map_id": "3", "area_ids": "11"},
+        {"map_id": "3", "area_ids": "11",
+         "cleaning_parameter_set": "2", "strategy_mode": "4"},
         42,  # stale cmd_id from the aborted clean_map
     )
+    coordinator._is_paused = True
 
     await coordinator.async_send_command(
         mock_client.clean_start_or_continue,
         cleaning_parameter_set="2",
     )
 
+    # Pause state cleared at enqueue time
+    assert coordinator._paused_clean_command is None
+    assert coordinator._is_paused is False
+
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr("asyncio.sleep", AsyncMock())
         task = await _start_worker(coordinator)
         await _drain_and_cancel(coordinator, task)
 
-    # Paused slot must be cleared once resume is dispatched
-    assert coordinator._paused_clean_command is None
-
-    # _inflight_clean_command must inherit the original clean_map context, not
-    # the resume command's empty kwargs — coordinator poll would clear this on
-    # non-active mode, but we haven't polled here so it should still be set.
-    assert coordinator._inflight_clean_command is not None
-    inflight_coro, inflight_kwargs, inflight_cmd_id = coordinator._inflight_clean_command
-    # Use _command_name() which handles AsyncMock._mock_name correctly
-    assert _command_name(inflight_coro) == "clean_map"
-    assert inflight_kwargs.get("area_ids") == "11"
-    assert inflight_cmd_id == 67  # updated to the new resume operation's cmd_id
-
-    # Queue sensor must show the original room label, not "Resume"
-    items = coordinator.command_queue_items
-    assert items, "Queue items must not be empty while _inflight_clean_command is set"
-    assert items[0]["status"] == "active"
-    assert "Cleaning" in items[0]["label"]
-    assert "Resume" not in items[0]["label"]
+    # Worker must have dispatched clean_map (not clean_start_or_continue)
+    mock_client.clean_map.assert_called_once()
+    mock_client.clean_start_or_continue.assert_not_called()
+    # And it must use the original room kwargs
+    call_kwargs = mock_client.clean_map.call_args.kwargs
+    assert call_kwargs.get("area_ids") == "11"
