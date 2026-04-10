@@ -23,6 +23,7 @@ from custom_components.rowenta_roboeye.const import (
 from custom_components.rowenta_roboeye.coordinator import (
     RobEyeCoordinator,
     _build_live_map_payload,
+    _command_name,
     _extract_rob_pose,
     _parse_map_entry,
 )
@@ -1250,3 +1251,59 @@ async def test_stop_does_not_drain_existing_stop_from_queue(coordinator, mock_cl
         getattr(item[2], "__name__", "") != "stop"
         for item in coordinator._paused_jobs
     )
+
+
+@pytest.mark.asyncio
+async def test_resume_worker_inherits_original_command_context(coordinator, mock_client):
+    """After stop+resume, _inflight_clean_command shows the original room context.
+
+    Regression test for: resume (clean_start_or_continue) overwrote _inflight_clean_command
+    with its own empty kwargs, causing the queue sensor to display "Resume" instead of the
+    original room label (e.g., "Cleaning Kitchen") and losing cmd_id tracking context.
+    """
+    coordinator.async_request_refresh = AsyncMock()
+
+    # Resume command returns a new cmd_id (original cmd_id=42 was aborted by stop)
+    mock_client.clean_start_or_continue.return_value = {"cmd_id": 67, "error_code": 0}
+    mock_client.get_command_result.return_value = {
+        "commands": [{"cmd_id": 67, "status": "done", "error_code": 0}]
+    }
+    # Robot already not cleaning when polled by _wait_for_active_operation_end
+    mock_client.get_status.return_value = {"mode": "ready"}
+
+    # Simulate state after stop was pressed: original clean_map context saved in paused slot
+    coordinator._paused_clean_command = (
+        mock_client.clean_map,
+        {"map_id": "3", "area_ids": "11"},
+        42,  # stale cmd_id from the aborted clean_map
+    )
+
+    await coordinator.async_send_command(
+        mock_client.clean_start_or_continue,
+        cleaning_parameter_set="2",
+    )
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr("asyncio.sleep", AsyncMock())
+        task = await _start_worker(coordinator)
+        await _drain_and_cancel(coordinator, task)
+
+    # Paused slot must be cleared once resume is dispatched
+    assert coordinator._paused_clean_command is None
+
+    # _inflight_clean_command must inherit the original clean_map context, not
+    # the resume command's empty kwargs — coordinator poll would clear this on
+    # non-active mode, but we haven't polled here so it should still be set.
+    assert coordinator._inflight_clean_command is not None
+    inflight_coro, inflight_kwargs, inflight_cmd_id = coordinator._inflight_clean_command
+    # Use _command_name() which handles AsyncMock._mock_name correctly
+    assert _command_name(inflight_coro) == "clean_map"
+    assert inflight_kwargs.get("area_ids") == "11"
+    assert inflight_cmd_id == 67  # updated to the new resume operation's cmd_id
+
+    # Queue sensor must show the original room label, not "Resume"
+    items = coordinator.command_queue_items
+    assert items, "Queue items must not be empty while _inflight_clean_command is set"
+    assert items[0]["status"] == "active"
+    assert "Cleaning" in items[0]["label"]
+    assert "Resume" not in items[0]["label"]

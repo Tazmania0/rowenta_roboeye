@@ -815,7 +815,17 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 or command_name in ("stop", "go_home")
             )
             if is_cleaning_dispatch:
-                self._inflight_clean_command = (coro_func, dict(kwargs), None)
+                is_resume_dispatch = (
+                    coro_func is self.client.clean_start_or_continue
+                    or command_name == "clean_start_or_continue"
+                )
+                if is_resume_dispatch and self._paused_clean_command is not None:
+                    # Resume: inherit the original clean command's coro/kwargs so the queue
+                    # sensor keeps showing the correct room label and map context.
+                    paused_coro, paused_kwargs, _ = self._paused_clean_command
+                    self._inflight_clean_command = (paused_coro, paused_kwargs, None)
+                else:
+                    self._inflight_clean_command = (coro_func, dict(kwargs), None)
                 self._paused_clean_command = None
             elif is_return_or_stop:
                 if command_name == "stop" and self._inflight_clean_command is not None:
