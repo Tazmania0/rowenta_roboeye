@@ -567,7 +567,7 @@ async def test_clean_selected_resets_booleans_after_press():
     btn = _make_selected_button(coord)
     await btn.async_press()
 
-    # input_boolean.turn_off should have been called for the selected room
+    # switch.turn_off should have been called for the selected room
     coord.hass.services.async_call.assert_called_once_with(
-        "input_boolean", "turn_off", {"entity_id": eid_3}, blocking=False
+        "switch", "turn_off", {"entity_id": eid_3}, blocking=False
     )

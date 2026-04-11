@@ -399,10 +399,10 @@ class RobEyeCleanSelectedButton(RobEyeBaseButton):
             strategy_mode=strategy,
         )
 
-        # Reset all selection booleans after enqueuing the clean command
+        # Reset all selection switches after enqueuing the clean command
         for area_id in selected_ids:
             eid = room_selection_entity_id(device_id, map_id, area_id)
             await hass.services.async_call(
-                "input_boolean", "turn_off", {"entity_id": eid}, blocking=False
+                "switch", "turn_off", {"entity_id": eid}, blocking=False
             )
 

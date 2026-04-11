@@ -23,7 +23,15 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import AREA_STATE_BLOCKING, DOMAIN, LOGGER, SIGNAL_AREAS_UPDATED, STRATEGY_DEFAULT, STRATEGY_DEEP
+from .const import (
+    AREA_STATE_BLOCKING,
+    DOMAIN,
+    LOGGER,
+    SIGNAL_AREAS_UPDATED,
+    STRATEGY_DEFAULT,
+    STRATEGY_DEEP,
+    room_selection_entity_id,
+)
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity, async_remove_stale_room_entities
 
@@ -64,6 +72,14 @@ async def async_setup_entry(
                 continue
             new_entities.append(
                 RobEyeRoomDeepCleanSwitch(
+                    coordinator=coordinator,
+                    config_entry=config_entry,
+                    area_id=str(area_id),
+                    room_name=room_name,
+                )
+            )
+            new_entities.append(
+                RobEyeRoomSelectSwitch(
                     coordinator=coordinator,
                     config_entry=config_entry,
                     area_id=str(area_id),
@@ -252,3 +268,60 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
             area_id=self._area_id,
             strategy_mode="normal",
         )
+
+
+class RobEyeRoomSelectSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
+    """Per-room selection toggle for multi-room cleaning.
+
+    Pure HA-side state — does NOT write to the robot.
+    Toggled by the user in the dashboard to build a room selection set.
+    Read by RobEyeCleanSelectedButton to determine which rooms to clean.
+    Reset to off automatically after Clean Selected is pressed.
+
+    Becomes unavailable when the active map changes (the selection is
+    map-scoped, so stale selections from a different map must not be read).
+
+    entity_id: switch.{device_id}_map{map_id}_room_{area_id}_selected
+    """
+
+    _attr_icon = "mdi:checkbox-marked-circle-outline"
+
+    def __init__(
+        self,
+        coordinator: RobEyeCoordinator,
+        config_entry: ConfigEntry,
+        area_id: str,
+        room_name: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._area_id = area_id
+        _map = coordinator.active_map_id
+        self._map_id = _map
+        self._attr_unique_id = (
+            f"room_selected_map{_map}_{area_id}_{coordinator.device_id}"
+        )
+        self._attr_name = f"{room_name} Selected"
+        self.entity_id = room_selection_entity_id(coordinator.device_id, _map, area_id)
+        self._is_on: bool = False
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._map_id == self.coordinator.active_map_id
+
+    @property
+    def is_on(self) -> bool:
+        return self._is_on
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None:
+            self._is_on = last.state == "on"
+
+    async def async_turn_on(self, **kwargs) -> None:  # type: ignore[override]
+        self._is_on = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:  # type: ignore[override]
+        self._is_on = False
+        self.async_write_ha_state()

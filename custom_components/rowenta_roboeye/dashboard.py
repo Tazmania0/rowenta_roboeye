@@ -304,7 +304,59 @@ def _build_config(
         "bathroom": "mdi:shower",
     }
 
+    # ── "Clean Selected Rooms" card — FIRST in the rooms view ────────────
+    # Uses a markdown card with Jinja2 to show selected room names, followed
+    # by an entities card with the button.  A vertical-stack groups them.
+    # This avoids HA's "entities card name field does not support templates"
+    # error and the non-existent selected_room_count sensor reference.
+    _clean_sel_btn = f"button.{device_id}_clean_selected_rooms"
+
+    # Build Jinja2 template that lists selected room names by iterating the
+    # per-room selection switches.  is_state() is used to avoid errors when
+    # a switch entity is unavailable during HA startup.
+    _sel_room_items = {
+        room_selection_entity_id(device_id, active_map_id, str(r["id"])): r["name"]
+        for r in rooms
+    }
+    _sel_display_tpl = (
+        "{%- set sel = namespace(rooms=[]) -%}"
+        + "".join(
+            f"{{% if is_state('{eid}', 'on') -%}}"
+            f"{{% set sel.rooms = sel.rooms + ['{name}'] -%}}"
+            "{%- endif -%}"
+            for eid, name in _sel_room_items.items()
+        )
+        + "{% if sel.rooms | length > 0 %}"
+        "**Selected:** {{ sel.rooms | join(', ') }}\n\n"
+        "Press **▶ Clean Selected Rooms** to start."
+        "{% else %}"
+        "*Toggle rooms below to select them for multi-room cleaning.*"
+        "{% endif %}"
+    )
+
     room_cards: list[dict[str, Any]] = []
+    if rooms:
+        room_cards.append({
+            "type": "vertical-stack",
+            "cards": [
+                {
+                    "type": "markdown",
+                    "title": "Multi-Room Cleaning",
+                    "content": _sel_display_tpl,
+                },
+                {
+                    "type": "entities",
+                    "entities": [
+                        {
+                            "entity": _clean_sel_btn,
+                            "name": "▶  Clean Selected Rooms",
+                            "icon": "mdi:broom-check",
+                        },
+                    ],
+                },
+            ],
+        })
+
     for room in rooms:
         rid = room["id"]
         room_icon = _ROOM_TYPE_ICONS.get(room.get("room_type", ""), "mdi:door")
@@ -359,26 +411,6 @@ def _build_config(
                     "entity": f"sensor.{device_id}_{_m}room_{rid}_avg_clean_time",
                     "name": "Avg Duration",
                     "icon": "mdi:timer-outline",
-                },
-            ],
-        })
-
-    # "Clean Selected Rooms" card — shown after all room cards
-    if rooms:
-        _count_sensor = f"sensor.{device_id}_selected_room_count"
-        _clean_sel_btn = f"button.{device_id}_clean_selected_rooms"
-        room_cards.append({
-            "type": "entities",
-            "entities": [
-                {
-                    "entity": _clean_sel_btn,
-                    "name": (
-                        "{% set n = states('"
-                        + _count_sensor
-                        + "') | int(0) %}"
-                        "{% if n > 0 %}▶  Clean Selected Rooms ({{ n }}){% else %}No rooms selected{% endif %}"
-                    ),
-                    "icon": "mdi:broom-check",
                 },
             ],
         })
