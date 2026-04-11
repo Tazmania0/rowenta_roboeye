@@ -324,6 +324,7 @@ def _build_config(
         room_cards.append({
             "type": "entities",
             "title": "Multi-Room Cleaning",
+            "show_header_toggle": False,
             "entities": _room_sel_entities + [
                 {"type": "divider"},
                 {

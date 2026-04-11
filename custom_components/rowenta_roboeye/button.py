@@ -21,6 +21,7 @@ from .const import (
     FAN_SPEEDS,
     LOGGER,
     SIGNAL_AREAS_UPDATED,
+    SIGNAL_ROOM_SELECTION_CHANGED,
     STRATEGY_DEEP,
     STRATEGY_REVERSE_MAP,
     STRATEGY_DEFAULT,
@@ -322,6 +323,17 @@ class RobEyeCleanSelectedButton(RobEyeBaseButton):
         self._attr_unique_id = f"clean_selected_{coordinator.device_id}"
         self.entity_id = f"button.{coordinator.device_id}_clean_selected_rooms"
         self._attr_name = "Clean Selected Rooms"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        entry_id = self.coordinator.config_entry.entry_id
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{SIGNAL_ROOM_SELECTION_CHANGED}_{entry_id}",
+                self.async_write_ha_state,
+            )
+        )
 
     @property
     def available(self) -> bool:

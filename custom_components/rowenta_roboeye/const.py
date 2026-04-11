@@ -245,6 +245,12 @@ MAX_POLL_FAILURES = 3
 # ── Dynamic entity discovery signal ──────────────────────────────────
 SIGNAL_AREAS_UPDATED = f"{DOMAIN}_areas_updated"
 
+# ── Room selection change signal ──────────────────────────────────────
+# Fired by RobEyeRoomSelectSwitch on every state change so that
+# RobEyeCleanSelectedButton can update its availability immediately
+# without waiting for the next coordinator poll.
+SIGNAL_ROOM_SELECTION_CHANGED = f"{DOMAIN}_room_selection_changed"
+
 # ── Room selection ────────────────────────────────────────────────────
 # SwitchEntity entity ID pattern for room selection toggles.
 # Used by RobEyeRoomSelectSwitch, RobEyeCleanSelectedButton, and dashboard.
