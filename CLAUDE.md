@@ -37,17 +37,23 @@ rowenta_roboeye/
 │   ├── services.yaml        # Service schema for clean_room
 │   ├── icons.json           # Entity icon mappings
 │   ├── translations/en.json # English UI translations
-│   ├── brand/               # HACS brand assets (icon.png, icon@2x.png, logo.png)
-│   ├── icon.png / icon_512.png / logo.png / logo_512.png  # Integration icons
+│   ├── brand/               # HACS brand assets (icon.png, icon@2x.png, icon_dark.png,
+│   │                        #   icon_dark@2x.png, logo.png, logo@2x.png,
+│   │                        #   logo_dark.png, logo_dark@2x.png)
 │   └── frontend/
 │       ├── __init__.py      # Lovelace JS resource registration (JSModuleRegistration)
 │       └── rowenta-map-card.js  # Custom SVG live-map Lovelace card
 ├── tests/
+│   ├── __init__.py          # Package marker
 │   ├── conftest.py          # Mock payloads and fixtures used by all tests
 │   ├── test_api.py          # API client unit tests
+│   ├── test_binary_sensor.py# Binary sensor entity tests
+│   ├── test_button.py       # Button entity tests
 │   ├── test_config_flow.py  # Config/options flow tests
 │   ├── test_coordinator.py  # Coordinator data-merge and polling tests
+│   ├── test_select.py       # Select entity tests
 │   ├── test_sensor.py       # Sensor entity tests
+│   ├── test_switch.py       # Switch entity tests
 │   └── test_vacuum.py       # Vacuum entity tests
 ├── conftest.py              # Root-level pytest stub for homeassistant package
 ├── .github/workflows/
@@ -102,6 +108,14 @@ Robot Vacuum (LAN:8080)
 
 9. **Force-close HTTP connections**: `RobEyeApiClient._get()` creates a new `aiohttp.TCPConnector(force_close=True)` for every request. This prevents HA from holding a keep-alive connection that would block the Rowenta mobile app from reaching the robot's embedded HTTP server.
 
+10. **Serial command queue**: All robot commands are dispatched through an `asyncio.PriorityQueue` (`_command_queue`) serialised by a background worker (`_command_queue_worker`). Priority 0 = immediate (stop/go_home/resume); priority 1 = normal. The worker captures `cmd_id` from each `/set/` response and polls `/get/command_result` to confirm completion before dispatching the next item. This prevents command collisions when multiple entities issue requests in quick succession.
+
+11. **Pause/resume lifecycle**: When `stop()` is called mid-clean the coordinator sets `_is_paused = True`, drains pending queue jobs into `_paused_jobs`, and snapshots the interrupted command as `_paused_clean_command`. On `clean_start_or_continue()` the paused jobs are re-enqueued and the snapshot is cleared. `go_home()` discards the snapshot entirely.
+
+12. **Multi-map support**: `active_map_id` resolves the runtime map ID as: manual HA selection (`_manual_map_id`) → setup-time `CONF_MAP_ID`. The device's own `/get/map_status` is intentionally ignored so HA does not silently follow native-app floor switches. `/get/maps` (polled every 300 s) provides the full map list for user-facing selectors.
+
+13. **Incremental event log**: `/get/event_log` is polled every 30 s with a cursor (`_last_event_log_id`). The first fetch seeds the cursor without surfacing historical entries. Subsequent fetches deliver only new events; `_process_new_events` maps them to HA logbook entries and persistent notifications using the `EVENT_TYPE_*` constants in `const.py`.
+
 ---
 
 ## Polling Schedule
@@ -114,10 +128,11 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 | `/get/sensor_values` | Every tick | Parses GPIO for brush stuck + dustbin flags |
 | `/get/rob_pose` | Every tick when `live_map` entity enabled | Staleness detected via `timestamp` field |
 | `/get/seen_polygon`, `/get/cleaning_grid_map` (live) | 5 s when cleaning, 60 s idle | Live map polygon only during active session |
-| `/get/areas`, `/get/sensor_status`, `/get/robot_flags` | Every 300 s | Area discovery; `_check_for_new_areas` called here |
+| `/get/areas`, `/get/sensor_status`, `/get/robot_flags`, `/get/map_status`, `/get/maps` | Every 300 s | Area discovery + map list; `_check_for_new_areas` called here |
 | `/get/statistics`, `/get/permanent_statistics` | Every 600 s | Lifetime totals |
 | `/get/feature_map`, `/get/tile_map`, `/get/areas` (saved map), `/get/seen_polygon` (saved map), `/get/cleaning_grid_map` (saved map) | Every 600 s | Map geometry for SVG card; also loaded at startup |
 | `/get/schedule` | Every 60 s | Cleaning schedule |
+| `/get/event_log` | Every 30 s | Incremental robot event log (cursor-based); seeds `DATA_EVENT_LOG` |
 | `/get/robot_id`, `/get/wifi_status`, `/get/protocol_version` | Every 3600 s | Device identity; stored under `DATA_ROBOT_INFO` |
 
 ---
@@ -191,9 +206,11 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 |---|---|---|---|
 | `DATA_STATUS` | `"status"` | `/get/status` | battery, mode, charging, fan speed |
 | `DATA_SENSOR_VALUES` | `"sensor_values"` | `/get/sensor_values` | Raw ADC; parsed into `"sensor_values_parsed"` |
+| `DATA_LIVE_PARAMETERS` | `"live_parameters"` | `/get/live_parameters` | Real-time cleaning metrics (area, time) |
 | `DATA_STATISTICS` | `"statistics"` | `/get/statistics` | Lifetime totals |
 | `DATA_PERMANENT_STATISTICS` | `"permanent_statistics"` | `/get/permanent_statistics` | Alternate lifetime stats |
 | `DATA_AREAS` | `"areas"` | `/get/areas?map_id=X` | Room list; triggers dynamic entity discovery |
+| `DATA_ROOMS` | `"rooms"` | `/get/rooms` | Room list with geometry |
 | `DATA_ROBOT_INFO` | `"robot_info"` | `/get/robot_id` + `/get/wifi_status` + `/get/protocol_version` | Dict of dicts |
 | `DATA_SENSOR_STATUS` | `"sensor_status"` | `/get/sensor_status` | Cliff/bump/wheel-drop health |
 | `DATA_ROBOT_FLAGS` | `"robot_flags"` | `/get/robot_flags` | Capability bitmask |
@@ -202,11 +219,17 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 | `DATA_CLEANING_GRID` | `"cleaning_grid_map"` | `/get/cleaning_grid_map` | Live occupancy grid |
 | `DATA_FEATURE_MAP` | `"feature_map"` | `/get/feature_map?map_id=X` | Wall lines + dock pose |
 | `DATA_TILE_MAP` | `"tile_map"` | `/get/tile_map?map_id=X` | Area IDs + outline polygon |
+| `DATA_TOPO_MAP` | `"topo_map"` | `/get/topo_map?map_id=X` | Topology map |
 | `DATA_AREAS_SAVED_MAP` | `"areas_saved_map"` | `/get/areas?map_id=SAVED_MAP_ID` | Saved-map room geometry |
 | `DATA_SEEN_POLY_SAVED_MAP` | `"seen_poly_saved_map"` | `/get/seen_polygon?map_id=SAVED_MAP_ID` | Saved map explored boundary |
 | `DATA_LIVE_MAP` | `"live_map"` | Assembled by coordinator | Combined payload for SVG card |
 | `DATA_SCHEDULE` | `"schedule"` | `/get/schedule` | Cleaning schedule |
 | `DATA_MAP_STATUS` | `"map_status"` | `/get/map_status` | Active map metadata |
+| `DATA_MAPS` | `"maps"` | `/get/maps` | Full list of available floor maps |
+| `DATA_ACTIVE_MAP_ID` | `"active_map_id"` | Resolved by coordinator | HA-selected map ID (not device-reported) |
+| `DATA_EXPLORATION` | `"exploration"` | `/debug/exploration` | Debug exploration points (not for runtime use) |
+| `DATA_RELOCALIZATION` | `"relocalization"` | `/debug/relocalization` | Debug relocalization data (not for runtime use) |
+| `DATA_EVENT_LOG` | `"event_log"` | `/get/event_log` | Incremental robot event list (last 50 entries) |
 
 ---
 
@@ -239,6 +262,10 @@ Mock API payloads are defined in `tests/conftest.py` as module-level dicts (not 
 - `MOCK_AREAS` — `/get/areas` response (includes 2 named rooms + 1 with empty metadata)
 - `MOCK_WIFI_STATUS`, `MOCK_ROBOT_ID`, `MOCK_PROTOCOL_VERSION` — identity endpoints
 - `MOCK_LIVE_PARAMETERS`, `MOCK_SENSOR_STATUS`, `MOCK_ROBOT_FLAGS`, `MOCK_MAP_STATUS` — diagnostics
+- `MOCK_MAPS` — `/get/maps` full map list response
+- `MOCK_ROB_POSE` — `/get/rob_pose` robot position response
+- `MOCK_SENSOR_VALUES` — `/get/sensor_values` ADC data
+- `MOCK_CLEANING_GRID` — `/get/cleaning_grid_map` occupancy grid
 - `MOCK_LOCALIZATION`, `MOCK_RELOCALIZATION`, `MOCK_EXPLORATION` — debug localization
 
 Reuse these; do not invent new payload structures in individual test files.
