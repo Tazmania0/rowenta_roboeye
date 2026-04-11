@@ -19,7 +19,7 @@ import json as _json
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -28,6 +28,7 @@ from .const import (
     DOMAIN,
     LOGGER,
     SIGNAL_AREAS_UPDATED,
+    SIGNAL_ROOM_SELECTION_CHANGED,
     STRATEGY_DEFAULT,
     STRATEGY_DEEP,
     room_selection_entity_id,
@@ -297,6 +298,7 @@ class RobEyeRoomSelectSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         self._area_id = area_id
         _map = coordinator.active_map_id
         self._map_id = _map
+        self._entry_id = config_entry.entry_id
         self._attr_unique_id = (
             f"room_selected_map{_map}_{area_id}_{coordinator.device_id}"
         )
@@ -321,7 +323,13 @@ class RobEyeRoomSelectSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
     async def async_turn_on(self, **kwargs) -> None:  # type: ignore[override]
         self._is_on = True
         self.async_write_ha_state()
+        async_dispatcher_send(
+            self.hass, f"{SIGNAL_ROOM_SELECTION_CHANGED}_{self._entry_id}"
+        )
 
     async def async_turn_off(self, **kwargs) -> None:  # type: ignore[override]
         self._is_on = False
         self.async_write_ha_state()
+        async_dispatcher_send(
+            self.hass, f"{SIGNAL_ROOM_SELECTION_CHANGED}_{self._entry_id}"
+        )
