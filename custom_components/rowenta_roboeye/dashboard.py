@@ -304,35 +304,10 @@ def _build_config(
         "bathroom": "mdi:shower",
     }
 
-    # ── "Clean Selected Rooms" card — FIRST in the rooms view ────────────
-    # Uses a markdown card with Jinja2 to show selected room names, followed
-    # by an entities card with the button.  A vertical-stack groups them.
-    # This avoids HA's "entities card name field does not support templates"
-    # error and the non-existent selected_room_count sensor reference.
+    # ── "Multi-Room Cleaning" card — FIRST in the rooms view ─────────────
+    # Single entities card with room selection toggles + Clean Selected Rooms
+    # button, separated by a divider.
     _clean_sel_btn = f"button.{device_id}_clean_selected_rooms"
-
-    # Build Jinja2 template that lists selected room names by iterating the
-    # per-room selection switches.  is_state() is used to avoid errors when
-    # a switch entity is unavailable during HA startup.
-    _sel_room_items = {
-        room_selection_entity_id(device_id, active_map_id, str(r["id"])): r["name"]
-        for r in rooms
-    }
-    _sel_display_tpl = (
-        "{%- set sel = namespace(rooms=[]) -%}"
-        + "".join(
-            f"{{% if is_state('{eid}', 'on') -%}}"
-            f"{{% set sel.rooms = sel.rooms + ['{name}'] -%}}"
-            "{%- endif -%}"
-            for eid, name in _sel_room_items.items()
-        )
-        + "{% if sel.rooms | length > 0 %}"
-        "**Selected:** {{ sel.rooms | join(', ') }}\n\n"
-        "Press **▶ Clean Selected Rooms** to start."
-        "{% else %}"
-        "*Toggle rooms to select them for multi-room cleaning.*"
-        "{% endif %}"
-    )
 
     # Room selection toggle rows — shown inside the top card
     _room_sel_entities = [
@@ -347,27 +322,14 @@ def _build_config(
     room_cards: list[dict[str, Any]] = []
     if rooms:
         room_cards.append({
-            "type": "vertical-stack",
-            "cards": [
+            "type": "entities",
+            "title": "Multi-Room Cleaning",
+            "entities": _room_sel_entities + [
+                {"type": "divider"},
                 {
-                    "type": "markdown",
-                    "title": "Multi-Room Cleaning",
-                    "content": _sel_display_tpl,
-                },
-                {
-                    "type": "entities",
-                    "title": "Select Rooms",
-                    "entities": _room_sel_entities,
-                },
-                {
-                    "type": "entities",
-                    "entities": [
-                        {
-                            "entity": _clean_sel_btn,
-                            "name": "▶  Clean Selected Rooms",
-                            "icon": "mdi:broom-check",
-                        },
-                    ],
+                    "entity": _clean_sel_btn,
+                    "name": "▶  Clean Selected Rooms",
+                    "icon": "mdi:broom-check",
                 },
             ],
         })
