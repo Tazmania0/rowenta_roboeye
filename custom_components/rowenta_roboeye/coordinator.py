@@ -1366,6 +1366,24 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             pass
         return None
 
+    def _resolve_room_names_from_ids(self, area_ids_str: str) -> str:
+        """Resolve comma-separated area_id string to comma-separated room names.
+
+        Used for queue display: area_ids="30,32" → "хол, спалня"
+        Falls back to "Room {id}" when name is not found.
+        """
+        names: list[str] = []
+        for raw in str(area_ids_str).split(","):
+            raw = raw.strip()
+            try:
+                area_id = int(raw)
+            except ValueError:
+                names.append(f"Room {raw}")
+                continue
+            name = self._resolve_room_name_by_id(area_id)
+            names.append(name if name else f"Room {raw}")
+        return ", ".join(names)
+
     def _describe_command_for_display(self, coro_func: Any, kwargs: dict[str, Any]) -> str:
         """Return a queue label with resolved room names whenever possible."""
         name = _command_name(coro_func)

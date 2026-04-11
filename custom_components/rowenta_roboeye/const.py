@@ -246,11 +246,14 @@ MAX_POLL_FAILURES = 3
 SIGNAL_AREAS_UPDATED = f"{DOMAIN}_areas_updated"
 
 # ── Room selection ────────────────────────────────────────────────────
-# input_boolean entity ID pattern for room selection toggles
-# Used by RobEyeCleanSelectedButton, RobEyeSelectedRoomCountSensor, and dashboard
-ROOM_SELECTION_ENTITY_PREFIX = "input_boolean"
+# SwitchEntity entity ID pattern for room selection toggles.
+# Used by RobEyeRoomSelectSwitch, RobEyeCleanSelectedButton, and dashboard.
 
 
 def room_selection_entity_id(device_id: str, map_id: str, area_id: str) -> str:
-    """Return the entity_id for a room selection boolean."""
-    return f"input_boolean.{device_id}_map{map_id}_room_{area_id}_selected"
+    """Return the entity_id for a room selection toggle switch.
+
+    Pattern: switch.{device_id}_map{map_id}_room_{area_id}_selected
+    Used by RobEyeRoomSelectSwitch, RobEyeCleanSelectedButton, and dashboard.
+    """
+    return f"switch.{device_id}_map{map_id}_room_{area_id}_selected"
