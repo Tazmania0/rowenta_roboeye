@@ -330,9 +330,19 @@ def _build_config(
         "**Selected:** {{ sel.rooms | join(', ') }}\n\n"
         "Press **▶ Clean Selected Rooms** to start."
         "{% else %}"
-        "*Toggle rooms below to select them for multi-room cleaning.*"
+        "*Toggle rooms to select them for multi-room cleaning.*"
         "{% endif %}"
     )
+
+    # Room selection toggle rows — shown inside the top card
+    _room_sel_entities = [
+        {
+            "entity": room_selection_entity_id(device_id, active_map_id, str(r["id"])),
+            "name": r["name"],
+            "icon": _ROOM_TYPE_ICONS.get(r.get("room_type", ""), "mdi:door"),
+        }
+        for r in rooms
+    ]
 
     room_cards: list[dict[str, Any]] = []
     if rooms:
@@ -343,6 +353,11 @@ def _build_config(
                     "type": "markdown",
                     "title": "Multi-Room Cleaning",
                     "content": _sel_display_tpl,
+                },
+                {
+                    "type": "entities",
+                    "title": "Select Rooms",
+                    "entities": _room_sel_entities,
                 },
                 {
                     "type": "entities",
@@ -360,17 +375,11 @@ def _build_config(
     for room in rooms:
         rid = room["id"]
         room_icon = _ROOM_TYPE_ICONS.get(room.get("room_type", ""), "mdi:door")
-        sel_eid = room_selection_entity_id(device_id, active_map_id, str(rid))
         room_cards.append({
             "type": "entities",
             "title": room["name"],
             "icon": room_icon,
             "entities": [
-                {
-                    "entity": sel_eid,
-                    "name": "Select for multi-room clean",
-                    "icon": "mdi:checkbox-marked-circle-outline",
-                },
                 {
                     "entity": f"select.{device_id}_{_m}room_{rid}_fan_speed",
                     "name": "Fan Speed",
