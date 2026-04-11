@@ -40,6 +40,8 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from .const import room_selection_entity_id
+
 _LOGGER = logging.getLogger(__name__)
 
 DASHBOARD_TITLE    = "Rowenta Xplorer 120"
@@ -306,11 +308,17 @@ def _build_config(
     for room in rooms:
         rid = room["id"]
         room_icon = _ROOM_TYPE_ICONS.get(room.get("room_type", ""), "mdi:door")
+        sel_eid = room_selection_entity_id(device_id, active_map_id, str(rid))
         room_cards.append({
             "type": "entities",
             "title": room["name"],
             "icon": room_icon,
             "entities": [
+                {
+                    "entity": sel_eid,
+                    "name": "Select for multi-room clean",
+                    "icon": "mdi:checkbox-marked-circle-outline",
+                },
                 {
                     "entity": f"select.{device_id}_{_m}room_{rid}_fan_speed",
                     "name": "Fan Speed",
@@ -351,6 +359,26 @@ def _build_config(
                     "entity": f"sensor.{device_id}_{_m}room_{rid}_avg_clean_time",
                     "name": "Avg Duration",
                     "icon": "mdi:timer-outline",
+                },
+            ],
+        })
+
+    # "Clean Selected Rooms" card — shown after all room cards
+    if rooms:
+        _count_sensor = f"sensor.{device_id}_selected_room_count"
+        _clean_sel_btn = f"button.{device_id}_clean_selected_rooms"
+        room_cards.append({
+            "type": "entities",
+            "entities": [
+                {
+                    "entity": _clean_sel_btn,
+                    "name": (
+                        "{% set n = states('"
+                        + _count_sensor
+                        + "') | int(0) %}"
+                        "{% if n > 0 %}▶  Clean Selected Rooms ({{ n }}){% else %}No rooms selected{% endif %}"
+                    ),
+                    "icon": "mdi:broom-check",
                 },
             ],
         })

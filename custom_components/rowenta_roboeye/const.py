@@ -244,3 +244,13 @@ MAX_POLL_FAILURES = 3
 
 # ── Dynamic entity discovery signal ──────────────────────────────────
 SIGNAL_AREAS_UPDATED = f"{DOMAIN}_areas_updated"
+
+# ── Room selection ────────────────────────────────────────────────────
+# input_boolean entity ID pattern for room selection toggles
+# Used by RobEyeCleanSelectedButton, RobEyeSelectedRoomCountSensor, and dashboard
+ROOM_SELECTION_ENTITY_PREFIX = "input_boolean"
+
+
+def room_selection_entity_id(device_id: str, map_id: str, area_id: str) -> str:
+    """Return the entity_id for a room selection boolean."""
+    return f"input_boolean.{device_id}_map{map_id}_room_{area_id}_selected"
