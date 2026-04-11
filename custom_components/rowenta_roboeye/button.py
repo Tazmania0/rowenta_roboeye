@@ -24,6 +24,7 @@ from .const import (
     STRATEGY_DEEP,
     STRATEGY_REVERSE_MAP,
     STRATEGY_DEFAULT,
+    room_selection_entity_id,
 )
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity, async_remove_stale_room_entities
@@ -39,6 +40,7 @@ async def async_setup_entry(
         RobEyeGoHomeButton(coordinator),
         RobEyeStopButton(coordinator),
         RobEyeCleanAllButton(coordinator),
+        RobEyeCleanSelectedButton(coordinator),
     ]
 
     # Initial room buttons
@@ -299,4 +301,108 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
         if state is not None and state.state in STRATEGY_REVERSE_MAP:
             return STRATEGY_REVERSE_MAP[state.state]
         return self.coordinator.cleaning_strategy
+
+
+class RobEyeCleanSelectedButton(RobEyeBaseButton):
+    """Clean all currently selected rooms in a single clean_map call.
+
+    Reads input_boolean.{device_id}_map{map_id}_room_{area_id}_selected
+    for all rooms. Sends area_ids as comma-separated list.
+    Resolves fan speed and strategy across selected rooms (most intensive wins).
+    Resets all selection booleans to off after pressing.
+
+    Disabled (unavailable) when no rooms are selected.
+    """
+
+    _attr_icon = "mdi:broom-check"
+    _attr_translation_key = "clean_selected"
+
+    def __init__(self, coordinator: RobEyeCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"clean_selected_{coordinator.device_id}"
+        self.entity_id = f"button.{coordinator.device_id}_clean_selected_rooms"
+        self._attr_name = "Clean Selected Rooms"
+
+    @property
+    def available(self) -> bool:
+        """Available only when at least one room is selected."""
+        if not super().available:
+            return False
+        return len(self._get_selected_area_ids()) > 0
+
+    def _get_selected_area_ids(self) -> list[str]:
+        """Return area_ids of all selected rooms on the active map."""
+        device_id = self.coordinator.device_id
+        map_id = self.coordinator.active_map_id
+        selected = []
+        for area in self.coordinator.areas:
+            area_id = area.get("id")
+            if area_id is None:
+                continue
+            eid = room_selection_entity_id(device_id, map_id, str(area_id))
+            state = self.coordinator.hass.states.get(eid)
+            if state is not None and state.state == "on":
+                selected.append(str(area_id))
+        return selected
+
+    async def async_press(self) -> None:
+        selected_ids = self._get_selected_area_ids()
+        if not selected_ids:
+            LOGGER.warning("clean_selected: no rooms selected, ignoring")
+            return
+
+        LOGGER.debug("clean_selected: area_ids=%s", selected_ids)
+        device_id = self.coordinator.device_id
+        map_id = self.coordinator.active_map_id
+        hass = self.coordinator.hass
+
+        # Resolve fan speed — use most intensive across selected rooms
+        _speed_order = {"silent": 0, "eco": 1, "normal": 2, "high": 3}
+        best_raw = self.coordinator.ha_fan_speed or str(
+            self.coordinator.status.get("cleaning_parameter_set", "2")
+        )
+        strategy = self.coordinator.cleaning_strategy
+
+        _m = f"map{map_id}_"
+        for area_id in selected_ids:
+            # Per-room deep-clean switch overrides everything for that room
+            switch_id = f"switch.{device_id}_{_m}room_{area_id}_deep_clean"
+            switch_state = hass.states.get(switch_id)
+            if switch_state is not None and switch_state.state == "on":
+                strategy = STRATEGY_DEEP
+
+            # Per-room fan speed: escalate to the most intensive found
+            fan_sel_id = f"select.{device_id}_{_m}room_{area_id}_fan_speed"
+            fan_state = hass.states.get(fan_sel_id)
+            if fan_state is not None and fan_state.state in FAN_SPEEDS:
+                candidate = FAN_SPEED_REVERSE_MAP.get(fan_state.state, best_raw)
+                if _speed_order.get(
+                    FAN_SPEED_MAP.get(candidate, ""), -1
+                ) > _speed_order.get(FAN_SPEED_MAP.get(best_raw, ""), -1):
+                    best_raw = candidate
+
+            # Per-room strategy (only if deep not already locked in)
+            if strategy != STRATEGY_DEEP:
+                strat_sel_id = f"select.{device_id}_{_m}room_{area_id}_strategy"
+                strat_state = hass.states.get(strat_sel_id)
+                if strat_state is not None and strat_state.state in STRATEGY_REVERSE_MAP:
+                    room_strat = STRATEGY_REVERSE_MAP[strat_state.state]
+                    if room_strat != STRATEGY_DEFAULT and strategy == STRATEGY_DEFAULT:
+                        strategy = room_strat
+
+        area_ids_str = ",".join(selected_ids)
+        await self.coordinator.async_send_command(
+            self.coordinator.client.clean_map,
+            map_id=map_id,
+            area_ids=area_ids_str,
+            cleaning_parameter_set=best_raw,
+            strategy_mode=strategy,
+        )
+
+        # Reset all selection booleans after enqueuing the clean command
+        for area_id in selected_ids:
+            eid = room_selection_entity_id(device_id, map_id, area_id)
+            await hass.services.async_call(
+                "input_boolean", "turn_off", {"entity_id": eid}, blocking=False
+            )
 

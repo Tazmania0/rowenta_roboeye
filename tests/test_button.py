@@ -1,12 +1,13 @@
 """Unit tests for the button platform."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
 from custom_components.rowenta_roboeye.button import (
     RobEyeCleanAllButton,
+    RobEyeCleanSelectedButton,
     RobEyeGoHomeButton,
     RobEyeRoomCleanButton,
     RobEyeStopButton,
@@ -18,6 +19,7 @@ from custom_components.rowenta_roboeye.const import (
     STRATEGY_DEFAULT,
     STRATEGY_DEEP,
     STRATEGY_REVERSE_MAP,
+    room_selection_entity_id,
 )
 
 from .conftest import MOCK_AREAS, MOCK_STATUS
@@ -46,6 +48,8 @@ def _make_coordinator(status=None, areas=None, device_id="dev123", active_map_id
     coord.hass = MagicMock()
     coord.hass.states = MagicMock()
     coord.hass.states.get = MagicMock(return_value=None)
+    coord.hass.services = MagicMock()
+    coord.hass.services.async_call = AsyncMock()
     return coord
 
 
@@ -375,3 +379,195 @@ def test_build_room_button_entities_skips_empty_name():
     entities, ids = _build_room_button_entities(coord, entry, areas, set())
     assert len(entities) == 1
     assert entities[0]._attr_name == "Clean Hall"
+
+
+# ── RobEyeCleanSelectedButton ─────────────────────────────────────────
+
+
+def _make_selected_button(coord=None):
+    if coord is None:
+        coord = _make_coordinator()
+    btn = RobEyeCleanSelectedButton.__new__(RobEyeCleanSelectedButton)
+    object.__setattr__(btn, "coordinator", coord)
+    object.__setattr__(btn, "_attr_unique_id", "")
+    object.__setattr__(btn, "entity_id", "")
+    object.__setattr__(btn, "async_write_ha_state", MagicMock())
+    RobEyeCleanSelectedButton.__init__(btn, coord)
+    return btn
+
+
+def test_clean_selected_unique_id():
+    coord = _make_coordinator(device_id="abc")
+    btn = _make_selected_button(coord)
+    assert btn._attr_unique_id == "clean_selected_abc"
+
+
+def test_clean_selected_entity_id():
+    coord = _make_coordinator(device_id="abc")
+    btn = _make_selected_button(coord)
+    assert btn.entity_id == "button.abc_clean_selected_rooms"
+
+
+def test_clean_selected_unavailable_when_no_rooms_selected():
+    """Button is unavailable when no input_booleans are on."""
+    coord = _make_coordinator()
+    coord.hass.states.get.return_value = None
+    btn = _make_selected_button(coord)
+    assert btn.available is False
+
+
+def test_clean_selected_available_when_one_room_selected():
+    """Button is available when at least one input_boolean is on."""
+    coord = _make_coordinator()
+    device_id = coord.device_id
+    map_id = coord.active_map_id
+
+    on_state = MagicMock()
+    on_state.state = "on"
+
+    def _get_state(eid):
+        eid_30 = room_selection_entity_id(device_id, map_id, "3")
+        if eid == eid_30:
+            return on_state
+        return None
+
+    coord.hass.states.get.side_effect = _get_state
+    btn = _make_selected_button(coord)
+    assert btn.available is True
+
+
+@pytest.mark.asyncio
+async def test_clean_selected_no_rooms_selected_does_nothing():
+    """async_press does nothing when no rooms are selected."""
+    coord = _make_coordinator()
+    coord.hass.states.get.return_value = None
+    btn = _make_selected_button(coord)
+    await btn.async_press()
+    coord.async_send_command.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_clean_selected_sends_combined_area_ids():
+    """Selected rooms are sent as comma-separated area_ids in one command."""
+    coord = _make_coordinator()
+    device_id = coord.device_id
+    map_id = coord.active_map_id
+
+    on_state = MagicMock()
+    on_state.state = "on"
+
+    def _get_state(eid):
+        eid_3 = room_selection_entity_id(device_id, map_id, "3")
+        eid_11 = room_selection_entity_id(device_id, map_id, "11")
+        if eid in (eid_3, eid_11):
+            return on_state
+        return None
+
+    coord.hass.states.get.side_effect = _get_state
+    btn = _make_selected_button(coord)
+    await btn.async_press()
+
+    coord.async_send_command.assert_called_once()
+    kwargs = coord.async_send_command.call_args[1]
+    sent_ids = set(kwargs["area_ids"].split(","))
+    assert sent_ids == {"3", "11"}
+
+
+@pytest.mark.asyncio
+async def test_clean_selected_uses_most_intensive_fan_speed():
+    """Fan speed escalates to the most intensive selected room."""
+    coord = _make_coordinator(status={"cleaning_parameter_set": 2})
+    device_id = coord.device_id
+    map_id = coord.active_map_id
+    _m = f"map{map_id}_"
+
+    on_state = MagicMock()
+    on_state.state = "on"
+    eco_state = MagicMock()
+    eco_state.state = "eco"
+    high_state = MagicMock()
+    high_state.state = "high"
+    off_state = MagicMock()
+    off_state.state = "off"
+
+    def _get_state(eid):
+        eid_3 = room_selection_entity_id(device_id, map_id, "3")
+        eid_11 = room_selection_entity_id(device_id, map_id, "11")
+        if eid in (eid_3, eid_11):
+            return on_state
+        if eid == f"select.{device_id}_{_m}room_3_fan_speed":
+            return eco_state
+        if eid == f"select.{device_id}_{_m}room_11_fan_speed":
+            return high_state
+        if "deep_clean" in eid:
+            return off_state
+        return None
+
+    coord.hass.states.get.side_effect = _get_state
+    btn = _make_selected_button(coord)
+    await btn.async_press()
+
+    kwargs = coord.async_send_command.call_args[1]
+    assert kwargs["cleaning_parameter_set"] == "3"  # high
+
+
+@pytest.mark.asyncio
+async def test_clean_selected_deep_clean_switch_overrides_strategy():
+    """Deep-clean switch on one selected room forces STRATEGY_DEEP."""
+    coord = _make_coordinator()
+    device_id = coord.device_id
+    map_id = coord.active_map_id
+    _m = f"map{map_id}_"
+
+    on_state = MagicMock()
+    on_state.state = "on"
+    off_state = MagicMock()
+    off_state.state = "off"
+
+    def _get_state(eid):
+        eid_3 = room_selection_entity_id(device_id, map_id, "3")
+        if eid == eid_3:
+            return on_state
+        if eid == f"switch.{device_id}_{_m}room_3_deep_clean":
+            return on_state
+        if "deep_clean" in eid:
+            return off_state
+        return None
+
+    coord.hass.states.get.side_effect = _get_state
+    btn = _make_selected_button(coord)
+    await btn.async_press()
+
+    kwargs = coord.async_send_command.call_args[1]
+    assert kwargs["strategy_mode"] == STRATEGY_DEEP
+
+
+@pytest.mark.asyncio
+async def test_clean_selected_resets_booleans_after_press():
+    """All selection booleans are turned off after pressing clean."""
+    coord = _make_coordinator()
+    device_id = coord.device_id
+    map_id = coord.active_map_id
+
+    on_state = MagicMock()
+    on_state.state = "on"
+    off_state = MagicMock()
+    off_state.state = "off"
+
+    eid_3 = room_selection_entity_id(device_id, map_id, "3")
+
+    def _get_state(eid):
+        if eid == eid_3:
+            return on_state
+        if "deep_clean" in eid or "fan_speed" in eid or "strategy" in eid:
+            return off_state
+        return None
+
+    coord.hass.states.get.side_effect = _get_state
+    btn = _make_selected_button(coord)
+    await btn.async_press()
+
+    # input_boolean.turn_off should have been called for the selected room
+    coord.hass.services.async_call.assert_called_once_with(
+        "input_boolean", "turn_off", {"entity_id": eid_3}, blocking=False
+    )

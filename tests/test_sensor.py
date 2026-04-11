@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from custom_components.rowenta_roboeye.sensor import (
+    RobEyeSelectedRoomCountSensor,
     RobEyeStaticSensor,
     _format_date,
     _resolve_active_map_name,
@@ -17,6 +18,7 @@ from custom_components.rowenta_roboeye.sensor import (
     LIVE_SENSORS,
     SENSOR_HEALTH_SENSORS,
 )
+from custom_components.rowenta_roboeye.const import room_selection_entity_id
 from custom_components.rowenta_roboeye.entity import async_remove_stale_room_entities
 from homeassistant.helpers import entity_registry as _er
 
@@ -572,3 +574,101 @@ def test_schedule_sensor_state_counts_all_not_just_enabled():
     coord = _make_sched_coordinator()
     sensor = _make_schedule_sensor(coord)
     assert sensor.native_value == 1  # one entry, even though enabled=0
+
+
+# ── RobEyeSelectedRoomCountSensor ─────────────────────────────────────
+
+
+def _make_count_sensor(coord=None):
+    if coord is None:
+        coord = _make_coordinator()
+        coord.device_id = "dev123"
+        coord.active_map_id = "3"
+        coord.hass = MagicMock()
+        coord.hass.states = MagicMock()
+        coord.hass.states.get = MagicMock(return_value=None)
+    s = RobEyeSelectedRoomCountSensor.__new__(RobEyeSelectedRoomCountSensor)
+    s.coordinator = coord
+    s._attr_unique_id = f"selected_room_count_{coord.device_id}"
+    s._attr_name = "Selected Room Count"
+    s.entity_id = f"sensor.{coord.device_id}_selected_room_count"
+    return s
+
+
+def test_selected_room_count_zero_when_none_selected():
+    """Returns 0 when no input_booleans are on."""
+    sensor = _make_count_sensor()
+    assert sensor.native_value == 0
+
+
+def test_selected_room_count_counts_on_booleans():
+    """Returns count of input_booleans in 'on' state."""
+    coord = _make_coordinator()
+    coord.device_id = "dev123"
+    coord.active_map_id = "3"
+    coord.areas = [
+        {"id": 3,  "area_meta_data": '{"name":"Bedroom"}', "area_state": "clean"},
+        {"id": 11, "area_meta_data": '{"name":"Kitchen"}', "area_state": "clean"},
+    ]
+    coord.hass = MagicMock()
+    coord.hass.states = MagicMock()
+
+    on_state = MagicMock()
+    on_state.state = "on"
+    off_state = MagicMock()
+    off_state.state = "off"
+
+    eid_3 = room_selection_entity_id("dev123", "3", "3")
+    eid_11 = room_selection_entity_id("dev123", "3", "11")
+
+    def _get_state(eid):
+        if eid == eid_3:
+            return on_state
+        if eid == eid_11:
+            return off_state
+        return None
+
+    coord.hass.states.get.side_effect = _get_state
+    sensor = _make_count_sensor(coord)
+    assert sensor.native_value == 1
+
+
+def test_selected_room_count_all_rooms_selected():
+    """Returns count equal to number of rooms when all are on."""
+    coord = _make_coordinator()
+    coord.device_id = "dev123"
+    coord.active_map_id = "3"
+    coord.areas = [
+        {"id": 3,  "area_meta_data": '{"name":"Bedroom"}'},
+        {"id": 11, "area_meta_data": '{"name":"Kitchen"}'},
+    ]
+    coord.hass = MagicMock()
+    coord.hass.states = MagicMock()
+
+    on_state = MagicMock()
+    on_state.state = "on"
+    coord.hass.states.get.return_value = on_state
+
+    sensor = _make_count_sensor(coord)
+    assert sensor.native_value == 2
+
+
+def test_selected_room_count_skips_areas_without_id():
+    """Areas with no 'id' field are skipped."""
+    coord = _make_coordinator()
+    coord.device_id = "dev123"
+    coord.active_map_id = "3"
+    coord.areas = [
+        {"area_meta_data": '{"name":"No ID room"}'},
+        {"id": 5, "area_meta_data": '{"name":"Lounge"}'},
+    ]
+    coord.hass = MagicMock()
+    coord.hass.states = MagicMock()
+
+    on_state = MagicMock()
+    on_state.state = "on"
+    coord.hass.states.get.return_value = on_state
+
+    sensor = _make_count_sensor(coord)
+    # Only room with id=5 is counted
+    assert sensor.native_value == 1

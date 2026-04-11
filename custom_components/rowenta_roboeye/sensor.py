@@ -58,6 +58,7 @@ from .const import (
     SCHEDULE_DAYS,
     SCHEDULE_DAYS_FULL,
     SIGNAL_AREAS_UPDATED,
+    room_selection_entity_id,
 )
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity, async_remove_stale_room_entities
@@ -376,6 +377,9 @@ async def async_setup_entry(
     # Command queue status sensor
     entities.append(RobEyeQueueStatusSensor(coordinator))
 
+    # Selected room count sensor (used by dashboard "Clean Selected" button label)
+    entities.append(RobEyeSelectedRoomCountSensor(coordinator))
+
     # ── Per-room sensors (from current area list) ─────────────────────
     known_ids: set = set()
     room_entities, new_ids = _build_room_sensor_entities(
@@ -650,6 +654,39 @@ class RobEyeQueueStatusSensor(RobEyeEntity, SensorEntity):
             "queue": self.coordinator.command_queue_items,
             "recent_events": recent,
         }
+
+
+class RobEyeSelectedRoomCountSensor(RobEyeEntity, SensorEntity):
+    """Count of currently selected rooms for multi-room cleaning.
+
+    State: integer (0 = none selected).
+    Used in dashboard template: '▶ Clean Selected ({{ states(...) }})'
+    Updates on every coordinator poll (15s idle, 5s cleaning).
+    """
+
+    _attr_icon = "mdi:checkbox-multiple-marked-circle"
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(self, coordinator: RobEyeCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"selected_room_count_{coordinator.device_id}"
+        self._attr_name = "Selected Room Count"
+        self.entity_id = f"sensor.{coordinator.device_id}_selected_room_count"
+
+    @property
+    def native_value(self) -> int:
+        device_id = self.coordinator.device_id
+        map_id = self.coordinator.active_map_id
+        count = 0
+        for area in self.coordinator.areas:
+            area_id = area.get("id")
+            if area_id is None:
+                continue
+            eid = room_selection_entity_id(device_id, map_id, str(area_id))
+            state = self.coordinator.hass.states.get(eid)
+            if state is not None and state.state == "on":
+                count += 1
+        return count
 
 
 def _room_name_for_id(coordinator: RobEyeCoordinator, area_id: int) -> str:
