@@ -356,27 +356,37 @@ async def test_cleaning_command_waits_for_active_mode_to_finish_before_next(
         {"commands": [{"cmd_id": 101, "status": "done", "error_code": 0}]},
         {"commands": [{"cmd_id": 102, "status": "done", "error_code": 0}]},
     ]
+    # Provide status side-effects for cmd1's full active-operation wait
+    # (Phase1 + 3 Phase2 iterations) and enough for cmd2's Phase1 loop.
+    # Phase1 for cmd2 keeps polling until the 30 s deadline; we satisfy it
+    # by having it enter + exit the active mode (cleaning → ready, ready).
     mock_client.get_status.side_effect = [
+        # cmd1 Phase 1: enters active
         {"mode": "cleaning"},
+        # cmd1 Phase 2: cleaning → ready → ready (2 confirms)
+        {"mode": "cleaning"},
+        {"mode": "ready"},
+        {"mode": "ready"},
+        # cmd2 Phase 1: enters active then Phase 2 exits immediately
         {"mode": "cleaning"},
         {"mode": "ready"},
         {"mode": "ready"},
     ]
 
-    with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("asyncio.sleep", AsyncMock())
-        mock_client.clean_map.side_effect = _clean_map
-        task = await _start_worker(coordinator)
-        await coordinator.async_send_command(
-            mock_client.clean_map, map_id="3", area_ids="3"
-        )
-        await coordinator.async_send_command(
-            mock_client.clean_map, map_id="3", area_ids="11"
-        )
-        await _drain_and_cancel(coordinator, task)
+    coordinator._interruptible_sleep = AsyncMock()
+    mock_client.clean_map.side_effect = _clean_map
+    task = await _start_worker(coordinator)
+    await coordinator.async_send_command(
+        mock_client.clean_map, map_id="3", area_ids="3"
+    )
+    await coordinator.async_send_command(
+        mock_client.clean_map, map_id="3", area_ids="11"
+    )
+    await _drain_and_cancel(coordinator, task)
 
     assert order == ["3", "11"]
-    assert mock_client.get_status.call_count == 4
+    # Both commands ran the full active-operation wait: 4 polls for cmd1 + 3 for cmd2
+    assert mock_client.get_status.call_count == 7
 
 
 @pytest.mark.asyncio
@@ -440,13 +450,17 @@ async def test_go_home_drains_pending_cleans(coordinator, mock_client):
 
 @pytest.mark.asyncio
 async def test_immediate_command_interrupts_active_operation_wait(coordinator, mock_client):
-    """Queued immediate command should break active-operation wait loop promptly."""
+    """Queued immediate command should break active-operation wait loop promptly.
+
+    Phase 1 of _wait_for_active_operation_end checks _has_immediate_command_pending()
+    at the START of each iteration, before the get_status call.  So when a priority-0
+    command is already in the queue the function returns without polling at all.
+    """
     mock_client.get_status.return_value = {"mode": "cleaning"}
-    with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("asyncio.sleep", AsyncMock())
-        await coordinator._command_queue.put((0, 1, coordinator.client.stop, (), {}))
-        await coordinator._wait_for_active_operation_end()
-    mock_client.get_status.assert_called_once()
+    coordinator._interruptible_sleep = AsyncMock()
+    await coordinator._command_queue.put((0, 1, coordinator.client.stop, (), {}))
+    await coordinator._wait_for_active_operation_end()
+    mock_client.get_status.assert_not_called()
 
 
 # ── Convenience properties ────────────────────────────────────────────

@@ -192,6 +192,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._event_log_seeded: bool = False
         self._recent_events: list[dict[str, Any]] = []  # last 50 top-level events
 
+        # Wakeup event: set whenever an immediate (priority-0) command is enqueued
+        # so the worker exits poll-interval sleeps without waiting the full 5 s.
+        self._immediate_wake: asyncio.Event = asyncio.Event()
+
     def _is_immediate_command(self, coro_func: Any) -> bool:
         """Return True for commands that must bypass normal queue waiting."""
         command_name = getattr(coro_func, "__name__", "")
@@ -211,6 +215,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except AttributeError:
             return False
         return any(priority == 0 for priority, *_rest in pending_items)
+
+    async def _interruptible_sleep(self, seconds: float) -> None:
+        """Sleep for up to `seconds`, waking immediately if an immediate command arrives."""
+        try:
+            await asyncio.wait_for(self._immediate_wake.wait(), timeout=seconds)
+            self._immediate_wake.clear()
+        except asyncio.TimeoutError:
+            pass
 
     # ── Device identifier ─────────────────────────────────────────────
 
@@ -969,7 +981,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         return
             except CannotConnect:
                 return
-            await asyncio.sleep(CMD_POLL_INTERVAL_S)
+            await self._interruptible_sleep(CMD_POLL_INTERVAL_S)
         LOGGER.warning(
             "RobEye: cmd_id=%s did not complete within %ds — moving to next",
             cmd_id, CMD_POLL_TIMEOUT_S,
@@ -1012,7 +1024,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 LOGGER.debug(
                     "RobEye: get_status failed while waiting for active mode start; retrying"
                 )
-            await asyncio.sleep(CMD_POLL_INTERVAL_S)
+            await self._interruptible_sleep(CMD_POLL_INTERVAL_S)
 
         if not entered_active:
             LOGGER.debug(
@@ -1042,7 +1054,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 LOGGER.debug(
                     "RobEye: get_status failed while waiting for active operation end; retrying"
                 )
-            await asyncio.sleep(CMD_POLL_INTERVAL_S)
+            await self._interruptible_sleep(CMD_POLL_INTERVAL_S)
 
     async def async_send_command(
         self, coro_func, *args: Any, label: str = "", **kwargs: Any
@@ -1212,6 +1224,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._command_queue.put(
             (0 if is_immediate else 1, self._command_sequence, coro_func, args, kwargs)
         )
+        if is_immediate:
+            # Wake the worker out of any in-progress poll sleep so the command
+            # reaches the robot without waiting up to CMD_POLL_INTERVAL_S.
+            self._immediate_wake.set()
 
         if is_resume and saved:
             for _sp, _ss, _sf, _sa, _sk in saved:
@@ -1223,6 +1239,31 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "RobEye resume: re-queued %s",
                     getattr(_sf, "__name__", "command"),
                 )
+
+        if hasattr(self, "async_update_listeners"):
+            self.async_update_listeners()
+
+    async def async_advance_to_next_job(self) -> None:
+        """Re-enqueue saved jobs for execution, discarding the job that was stopped.
+
+        Called by async_stop (vacuum card) when there are pending jobs: the
+        current cleaning task is abandoned and the next queued job runs instead.
+        Clears pause state so the robot is not left in a "paused" limbo.
+        """
+        saved = self._paused_jobs[:]
+        self._paused_jobs = []
+        self._is_paused = False
+        self._paused_clean_command = None  # discard stopped job, not resumable
+
+        for _sp, _ss, _sf, _sa, _sk in saved:
+            self._command_sequence += 1
+            await self._command_queue.put(
+                (_sp, self._command_sequence, _sf, _sa, _sk)
+            )
+            LOGGER.debug(
+                "RobEye advance: re-queued %s as next job",
+                getattr(_sf, "__name__", "command"),
+            )
 
         if hasattr(self, "async_update_listeners"):
             self.async_update_listeners()
