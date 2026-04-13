@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time as _time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -180,6 +181,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._is_paused: bool = False
         self._paused_jobs: list[tuple] = []
         self._paused_fan_speed: str | None = None
+
+        # Monotonic timestamp when the current cleaning session started.
+        # Used by queue_eta_seconds to subtract elapsed time from the total estimate.
+        self._clean_session_start_time: float | None = None
 
         # Event log incremental polling state
         self._last_event_log_id: int = 0
@@ -377,6 +382,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._session_complete = False
                 self._last_live_map = None
                 self._last_rob_pose_ts = 0
+                self._clean_session_start_time = _time.monotonic()
                 LOGGER.debug("Cleaning session started — state reset")
 
             if was_cleaning and now_docked and not self._session_complete:
@@ -389,6 +395,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._last_session_grid.get("map_id", self.active_map_id)
                 )
                 self._session_complete = True
+                self._clean_session_start_time = None
                 LOGGER.info(
                     "Cleaning session complete — frozen grid=%s cells, path=%d points, map_id=%s",
                     self._last_session_grid.get("size_x", 0),
@@ -971,19 +978,61 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _wait_for_active_operation_end(self) -> None:
         """Wait until robot leaves active modes before dispatching next queued command.
 
-        /get/command_result confirms command acceptance/completion, but the robot can
-        continue physically cleaning for much longer. For cleaning/go-home operations,
-        keep the queue blocked until /get/status mode is no longer cleaning/go_home.
-
-        This poll intentionally has no hard timeout because cleaning duration depends
-        on home size. Connectivity errors are treated as transient; the queue retries.
+        Two-phase approach:
+        Phase 1 – wait up to 30 s for the robot to *enter* cleaning/go_home mode.
+                  This bridges the gap between command acceptance (fast) and the robot
+                  physically starting to clean (up to several seconds later).  Without
+                  this phase the worker would see mode=ready immediately after dispatch
+                  and fire the next queued command while the robot is still spinning up.
+        Phase 2 – wait (no hard timeout) for the robot to *exit* cleaning/go_home mode.
+                  Requires 2 consecutive non-active polls (~10 s) before declaring done.
+                  This prevents the worker from racing ahead during brief inter-room
+                  transitions where the robot may momentarily report mode=ready between
+                  rooms in a multi-room session.
         """
+        _ENTER_TIMEOUT_S = 30
+        _EXIT_CONFIRM_POLLS = 2  # consecutive non-active polls before declaring done
+
+        # Phase 1: wait for the robot to enter an active mode.
+        entered_active = False
+        deadline = asyncio.get_event_loop().time() + _ENTER_TIMEOUT_S
+        while asyncio.get_event_loop().time() < deadline:
+            if self._has_immediate_command_pending():
+                LOGGER.debug(
+                    "RobEye: immediate command pending; aborting enter-active wait"
+                )
+                return
+            try:
+                status = await self.client.get_status()
+                mode = status.get("mode", "")
+                if mode in (MODE_CLEANING, MODE_GO_HOME):
+                    entered_active = True
+                    break
+            except CannotConnect:
+                LOGGER.debug(
+                    "RobEye: get_status failed while waiting for active mode start; retrying"
+                )
+            await asyncio.sleep(CMD_POLL_INTERVAL_S)
+
+        if not entered_active:
+            LOGGER.debug(
+                "RobEye: robot did not enter active mode within %ds — skipping exit wait",
+                _ENTER_TIMEOUT_S,
+            )
+            return
+
+        # Phase 2: wait for the robot to fully exit active mode.
+        non_active_count = 0
         while True:
             try:
                 status = await self.client.get_status()
                 mode = status.get("mode", "")
                 if mode not in (MODE_CLEANING, MODE_GO_HOME):
-                    return
+                    non_active_count += 1
+                    if non_active_count >= _EXIT_CONFIRM_POLLS:
+                        return
+                else:
+                    non_active_count = 0
                 if self._has_immediate_command_pending():
                     LOGGER.debug(
                         "RobEye: immediate command pending; interrupting active-operation wait"
@@ -1106,22 +1155,54 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._paused_clean_command = None
                 self._paused_fan_speed = None
 
+                # Drain any commands that were added while paused (e.g. user
+                # pressed a room button between stop and resume).  They must
+                # come *after* the paused job and the previously-saved jobs so
+                # the queue order is: paused → saved → newly-added-while-paused.
+                # Re-assign fresh sequence numbers to every item so the
+                # PriorityQueue sorts them in the intended order regardless of
+                # their original (lower) sequence values.
+                newly_added: list[tuple] = []
+                while not self._command_queue.empty():
+                    try:
+                        item = self._command_queue.get_nowait()
+                        self._command_queue.task_done()
+                        newly_added.append(item)
+                    except asyncio.QueueEmpty:
+                        break
+
                 resume_kwargs = dict(paused_kwargs)
+                # 1. Paused job first.
                 self._command_sequence += 1
                 await self._command_queue.put(
                     (1, self._command_sequence, paused_coro, (), resume_kwargs)
                 )
-                for saved_item in saved:
-                    await self._command_queue.put(saved_item)
+                # 2. Jobs that were pending before stop was pressed.
+                for _sp, _ss, _sf, _sa, _sk in saved:
+                    self._command_sequence += 1
+                    await self._command_queue.put(
+                        (_sp, self._command_sequence, _sf, _sa, _sk)
+                    )
                     LOGGER.debug(
                         "RobEye resume: re-queued %s",
-                        getattr(saved_item[2], "__name__", "command"),
+                        getattr(_sf, "__name__", "command"),
+                    )
+                # 3. Commands added while paused — come last.
+                for _np, _ns, _nf, _na, _nk in newly_added:
+                    self._command_sequence += 1
+                    await self._command_queue.put(
+                        (_np, self._command_sequence, _nf, _na, _nk)
+                    )
+                    LOGGER.debug(
+                        "RobEye resume: re-queued (added while paused) %s",
+                        getattr(_nf, "__name__", "command"),
                     )
                 LOGGER.debug(
                     "RobEye resume: re-dispatched paused clean_map "
-                    "(area_ids=%s) ahead of %d saved job(s)",
+                    "(area_ids=%s) ahead of %d saved + %d newly-added job(s)",
                     resume_kwargs.get("area_ids", ""),
                     len(saved),
+                    len(newly_added),
                 )
                 if hasattr(self, "async_update_listeners"):
                     self.async_update_listeners()
@@ -1133,11 +1214,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         if is_resume and saved:
-            for saved_item in saved:
-                await self._command_queue.put(saved_item)
+            for _sp, _ss, _sf, _sa, _sk in saved:
+                self._command_sequence += 1
+                await self._command_queue.put(
+                    (_sp, self._command_sequence, _sf, _sa, _sk)
+                )
                 LOGGER.debug(
                     "RobEye resume: re-queued %s",
-                    getattr(saved_item[2], "__name__", "command"),
+                    getattr(_sf, "__name__", "command"),
                 )
 
         if hasattr(self, "async_update_listeners"):
@@ -1291,12 +1375,17 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def queue_eta_seconds(self) -> int | None:
-        """Estimated seconds to complete all queued cleaning commands.
+        """Estimated seconds remaining to complete all queued cleaning commands.
 
-        Sums estimated_cleaning_time from /get/areas for each queued room.
-        Returns None if no area data or no clean commands queued.
+        Sums average_cleaning_time (or estimated_cleaning_time as fallback) from
+        /get/areas for every room in the HA command queue, then subtracts the time
+        already elapsed in the current cleaning session so the value counts down.
 
-        estimated_cleaning_time in /get/areas is in milliseconds.
+        When the robot is cleaning but was started from the native app (no HA queue
+        entry), falls back to area_ids reported in /get/status.
+
+        Returns None when no clean commands are found (queue empty, robot idle).
+        Times are in milliseconds from the API; result is in whole seconds.
         """
         try:
             pending_items = sorted(list(self._command_queue._queue))
@@ -1306,33 +1395,78 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         items = []
         if self._active_command is not None:
             items.append(self._active_command)
+        # Also include the inflight clean command when the active slot holds a
+        # control command (stop/go_home/resume) so the paused room still contributes
+        # to the total estimate.
+        if self._inflight_clean_command is not None:
+            _ic_coro, _ic_kwargs, _ = self._inflight_clean_command
+            items.append((1, 0, _ic_coro, (), _ic_kwargs))
+        if self._paused_clean_command is not None:
+            _pc_coro, _pc_kwargs, _ = self._paused_clean_command
+            items.append((1, 0, _pc_coro, (), _pc_kwargs))
         items.extend(pending_items)
+        for _priority, _seq, coro_func, args, kwargs in self._paused_jobs:
+            items.append((_priority, _seq, coro_func, args, kwargs))
 
         total_ms = 0
         found = False
+        seen_area_ids: set[int] = set()
+
+        def _add_area_time(area_id: int) -> None:
+            nonlocal total_ms, found
+            if area_id in seen_area_ids:
+                return
+            seen_area_ids.add(area_id)
+            for area in self.areas:
+                if area.get("id") == area_id:
+                    stats = area.get("statistics", {})
+                    t = stats.get("average_cleaning_time") or \
+                        stats.get("estimated_cleaning_time", 0)
+                    total_ms += t or 0
+                    found = True
+                    break
+
         for _priority, _seq, coro_func, args, kwargs in items:
             name = getattr(coro_func, "__name__", "")
-            area_ids_str = str(kwargs.get("area_ids", ""))
             if name not in ("clean_map", "clean_all"):
                 continue
-            found = True
+            area_ids_str = str(kwargs.get("area_ids", ""))
             if not area_ids_str:
+                # clean_all with no explicit area_ids — mark found so we don't
+                # fall through to the native-app fallback unnecessarily.
+                found = True
                 continue
             for area_id_s in area_ids_str.split(","):
                 try:
-                    area_id = int(area_id_s.strip())
+                    _add_area_time(int(area_id_s.strip()))
                 except ValueError:
                     continue
-                for area in self.areas:
-                    if area.get("id") == area_id:
-                        stats = area.get("statistics", {})
-                        # Use average if available, else estimated
-                        t = stats.get("average_cleaning_time") or \
-                            stats.get("estimated_cleaning_time", 0)
-                        total_ms += t
-                        break
 
-        return int(total_ms / 1000) if found else None
+        # Fallback: robot is cleaning but session was not started from the HA queue
+        # (e.g. native app or schedule).  Read area_ids from /get/status.
+        if not found:
+            mode = str(self.status.get("mode", ""))
+            if mode == MODE_CLEANING:
+                raw_ids = self.status.get("area_ids", [])
+                if isinstance(raw_ids, list):
+                    for raw_id in raw_ids:
+                        try:
+                            _add_area_time(int(raw_id))
+                        except (ValueError, TypeError):
+                            continue
+
+        if not found:
+            return None
+
+        total_s = int(total_ms / 1000)
+
+        # Subtract time already spent in the current cleaning session so the
+        # sensor counts down rather than showing a static forecast.
+        if self._clean_session_start_time is not None:
+            elapsed_s = int(_time.monotonic() - self._clean_session_start_time)
+            total_s = max(0, total_s - elapsed_s)
+
+        return total_s
 
     def _resolve_map_name(self, map_id: str) -> str:
         """Return display name for a map_id from available_maps."""
