@@ -203,21 +203,28 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
             )
 
     async def async_stop(self, **kwargs: Any) -> None:
-        """Stop immediately then return to dock (full stop — does not save state for resume).
+        """Stop current job; advance to next queued job if any, otherwise go home.
 
-        Sends stop first, then go_home. The go_home path in async_send_command
-        discards any _paused_jobs so no resume is possible after this.
-        Use async_pause for stop-in-place with resume capability.
+        Sends stop (priority 0 — immediate). async_send_command(stop) drains any
+        pending queue items into _paused_jobs. If there are saved jobs, they are
+        re-enqueued so the robot continues with the next task. If the queue was
+        empty the robot is sent home instead.
+        Use async_pause to stop-in-place with the option to resume the same job.
         """
-        LOGGER.debug("async_stop: full stop + go home")
+        LOGGER.debug("async_stop: stop current job")
         await self.coordinator.async_send_command(
             self.coordinator.client.stop,
-            label="stop(full)",
+            label="stop(advance)",
         )
-        await self.coordinator.async_send_command(
-            self.coordinator.client.go_home,
-            label="go_home",
-        )
+        if self.coordinator._paused_jobs:
+            LOGGER.debug("async_stop: pending jobs found — advancing to next")
+            await self.coordinator.async_advance_to_next_job()
+        else:
+            LOGGER.debug("async_stop: no pending jobs — going home")
+            await self.coordinator.async_send_command(
+                self.coordinator.client.go_home,
+                label="go_home",
+            )
 
     async def async_pause(self, **kwargs: Any) -> None:
         """Pause cleaning — stop in place, save pending jobs for resume.

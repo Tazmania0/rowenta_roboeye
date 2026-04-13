@@ -28,6 +28,8 @@ def _make_vacuum(status: dict):
     coord.client.stop = AsyncMock()
     coord.client.go_home = AsyncMock()
     coord.client.set_fan_speed = AsyncMock()
+    coord._paused_jobs = []
+    coord.async_advance_to_next_job = AsyncMock()
 
     vac = RobEyeVacuumEntity.__new__(RobEyeVacuumEntity)
     vac.coordinator = coord
@@ -97,13 +99,28 @@ async def test_async_start_defaults_to_normal_if_no_fan_speed():
 # ── Service: stop ─────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_async_stop():
-    """async_stop sends stop then go_home (full stop — discards paused jobs)."""
+async def test_async_stop_no_pending_jobs_goes_home():
+    """async_stop with an empty queue: stop then go_home."""
     vac, coord = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    coord._paused_jobs = []  # no pending jobs after stop drains the queue
     await vac.async_stop()
     assert coord.async_send_command.call_count == 2
     assert coord.async_send_command.call_args_list[0][0][0] is coord.client.stop
     assert coord.async_send_command.call_args_list[1][0][0] is coord.client.go_home
+
+
+@pytest.mark.asyncio
+async def test_async_stop_with_pending_jobs_advances():
+    """async_stop when there are queued jobs: stop then advance to next job (no go_home)."""
+    vac, coord = _make_vacuum({"mode": "cleaning", "charging": "unconnected", "battery_level": 80, "cleaning_parameter_set": 2})
+    # Simulate that async_send_command(stop) drained one pending job into _paused_jobs
+    coord._paused_jobs = [("sentinel_job",)]
+    await vac.async_stop()
+    # Only stop is sent via async_send_command; go_home is NOT sent
+    coord.async_send_command.assert_called_once_with(
+        coord.client.stop, label="stop(advance)"
+    )
+    coord.async_advance_to_next_job.assert_called_once()
 
 
 # ── Service: return_to_base ───────────────────────────────────────────
