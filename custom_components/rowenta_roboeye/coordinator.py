@@ -26,6 +26,7 @@ from .api import CannotConnect, RobEyeApiClient
 from .const import (
     AREA_STATE_BLOCKING,
     AREA_TYPE_AVOIDANCE,
+    CHARGING_CHARGING,
     CMD_POLL_INTERVAL_S,
     CMD_POLL_TIMEOUT_S,
     DATA_AREAS,
@@ -56,10 +57,13 @@ from .const import (
     EVENT_DUSTBIN_MISSING,
     EVENT_ROBOT_LIFTED,
     EVENT_TYPE_LABELS,
+    IMMEDIATE_COMMAND_NAMES,
     LOGGER,
     MAX_POLL_FAILURES,
     MODE_CLEANING,
     MODE_GO_HOME,
+    MODE_RECHARGE_CONTINUE_POLL_S,
+    MODE_RECHARGE_CONTINUE_WAIT_S,
     QUEUE_POST_DOCK_DELAY_S,
     SCAN_INTERVAL_AREAS,
     SCAN_INTERVAL_EVENT_LOG,
@@ -800,6 +804,25 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Fan speed API value ("1"–"4") that was active when the robot was paused."""
         return self._paused_fan_speed
 
+    @property
+    def is_recharging_mid_clean(self) -> bool:
+        """True when the robot is docked charging due to low battery mid-clean.
+
+        Confirmed state (2026-04-14):
+          mode=cleaning + charging=charging
+        This persists for the entire charge cycle (observed: ~100 minutes).
+        cmd_id stays "executing" throughout — never aborts, never changes.
+
+        Distinct from:
+          Normal cleaning:  mode=cleaning + charging=unconnected
+          Normal docked:    mode=ready    + charging=charging
+        """
+        status = self.status
+        return (
+            status.get("mode") == MODE_CLEANING
+            and status.get("charging") == CHARGING_CHARGING
+        )
+
     # ── Command queue ─────────────────────────────────────────────────
 
     def async_start_command_worker(self) -> None:
@@ -916,12 +939,40 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         that exact command — eliminates ambiguity if commands overlap.
         If cmd_id is None, falls back to checking whether any command is executing.
 
-        Polls every CMD_POLL_INTERVAL_S (5s) for up to CMD_POLL_TIMEOUT_S (30s).
-        Robot operations (return to dock) take 10-15s.
-        Proceeds on CannotConnect or timeout — never blocks the queue forever.
+        Special case — recharge-and-continue (Fix B, confirmed 2026-04-14):
+          mode=cleaning + charging=charging means the robot is docked charging
+          mid-clean. The cmd_id stays "executing" for the entire charge cycle
+          (~100 min observed). We must NOT time out — extend the deadline to
+          MODE_RECHARGE_CONTINUE_WAIT_S (3 h) and poll slowly (every 30 s)
+          until the robot undocks and coordinator data shows normal cleaning.
+
+        Normal operation:
+          Polls every CMD_POLL_INTERVAL_S (5 s) up to CMD_POLL_TIMEOUT_S (30 s).
+          Proceeds on CannotConnect or timeout — never blocks the queue forever.
         """
         deadline = asyncio.get_event_loop().time() + CMD_POLL_TIMEOUT_S
-        while asyncio.get_event_loop().time() < deadline:
+        while True:
+            # ── Fix B: detect recharge-and-continue ──────────────────
+            if self.is_recharging_mid_clean:
+                LOGGER.info(
+                    "RobEye: recharge-and-continue active "
+                    "(mode=cleaning+charging=charging) — extending wait to %ds",
+                    int(MODE_RECHARGE_CONTINUE_WAIT_S),
+                )
+                # Reset deadline; poll slowly to avoid hammering robot while charging
+                deadline = (
+                    asyncio.get_event_loop().time() + MODE_RECHARGE_CONTINUE_WAIT_S
+                )
+                await asyncio.sleep(MODE_RECHARGE_CONTINUE_POLL_S)
+                continue
+
+            if asyncio.get_event_loop().time() > deadline:
+                LOGGER.warning(
+                    "RobEye: cmd_id=%s did not complete within timeout — moving to next",
+                    cmd_id,
+                )
+                return
+
             # Exit immediately so the worker can dispatch an urgent stop/go_home.
             if self._has_immediate_command_pending():
                 LOGGER.debug(
@@ -982,10 +1033,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except CannotConnect:
                 return
             await self._interruptible_sleep(CMD_POLL_INTERVAL_S)
-        LOGGER.warning(
-            "RobEye: cmd_id=%s did not complete within %ds — moving to next",
-            cmd_id, CMD_POLL_TIMEOUT_S,
-        )
 
     async def _wait_for_active_operation_end(self) -> None:
         """Wait until robot leaves active modes before dispatching next queued command.
@@ -1086,7 +1133,33 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         /set/stop and /set/clean_start_or_continue and /set/go_home are all
         dispatched at priority 0 (immediate), ahead of normal clean commands.
+
+        modify_area and set_fan_speed bypass the queue entirely (Fix A):
+          These write per-room settings to the robot's saved map.  They are not
+          cleaning operations and must not be delayed by pending clean jobs.
+          Confirmed: when queued during low battery they are skipped
+          (action_skipped type_id=1200 info=5).
         """
+        _label = label or getattr(coro_func, "__name__", "command")
+        func_name = getattr(coro_func, "__name__", "")
+
+        # ── Fix A: Immediate bypass for settings commands ─────────────
+        if func_name in IMMEDIATE_COMMAND_NAMES:
+            LOGGER.debug("RobEye immediate (bypass queue): %s", _label)
+            try:
+                response = await coro_func(*args, **kwargs)
+                if isinstance(response, dict) and response.get("error_code", 0) != 0:
+                    LOGGER.error(
+                        "RobEye %s failed: error_code=%s tag=%s",
+                        _label,
+                        response.get("error_code"),
+                        response.get("error_tag", ""),
+                    )
+                await self.async_request_refresh()
+            except CannotConnect as err:
+                LOGGER.error("RobEye immediate command %s failed: %s", _label, err)
+            return
+
         is_stop = (
             coro_func is self.client.stop
             or getattr(coro_func, "__name__", "") == "stop"
@@ -1419,15 +1492,25 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Estimated seconds remaining to complete all queued cleaning commands.
 
         Sums average_cleaning_time (or estimated_cleaning_time as fallback) from
-        /get/areas for every room in the HA command queue, then subtracts the time
-        already elapsed in the current cleaning session so the value counts down.
+        /get/areas for every room in every queued job.  The same room queued in
+        multiple jobs is counted multiple times — e.g. the same 3-room job queued
+        twice gives 2× the total (Fix C: removed cross-job deduplication).
+
+        Then subtracts the time already elapsed in the current cleaning session
+        so the value counts down.
 
         When the robot is cleaning but was started from the native app (no HA queue
         entry), falls back to area_ids reported in /get/status.
 
-        Returns None when no clean commands are found (queue empty, robot idle).
+        Returns None when:
+          - No clean commands are found (queue empty, robot idle).
+          - Robot is in recharge-and-continue cycle (time indeterminate, Fix B).
         Times are in milliseconds from the API; result is in whole seconds.
         """
+        # Fix B: ETA is indeterminate during recharge-and-continue
+        if self.is_recharging_mid_clean:
+            return None
+
         try:
             pending_items = sorted(list(self._command_queue._queue))
         except AttributeError:
@@ -1449,37 +1532,38 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for _priority, _seq, coro_func, args, kwargs in self._paused_jobs:
             items.append((_priority, _seq, coro_func, args, kwargs))
 
+        # Build area_id → time lookup once (milliseconds from /get/areas).
+        area_time_ms: dict[int, int] = {}
+        for area in self.areas:
+            aid = area.get("id")
+            try:
+                area_id = int(aid)
+            except (TypeError, ValueError):
+                continue
+            stats = area.get("statistics", {}) or {}
+            t = (
+                stats.get("average_cleaning_time")
+                or stats.get("estimated_cleaning_time")
+                or 0
+            )
+            area_time_ms[area_id] = int(t)
+
         total_ms = 0
         found = False
-        seen_area_ids: set[int] = set()
-
-        def _add_area_time(area_id: int) -> None:
-            nonlocal total_ms, found
-            if area_id in seen_area_ids:
-                return
-            seen_area_ids.add(area_id)
-            for area in self.areas:
-                if area.get("id") == area_id:
-                    stats = area.get("statistics", {})
-                    t = stats.get("average_cleaning_time") or \
-                        stats.get("estimated_cleaning_time", 0)
-                    total_ms += t or 0
-                    found = True
-                    break
 
         for _priority, _seq, coro_func, args, kwargs in items:
             name = getattr(coro_func, "__name__", "")
             if name not in ("clean_map", "clean_all"):
                 continue
+            found = True
             area_ids_str = str(kwargs.get("area_ids", ""))
             if not area_ids_str:
-                # clean_all with no explicit area_ids — mark found so we don't
-                # fall through to the native-app fallback unnecessarily.
-                found = True
+                # clean_all with no explicit area_ids — sum all areas
+                total_ms += sum(area_time_ms.values())
                 continue
             for area_id_s in area_ids_str.split(","):
                 try:
-                    _add_area_time(int(area_id_s.strip()))
+                    total_ms += area_time_ms.get(int(area_id_s.strip()), 0)
                 except ValueError:
                     continue
 
@@ -1492,7 +1576,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if isinstance(raw_ids, list):
                     for raw_id in raw_ids:
                         try:
-                            _add_area_time(int(raw_id))
+                            total_ms += area_time_ms.get(int(raw_id), 0)
+                            found = True
                         except (ValueError, TypeError):
                             continue
 

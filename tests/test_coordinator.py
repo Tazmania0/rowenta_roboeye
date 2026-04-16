@@ -1380,3 +1380,186 @@ async def test_resume_worker_dispatches_paused_clean_map(coordinator, mock_clien
     # And it must use the original room kwargs
     call_kwargs = mock_client.clean_map.call_args.kwargs
     assert call_kwargs.get("area_ids") == "11"
+
+
+# ── Fix B: is_recharging_mid_clean ────────────────────────────────────
+
+def test_is_recharging_mid_clean_true(coordinator):
+    """mode=cleaning + charging=charging → recharge-and-continue detected."""
+    coordinator.data = {DATA_STATUS: {
+        "mode": "cleaning", "charging": "charging", "battery_level": 19
+    }}
+    assert coordinator.is_recharging_mid_clean is True
+
+
+def test_is_recharging_mid_clean_false_normal_cleaning(coordinator):
+    """Normal cleaning (unconnected) must NOT be flagged as recharging."""
+    coordinator.data = {DATA_STATUS: {
+        "mode": "cleaning", "charging": "unconnected", "battery_level": 80
+    }}
+    assert coordinator.is_recharging_mid_clean is False
+
+
+def test_is_recharging_mid_clean_false_docked(coordinator):
+    """Normal docked state must NOT be flagged as recharging mid-clean."""
+    coordinator.data = {DATA_STATUS: {
+        "mode": "ready", "charging": "charging", "battery_level": 50
+    }}
+    assert coordinator.is_recharging_mid_clean is False
+
+
+@pytest.mark.asyncio
+async def test_wait_for_robot_idle_extends_during_recharge(coordinator, mock_client):
+    """_wait_for_robot_idle resets its deadline and polls slowly during recharge.
+
+    Three iterations: first two simulate recharge state (coordinator.data shows
+    mode=cleaning+charging=charging), the third shows normal cleaning so the
+    recharge branch exits and normal cmd_id polling resumes.
+    The command result returns "done" immediately so the function returns.
+    """
+    poll_count = 0
+
+    original_sleep = asyncio.sleep
+
+    async def fake_sleep(seconds):
+        nonlocal poll_count
+        poll_count += 1
+        # After two slow recharge polls, flip coordinator to normal cleaning
+        if poll_count >= 2:
+            coordinator.data = {DATA_STATUS: {
+                "mode": "cleaning", "charging": "unconnected", "battery_level": 60
+            }}
+
+    coordinator.data = {DATA_STATUS: {
+        "mode": "cleaning", "charging": "charging", "battery_level": 25
+    }}
+    mock_client.get_command_result.return_value = {
+        "commands": [{"cmd_id": 212, "status": "done", "error_code": 0}]
+    }
+
+    import unittest.mock as _mock
+    with _mock.patch("asyncio.sleep", fake_sleep):
+        await coordinator._wait_for_robot_idle(cmd_id=212)
+
+    # Recharge branch polled at least once before falling through to cmd_id check
+    assert poll_count >= 1
+
+
+# ── Fix A: modify_area / set_fan_speed bypass queue ───────────────────
+
+@pytest.mark.asyncio
+async def test_modify_area_bypasses_queue(coordinator, mock_client):
+    """modify_area fires immediately, never enters the serial command queue."""
+    coordinator.async_request_refresh = AsyncMock()
+    mock_client.modify_area.return_value = {"cmd_id": 99, "error_code": 0}
+    # Give modify_area the right __name__
+    mock_client.modify_area.__name__ = "modify_area"
+
+    await coordinator.async_send_command(
+        mock_client.modify_area,
+        map_id="3", area_id="10", cleaning_parameter_set="2",
+    )
+
+    mock_client.modify_area.assert_called_once_with(
+        map_id="3", area_id="10", cleaning_parameter_set="2"
+    )
+    # Queue must remain empty — nothing was enqueued
+    assert coordinator._command_queue.empty()
+    coordinator.async_request_refresh.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_set_fan_speed_bypasses_queue(coordinator, mock_client):
+    """set_fan_speed fires immediately, never enters the serial command queue."""
+    coordinator.async_request_refresh = AsyncMock()
+    mock_client.set_fan_speed.return_value = {"cmd_id": 100, "error_code": 0}
+    mock_client.set_fan_speed.__name__ = "set_fan_speed"
+
+    await coordinator.async_send_command(
+        mock_client.set_fan_speed, cleaning_parameter_set="3"
+    )
+
+    mock_client.set_fan_speed.assert_called_once_with(cleaning_parameter_set="3")
+    assert coordinator._command_queue.empty()
+    coordinator.async_request_refresh.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_modify_area_error_logged_not_raised(coordinator, mock_client):
+    """Non-zero error_code from modify_area is logged, not raised."""
+    coordinator.async_request_refresh = AsyncMock()
+    mock_client.modify_area.return_value = {"cmd_id": 0, "error_code": 5, "error_tag": "busy"}
+    mock_client.modify_area.__name__ = "modify_area"
+
+    # Must not raise
+    await coordinator.async_send_command(mock_client.modify_area, area_id="10")
+    mock_client.modify_area.assert_called_once()
+
+
+# ── Fix C: queue_eta_seconds sums ALL queued jobs ─────────────────────
+
+@pytest.mark.asyncio
+async def test_queue_eta_sums_all_queued_jobs(coordinator):
+    """The same 3-room job queued twice gives 2× the single-job ETA (no dedup)."""
+    import json as _json
+
+    coordinator.data = {
+        DATA_STATUS: {"mode": "ready", "charging": "charging"},
+        DATA_AREAS: {"areas": [
+            {"id": 30, "area_meta_data": _json.dumps({"name": "hall"}),
+             "statistics": {"average_cleaning_time": 420000}},   # 420 s
+            {"id": 31, "area_meta_data": _json.dumps({"name": "office"}),
+             "statistics": {"average_cleaning_time": 360000}},   # 360 s
+            {"id": 32, "area_meta_data": _json.dumps({"name": "bedroom"}),
+             "statistics": {"average_cleaning_time": 480000}},   # 480 s
+        ]},
+    }
+
+    async def fake_clean_map(**kwargs):
+        return {"cmd_id": 1}
+
+    fake_clean_map.__name__ = "clean_map"
+
+    coordinator._command_queue.put_nowait((1, 1, fake_clean_map, (), {"area_ids": "30,31,32"}))
+    coordinator._command_queue.put_nowait((1, 2, fake_clean_map, (), {"area_ids": "30,31,32"}))
+
+    eta = coordinator.queue_eta_seconds
+    # 2 jobs × (420 + 360 + 480) s = 2 × 1260 = 2520 s
+    assert eta == 2520
+
+
+@pytest.mark.asyncio
+async def test_queue_eta_none_during_recharge(coordinator):
+    """ETA returns None during recharge-and-continue — time is indeterminate."""
+    coordinator.data = {DATA_STATUS: {
+        "mode": "cleaning", "charging": "charging", "battery_level": 22
+    }}
+    assert coordinator.queue_eta_seconds is None
+
+
+@pytest.mark.asyncio
+async def test_queue_eta_different_rooms_per_job(coordinator):
+    """Each job's rooms are counted independently — no cross-job deduplication."""
+    import json as _json
+
+    coordinator.data = {
+        DATA_STATUS: {"mode": "ready", "charging": "charging"},
+        DATA_AREAS: {"areas": [
+            {"id": 1, "area_meta_data": _json.dumps({"name": "a"}),
+             "statistics": {"average_cleaning_time": 600000}},   # 600 s
+            {"id": 2, "area_meta_data": _json.dumps({"name": "b"}),
+             "statistics": {"average_cleaning_time": 300000}},   # 300 s
+        ]},
+    }
+
+    async def job1(**kwargs): return {"cmd_id": 1}
+    async def job2(**kwargs): return {"cmd_id": 2}
+    job1.__name__ = "clean_map"
+    job2.__name__ = "clean_map"
+
+    coordinator._command_queue.put_nowait((1, 1, job1, (), {"area_ids": "1"}))
+    coordinator._command_queue.put_nowait((1, 2, job2, (), {"area_ids": "2"}))
+
+    eta = coordinator.queue_eta_seconds
+    # 600 (job1 room1) + 300 (job2 room2) = 900 s
+    assert eta == 900

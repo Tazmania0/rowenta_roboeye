@@ -19,6 +19,7 @@ def _make_vacuum(status: dict):
     coord.active_map_id = "3"
     coord.ha_fan_speed = None  # explicit None so fallback to status value works
     coord.is_paused = False    # pause state owned by coordinator, not entity
+    coord.is_recharging_mid_clean = False  # recharge state (Fix B)
     coord.paused_fan_speed = None
     coord.async_send_command = AsyncMock()
     coord.client = MagicMock()
@@ -389,6 +390,87 @@ def test_coordinator_is_paused_false_and_idle_mode_shows_idle():
     coord.sensor_values_parsed = {}
     vac._handle_coordinator_update()
     assert vac._attr_activity is VacuumActivity.IDLE
+
+
+# ── Fix B: recharge-and-continue state ───────────────────────────────
+
+def test_state_recharging_mid_clean_maps_to_returning():
+    """mode=cleaning + charging=charging → VacuumActivity.RETURNING (Fix B)."""
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({
+        "mode": "cleaning", "charging": "charging",
+        "battery_level": 19, "cleaning_parameter_set": 2,
+    })
+    coord.sensor_values_parsed = {}
+    vac._handle_coordinator_update()
+    assert vac._attr_activity is VacuumActivity.RETURNING
+
+
+def test_state_normal_cleaning_not_affected_by_recharge_fix():
+    """mode=cleaning + charging=unconnected still maps to CLEANING (Fix B)."""
+    from homeassistant.components.vacuum import VacuumActivity
+    vac, coord = _make_vacuum({
+        "mode": "cleaning", "charging": "unconnected",
+        "battery_level": 80, "cleaning_parameter_set": 2,
+    })
+    coord.sensor_values_parsed = {}
+    vac._handle_coordinator_update()
+    assert vac._attr_activity is VacuumActivity.CLEANING
+
+
+def test_extra_state_attributes_recharging():
+    """extra_state_attributes exposes status=recharging_mid_clean during recharge (Fix B)."""
+    vac, coord = _make_vacuum({
+        "mode": "cleaning", "charging": "charging",
+        "battery_level": 19, "cleaning_parameter_set": 2,
+    })
+    coord.is_recharging_mid_clean = True
+    coord.status = {"mode": "cleaning", "charging": "charging", "battery_level": 19}
+    attrs = vac.extra_state_attributes
+    assert attrs is not None
+    assert attrs["status"] == "recharging_mid_clean"
+    assert attrs["battery_level"] == 19
+
+
+def test_extra_state_attributes_normal_cleaning_no_recharge_key():
+    """No recharge key in extra_state_attributes during normal cleaning."""
+    vac, coord = _make_vacuum({
+        "mode": "cleaning", "charging": "unconnected",
+        "battery_level": 80, "cleaning_parameter_set": 2,
+    })
+    coord.is_recharging_mid_clean = False
+    vac._error_status = None
+    attrs = vac.extra_state_attributes
+    assert attrs is None or "status" not in (attrs or {})
+
+
+@pytest.mark.asyncio
+async def test_async_start_suppressed_during_recharge():
+    """async_start does nothing when recharge-and-continue is active (Fix B)."""
+    vac, coord = _make_vacuum({
+        "mode": "cleaning", "charging": "charging",
+        "battery_level": 22, "cleaning_parameter_set": 2,
+    })
+    coord.is_recharging_mid_clean = True
+    from homeassistant.components.vacuum import VacuumActivity
+    vac._attr_activity = VacuumActivity.RETURNING
+    await vac.async_start()
+    coord.async_send_command.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_start_proceeds_when_not_recharging():
+    """async_start issues clean_all when not in recharge state (Fix B)."""
+    vac, coord = _make_vacuum({
+        "mode": "ready", "charging": "charging",
+        "battery_level": 100, "cleaning_parameter_set": 2,
+    })
+    coord.is_recharging_mid_clean = False
+    from homeassistant.components.vacuum import VacuumActivity
+    vac._attr_activity = VacuumActivity.DOCKED
+    vac._attr_fan_speed = "normal"
+    await vac.async_start()
+    coord.async_send_command.assert_called_once()
 
 
 def test_pause_feature_declared():
