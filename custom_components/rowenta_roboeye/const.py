@@ -207,37 +207,75 @@ DATA_EVENT_LOG = "event_log"
 
 # ── Event type IDs confirmed 2026-04-05 ───────────────────────────────
 EVENT_TYPE_CLEAN_AREA_STARTED    = 1010
+EVENT_TYPE_CLEAN_AREA_SUCCEEDED  = 1011   # single room completed
+EVENT_TYPE_CLEAN_AREA_INTERRUPTED = 1012  # room interrupted (e.g. battery low)
 EVENT_TYPE_GO_HOME_STARTED       = 1030
 EVENT_TYPE_GO_HOME_SUCCEEDED     = 1031
 EVENT_TYPE_GO_HOME_INTERRUPTED   = 1032
+EVENT_TYPE_GO_HOME_FAILED        = 1033   # docking attempt failed
 EVENT_TYPE_LOCALIZE_STARTED      = 1050
 EVENT_TYPE_LOCALIZE_SUCCEEDED    = 1051
 EVENT_TYPE_LOCALIZE_INTERRUPTED  = 1052
+EVENT_TYPE_RECHARGE_AND_CONTINUE      = 1040  # firmware initiated dock-recharge
+EVENT_TYPE_RECHARGE_AND_CONTINUE_INT  = 1042  # recharge cycle interrupted
 EVENT_TYPE_CLEAN_MAP_STARTED     = 1110
+EVENT_TYPE_CLEAN_MAP_SUCCEEDED   = 1111   # full multi-room job succeeded
 EVENT_TYPE_CLEAN_MAP_INTERRUPTED = 1112
 EVENT_TYPE_UNDOCKING_STARTED     = 1140
+EVENT_TYPE_REDOCKING_STARTED     = 1170   # robot attempting re-dock
+EVENT_TYPE_REDOCKING_INTERRUPTED = 1172   # re-docking failed
+EVENT_TYPE_ACTION_SKIPPED        = 1200   # info=5 → insufficient battery
 EVENT_ROBOT_LIFTED               = 2010
 EVENT_ROBOT_SETBACK              = 2011
 EVENT_DUSTBIN_MISSING            = 2030
 EVENT_DUSTBIN_INSERTED           = 2031
+EVENT_TYPE_BATTERY_LOW           = 2000   # battery threshold crossed
 
 # Human-readable labels for HA logbook and sensor display
 EVENT_TYPE_LABELS: dict[int, str] = {
     1010: "Started cleaning room",
+    1011: "Room clean succeeded",
+    1012: "Room clean interrupted",
     1030: "Returning to dock",
     1031: "Docked",
     1032: "Docking interrupted",
+    1033: "Docking failed",
+    1040: "Recharging mid-clean",
+    1042: "Recharge cycle interrupted",
     1050: "Localizing",
     1051: "Localized",
     1052: "Localization failed",
     1110: "Room clean started",
+    1111: "Multi-room clean succeeded",
     1112: "Room clean interrupted",
     1140: "Undocking",
+    1170: "Re-docking",
+    1172: "Re-docking interrupted",
+    1200: "Command skipped",
+    2000: "Battery low",
     2010: "Robot lifted",
     2011: "Robot set back down",
     2030: "Dustbin removed",
     2031: "Dustbin inserted",
 }
+
+# ── Recharge-and-continue timing (Fix B) ─────────────────────────────
+# During firmware-initiated recharge-and-continue:
+#   mode=cleaning + charging=charging persists for the entire charge cycle.
+#   Observed charge time: ~100 minutes (19% → 92%).
+#   cmd_id stays "executing" throughout — never aborts, never changes.
+# Use 3 hours to be safe. Poll slowly (30 s) to avoid hammering robot.
+MODE_RECHARGE_CONTINUE_WAIT_S: float = 10800.0   # 3 hours
+MODE_RECHARGE_CONTINUE_POLL_S: float = 30.0       # poll every 30 s during charge
+
+# ── Commands that bypass the serial queue (Fix A) ─────────────────────
+# These write settings to the robot's saved map and must not be delayed
+# by pending clean jobs. Confirmed: queued modify_area gets action_skipped
+# (type_id=1200, info=5) when battery is low — they must fire immediately.
+IMMEDIATE_COMMAND_NAMES: frozenset = frozenset({
+    "modify_area",
+    "set_fan_speed",
+})
 
 # ── Resilience ────────────────────────────────────────────────────────
 MAX_POLL_FAILURES = 3

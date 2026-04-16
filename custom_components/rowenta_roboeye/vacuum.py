@@ -105,11 +105,15 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         self._error_status: str | None = None
 
     @property
-    def extra_state_attributes(self) -> dict[str, str] | None:
-        """Expose the specific error condition when in ERROR state."""
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose error conditions and recharge-mid-clean status."""
+        attrs: dict[str, Any] = {}
         if self._error_status is not None:
-            return {"error": self._error_status}
-        return None
+            attrs["error"] = self._error_status
+        if self.coordinator.is_recharging_mid_clean:
+            attrs["status"] = "recharging_mid_clean"
+            attrs["battery_level"] = self.coordinator.status.get("battery_level")
+        return attrs or None
 
     # ── Coordinator update handler ────────────────────────────────────
 
@@ -141,6 +145,17 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         if _hardware_error:
             self._attr_activity = VacuumActivity.ERROR
             self._error_status = ", ".join(_error_conditions) if _error_conditions else "Not ready"
+
+        # ── Fix B: Recharge-and-continue (check BEFORE normal cleaning) ──
+        elif mode == MODE_CLEANING and charging == CHARGING_CHARGING:
+            # Firmware-initiated recharge-and-continue.
+            # Robot is docked charging mid-clean session.
+            # cmd_id stays "executing" throughout (observed: ~100 min).
+            # Confirmed: mode=cleaning+charging=charging is the unique signature.
+            # Map to RETURNING as nearest HA standard state.
+            self._attr_activity = VacuumActivity.RETURNING
+            self._error_status = None
+
         else:
             self._error_status = None
             if mode == MODE_CLEANING:
@@ -172,7 +187,18 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         DOCKED / IDLE / other → clean_all (fresh whole-home clean)
 
         /set/clean_continue is deprecated — never call it.
+
+        Suppressed during recharge-and-continue (Fix B): the firmware will
+        automatically resume when charging is sufficient. Sending a new clean
+        command at this point would be skipped (action_skipped info=5).
         """
+        # ── Fix B: suppress during recharge-and-continue ─────────────
+        if self.coordinator.is_recharging_mid_clean:
+            LOGGER.info(
+                "RobEye: recharge-and-continue in progress — ignoring start command"
+            )
+            return
+
         if self._attr_activity in (VacuumActivity.PAUSED, VacuumActivity.ERROR):
             LOGGER.debug(
                 "async_start: resume/recover via clean_start_or_continue "
