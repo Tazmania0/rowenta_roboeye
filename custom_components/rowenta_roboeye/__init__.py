@@ -16,6 +16,28 @@ from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
 
 
+def _schedule_for_map(
+    raw: list[dict] | None,
+    active_map_id: str | None,
+) -> list[dict] | None:
+    """Return only schedule entries that belong to the active map.
+
+    Entries without a map_id are kept (legacy / single-map robots).
+    Returns None when the filtered result is empty so callers can treat
+    absence and empty-list the same way.
+    """
+    if not raw:
+        return None
+    if not active_map_id:
+        return raw or None
+    filtered = [
+        e for e in raw
+        if not str(e.get("task", {}).get("map_id", "")).strip()
+        or str(e.get("task", {}).get("map_id", "")).strip() == active_map_id
+    ]
+    return filtered or None
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register frontend resources once per integration load.
 
@@ -173,7 +195,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 active_map_id=coordinator.active_map_id,
                 friendly_name=friendly_name,
                 available_maps=coordinator.available_maps,
-                schedule_entries=coordinator.schedule.get("schedule"),
+                schedule_entries=_schedule_for_map(
+                    coordinator.schedule.get("schedule"),
+                    coordinator.active_map_id,
+                ),
             )
         )
 
@@ -196,7 +221,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 active_map_id=coordinator.active_map_id,
                 friendly_name=friendly_name,
                 available_maps=coordinator.available_maps,
-                schedule_entries=coordinator.schedule.get("schedule"),
+                schedule_entries=_schedule_for_map(
+                    coordinator.schedule.get("schedule"),
+                    coordinator.active_map_id,
+                ),
             )
         )
         hass.async_create_task(
@@ -255,7 +283,10 @@ async def _async_initial_dashboard(
             active_map_id=coordinator.active_map_id,
             friendly_name=friendly_name,
             available_maps=coordinator.available_maps,
-            schedule_entries=coordinator.schedule.get("schedule"),
+            schedule_entries=_schedule_for_map(
+                coordinator.schedule.get("schedule"),
+                coordinator.active_map_id,
+            ),
         )
 
         if success:
