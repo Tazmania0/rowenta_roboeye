@@ -40,7 +40,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .const import CLEANING_MODE_ALL, SCHEDULE_DAYS, room_selection_entity_id
+from .const import CLEANING_MODE_ALL, DOMAIN, SCHEDULE_DAYS, room_selection_entity_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -544,6 +544,16 @@ class RobEyeDashboardManager:
         Returns True if the dashboard is ready (saved or unchanged),
         False if the lovelace store is not yet available or save failed.
         """
+        # Guard: skip rebuild while a map switch is in progress.
+        for entry_data in hass.data.get(DOMAIN, {}).values():
+            if getattr(entry_data, "device_id", None) == device_id:
+                if not getattr(entry_data, "_areas_ready", True):
+                    _LOGGER.debug(
+                        "Dashboard update skipped — areas not ready (map switch in progress)"
+                    )
+                    return False
+                break
+
         rooms = _extract_rooms(areas)
         title = friendly_name or self._title
         config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title, available_maps=available_maps, schedule_entries=schedule_entries)

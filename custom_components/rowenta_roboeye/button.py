@@ -28,7 +28,7 @@ from .const import (
     room_selection_entity_id,
 )
 from .coordinator import RobEyeCoordinator
-from .entity import RobEyeEntity, async_remove_stale_room_entities
+from .entity import RobEyeEntity
 
 
 async def async_setup_entry(
@@ -45,27 +45,44 @@ async def async_setup_entry(
     ]
 
     # Initial room buttons
-    known_ids: set = set()
-    room_buttons, new_ids = _build_room_button_entities(
-        coordinator, config_entry, coordinator.areas, known_ids
+    known_entities: dict = {}
+    initial_buttons, initial_ids = _build_room_button_entities(
+        coordinator, config_entry, coordinator.areas, set()
     )
-    entities.extend(room_buttons)
-    known_ids.update(new_ids)
+    for entity, area_id in zip(initial_buttons, initial_ids):
+        known_entities[area_id] = entity
+    entities.extend(initial_buttons)
     async_add_entities(entities)
 
     # Dynamic listener
     @callback
     def _async_on_areas_updated() -> None:
-        current_area_ids = {a.get("id") for a in coordinator.areas if a.get("id") is not None}
-        removed = async_remove_stale_room_entities(hass, config_entry, coordinator, "button", current_area_ids)
-        known_ids.difference_update(removed)
+        if not coordinator._areas_ready:
+            LOGGER.debug("button: areas not ready after map switch, skipping update")
+            return
+
+        current_ids: set = {
+            area_id
+            for area in coordinator.areas
+            if (area_id := area.get("id")) is not None
+            and area.get("area_meta_data", "")
+            and _parse_area_name(area)
+        }
+
+        stale_ids = set(known_entities.keys()) - current_ids
+        for area_id in stale_ids:
+            entity = known_entities.pop(area_id)
+            LOGGER.debug("button: removing stale room button area_id=%s", area_id)
+            hass.async_create_task(entity.async_remove())
+
         new_entities, new_area_ids = _build_room_button_entities(
-            coordinator, config_entry, coordinator.areas, known_ids
+            coordinator, config_entry, coordinator.areas, set(known_entities.keys())
         )
         if new_entities:
             LOGGER.debug("button: adding %d new room buttons", len(new_entities))
+            for entity, area_id in zip(new_entities, new_area_ids):
+                known_entities[area_id] = entity
             async_add_entities(new_entities)
-            known_ids.update(new_area_ids)
 
     config_entry.async_on_unload(
         async_dispatcher_connect(
@@ -76,30 +93,35 @@ async def async_setup_entry(
     )
 
 
+def _parse_area_name(area: dict) -> str:
+    """Return the room name from area_meta_data, or empty string."""
+    meta_raw = area.get("area_meta_data", "")
+    if not meta_raw:
+        return ""
+    try:
+        meta = json.loads(meta_raw)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    return meta.get("name", "").strip()
+
+
 def _build_room_button_entities(
     coordinator: RobEyeCoordinator,
     config_entry: ConfigEntry,
     areas: list,
     already_known: set,
-) -> tuple[list, set]:
+) -> tuple[list, list]:
     new_entities = []
-    new_ids: set = set()
+    new_ids: list = []
     _map = coordinator.active_map_id
     # Guard: skip if areas data was fetched for a different map (stale-signal race).
     if coordinator.areas_map_id != _map:
         return new_entities, new_ids
     for area in areas:
         area_id = area.get("id")
-        if area_id is None or (_map, area_id) in already_known:
+        if area_id is None or area_id in already_known:
             continue
-        meta_raw = area.get("area_meta_data", "")
-        if not meta_raw:
-            continue
-        try:
-            meta = json.loads(meta_raw)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        room_name = meta.get("name", "").strip()
+        room_name = _parse_area_name(area)
         if not room_name:
             continue
         # Skip areas disabled for cleaning in the RobEye app
@@ -113,8 +135,7 @@ def _build_room_button_entities(
                 room_name=room_name,
             )
         )
-
-        new_ids.add((_map, area_id))
+        new_ids.append(area_id)
     return new_entities, new_ids
 
 
