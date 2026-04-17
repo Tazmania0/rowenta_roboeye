@@ -597,9 +597,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 # Always use the HA-configured map ID (manual override or setup map_id).
                 _fetched_for = self._manual_map_id or self.map_id
-                new_areas_blob = await self.client.get_areas(_fetched_for)
-                self._areas_fetched_for_map_id = _fetched_for
-                data[DATA_AREAS] = new_areas_blob
+                try:
+                    new_areas_blob = await self.client.get_areas(_fetched_for)
+                    self._areas_fetched_for_map_id = _fetched_for
+                    data[DATA_AREAS] = new_areas_blob
+                    self._last_areas = now
+                    self._check_for_new_areas(new_areas_blob)
+                except CannotConnect:
+                    LOGGER.debug("get_areas unavailable, skipping")
 
                 try:
                     data[DATA_SENSOR_STATUS] = await self.client.get_sensor_status()
@@ -610,20 +615,20 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except CannotConnect:
                     LOGGER.debug("get_robot_flags unavailable, skipping")
 
-                self._last_areas = now
-                self._check_for_new_areas(new_areas_blob)
-
             # ── Every 600 s: lifetime statistics ─────────────────────
             if self._last_statistics is None or (
                 now - self._last_statistics
             ) >= timedelta(seconds=SCAN_INTERVAL_STATISTICS):
-                data[DATA_STATISTICS] = await self.client.get_statistics()
                 try:
-                    data[DATA_PERMANENT_STATISTICS] = (
-                        await self.client.get_permanent_statistics()
-                    )
+                    data[DATA_STATISTICS] = await self.client.get_statistics()
+                    try:
+                        data[DATA_PERMANENT_STATISTICS] = (
+                            await self.client.get_permanent_statistics()
+                        )
+                    except CannotConnect:
+                        LOGGER.debug("get_permanent_statistics unavailable, skipping")
                 except CannotConnect:
-                    LOGGER.debug("get_permanent_statistics unavailable, skipping")
+                    LOGGER.debug("get_statistics unavailable, skipping")
                 self._last_statistics = now
 
             # ── Every 60 s: schedule ─────────────────────────────────
