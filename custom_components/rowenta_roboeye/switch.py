@@ -10,11 +10,16 @@ RobEyeRoomDeepCleanSwitch
   Per-room deep clean toggle. When ON, that room's clean uses STRATEGY_DEEP
   regardless of the global strategy. Falls back to coordinator.cleaning_strategy
   when OFF.
+
+RobEyeScheduleSwitch
+  Per-schedule enable/disable toggle. Writes via /set/modify_scheduled_task —
+  bypasses asyncio.Queue (settings write, not a motion command).
 """
 
 from __future__ import annotations
 
 import json as _json
+from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
@@ -25,8 +30,11 @@ from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
     AREA_STATE_BLOCKING,
+    CLEANING_MODE_ALL,
     DOMAIN,
+    FAN_SPEED_LABELS,
     LOGGER,
+    SCHEDULE_DAYS,
     SIGNAL_AREAS_UPDATED,
     SIGNAL_ROOM_SELECTION_CHANGED,
     STRATEGY_DEFAULT,
@@ -46,6 +54,7 @@ async def async_setup_entry(
 
     entities: list = [RobEyeDeepCleanSwitch(coordinator)]
     known_ids: set = set()
+    known_task_ids: set[int] = set()
 
     def _room_switches(areas: list, already_known: set) -> tuple[list, set]:
         new_entities: list = []
@@ -90,9 +99,27 @@ async def async_setup_entry(
             new_ids.add((_map, area_id))
         return new_entities, new_ids
 
+    def _schedule_switches(already_known: set[int]) -> tuple[list, set[int]]:
+        new_entities: list = []
+        new_ids: set[int] = set()
+        for item in coordinator.schedule.get("schedule", []):
+            if not isinstance(item, dict):
+                continue
+            task_id = item.get("task_id")
+            if task_id is None or int(task_id) in already_known:
+                continue
+            new_entities.append(RobEyeScheduleSwitch(coordinator, int(task_id)))
+            new_ids.add(int(task_id))
+        return new_entities, new_ids
+
     room_switches, new_ids = _room_switches(coordinator.areas, known_ids)
     entities.extend(room_switches)
     known_ids.update(new_ids)
+
+    schedule_switches, new_task_ids = _schedule_switches(known_task_ids)
+    entities.extend(schedule_switches)
+    known_task_ids.update(new_task_ids)
+
     async_add_entities(entities)
 
     @callback
@@ -105,6 +132,13 @@ async def async_setup_entry(
             async_add_entities(new_entities)
             known_ids.update(new_area_ids)
 
+    @callback
+    def _on_coordinator_updated() -> None:
+        new_entities, new_task_ids = _schedule_switches(known_task_ids)
+        if new_entities:
+            async_add_entities(new_entities)
+            known_task_ids.update(new_task_ids)
+
     config_entry.async_on_unload(
         async_dispatcher_connect(
             hass,
@@ -112,6 +146,7 @@ async def async_setup_entry(
             _on_areas_updated,
         )
     )
+    config_entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_updated))
 
 
 class RobEyeDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
@@ -333,3 +368,107 @@ class RobEyeRoomSelectSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         async_dispatcher_send(
             self.hass, f"{SIGNAL_ROOM_SELECTION_CHANGED}_{self._entry_id}"
         )
+
+
+class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
+    """Toggle to enable/disable a cleaning schedule task.
+
+    Writes via /set/modify_scheduled_task — bypasses asyncio.Queue.
+    Same pattern as modify_area and set_fan_speed: settings write, not a motion
+    command, so queuing behind active clean jobs would make the toggle unresponsive.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: RobEyeCoordinator, task_id: int) -> None:
+        super().__init__(coordinator)
+        self._task_id = task_id
+        self._attr_unique_id = f"schedule_{task_id}_{coordinator.device_id}"
+        self.entity_id = f"switch.{coordinator.device_id}_schedule_{task_id}"
+
+    def _get_entry(self) -> dict | None:
+        for item in self.coordinator.schedule.get("schedule", []):
+            if isinstance(item, dict) and item.get("task_id") == self._task_id:
+                return item
+        return None
+
+    def _area_name(self, area_id: int) -> str | None:
+        for area in self.coordinator.areas:
+            if area.get("id") == area_id:
+                raw = area.get("area_meta_data", "")
+                if raw:
+                    try:
+                        return _json.loads(raw).get("name", "").strip() or None
+                    except Exception:
+                        pass
+        return None
+
+    def _build_label(self, entry: dict) -> str:
+        t = entry.get("time", {})
+        task = entry.get("task", {})
+        days_str = "/".join(
+            SCHEDULE_DAYS.get(d, str(d)) for d in sorted(t.get("days_of_week", []))
+        )
+        time_str = f"{t.get('hour', 0):02d}:{t.get('min', 0):02d}"
+        if int(task.get("cleaning_mode", CLEANING_MODE_ALL)) == CLEANING_MODE_ALL:
+            rooms_str = "All rooms"
+        else:
+            area_ids = task.get("parameters", [])
+            rooms_str = " + ".join(
+                self._area_name(int(a)) or str(a) for a in area_ids
+            ) or "Rooms"
+        return f"{days_str} {time_str} — {rooms_str}"
+
+    @property
+    def name(self) -> str:
+        entry = self._get_entry()
+        if entry is None:
+            return f"Schedule {self._task_id}"
+        return f"Schedule: {self._build_label(entry)}"
+
+    @property
+    def icon(self) -> str:
+        return "mdi:calendar-clock" if self.is_on else "mdi:calendar-remove"
+
+    @property
+    def is_on(self) -> bool:
+        entry = self._get_entry()
+        return bool(int(entry.get("enabled", 0))) if entry else False
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        entry = self._get_entry()
+        if entry is None:
+            return {}
+        t = entry.get("time", {})
+        task = entry.get("task", {})
+        fan_raw = int(task.get("cleaning_parameter_set", 0))
+        return {
+            "task_id": self._task_id,
+            "days": [SCHEDULE_DAYS.get(d, str(d)) for d in sorted(t.get("days_of_week", []))],
+            "time": f"{t.get('hour', 0):02d}:{t.get('min', 0):02d}",
+            "cleaning_mode": task.get("cleaning_mode"),
+            "area_ids": task.get("parameters", []),
+            "fan_speed": FAN_SPEED_LABELS.get(fan_raw, str(fan_raw)),
+            "fan_raw": fan_raw,
+            "map_id": task.get("map_id"),
+        }
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._async_set_enabled(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._async_set_enabled(False)
+
+    async def _async_set_enabled(self, enabled: bool) -> None:
+        try:
+            await self.coordinator.client.set_schedule_enabled(self._task_id, enabled)
+        except Exception as err:  # noqa: BLE001
+            LOGGER.error(
+                "Failed to %s schedule %s: %s",
+                "enable" if enabled else "disable",
+                self._task_id,
+                err,
+            )
+            return
+        await self.coordinator.async_request_refresh()

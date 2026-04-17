@@ -92,6 +92,7 @@ def _build_config(
     active_map_id: str = "",
     title: str = DASHBOARD_TITLE,
     available_maps: list[dict[str, Any]] | None = None,
+    schedule_entries: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     has_maps = bool(available_maps)
     _d = device_id
@@ -285,6 +286,16 @@ def _build_config(
                     "\n{% endif %}"
                 ),
             },
+            *([{
+                "type": "entities",
+                "title": "Cleaning Schedules",
+                "icon": "mdi:calendar-clock",
+                "entities": [
+                    f"switch.{_d}_schedule_{e['task_id']}"
+                    for e in (schedule_entries or [])
+                    if isinstance(e, dict) and e.get("task_id") is not None
+                ],
+            }] if schedule_entries else []),
             *([{
                 "type": "entities",
                 "title": "Current Floor",
@@ -518,6 +529,7 @@ class RobEyeDashboardManager:
         active_map_id: str = "",
         friendly_name: str | None = None,
         available_maps: list[dict[str, Any]] | None = None,
+        schedule_entries: list[dict[str, Any]] | None = None,
     ) -> bool:
         """Create or update the dashboard only when config has changed.
 
@@ -526,7 +538,7 @@ class RobEyeDashboardManager:
         """
         rooms = _extract_rooms(areas)
         title = friendly_name or self._title
-        config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title, available_maps=available_maps)
+        config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title, available_maps=available_maps, schedule_entries=schedule_entries)
         new_hash = _config_hash(config)
 
         _LOGGER.debug(
@@ -870,6 +882,7 @@ async def async_create_dashboard(
     active_map_id: str = "",
     friendly_name: str | None = None,
     available_maps: list[dict[str, Any]] | None = None,
+    schedule_entries: list[dict[str, Any]] | None = None,
 ) -> bool:
     """Create or update the dashboard. Idempotent — safe to call repeatedly.
 
@@ -877,4 +890,4 @@ async def async_create_dashboard(
     False if the lovelace store was not available or the save failed.
     """
     _mgr = manager or RobEyeDashboardManager(device_id=device_id, friendly_name=friendly_name)
-    return await _mgr.async_update(hass, areas, device_id, active_map_id=active_map_id, friendly_name=friendly_name, available_maps=available_maps)
+    return await _mgr.async_update(hass, areas, device_id, active_map_id=active_map_id, friendly_name=friendly_name, available_maps=available_maps, schedule_entries=schedule_entries)
