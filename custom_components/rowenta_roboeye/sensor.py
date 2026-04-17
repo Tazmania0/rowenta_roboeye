@@ -394,8 +394,8 @@ async def async_setup_entry(
     @callback
     def _async_on_areas_updated() -> None:
         """Called by the coordinator when the area set changes."""
-        if not coordinator._areas_ready:
-            LOGGER.debug("sensor: areas not ready after map switch, skipping update")
+        if coordinator.areas_map_id != coordinator.active_map_id:
+            LOGGER.debug("sensor: areas fetched for wrong map, skipping update")
             return
 
         current_ids: set = {
