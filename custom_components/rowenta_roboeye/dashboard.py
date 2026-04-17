@@ -138,6 +138,17 @@ def _build_config(
     e_btn_go_home       = f"button.{_d}_return_to_base"
     e_cleaning_queue    = f"sensor.{_d}_cleaning_queue"
     e_queue_eta         = f"sensor.{_d}_queue_eta"
+    active_map = str(active_map_id).strip()
+    filtered_schedule_entries = [
+        e for e in (schedule_entries or [])
+        if isinstance(e, dict)
+        and e.get("task_id") is not None
+        and (
+            not str((e.get("task", {}) if isinstance(e.get("task"), dict) else {}).get("map_id", "")).strip()
+            or not active_map
+            or str((e.get("task", {}) if isinstance(e.get("task"), dict) else {}).get("map_id", "")).strip() == active_map
+        )
+    ]
 
     live_entities = [
         {"entity": e, "name": label}
@@ -289,8 +300,7 @@ def _build_config(
                 "icon": "mdi:calendar-clock",
                 "entities": [
                     item
-                    for e in (schedule_entries or [])
-                    if isinstance(e, dict) and e.get("task_id") is not None
+                    for e in filtered_schedule_entries
                     for item in [
                         {"type": "section", "label": _schedule_label(e, rooms)},
                         {
@@ -299,7 +309,7 @@ def _build_config(
                         },
                     ]
                 ],
-            }] if schedule_entries else [{
+            }] if filtered_schedule_entries else [{
                 "type": "markdown",
                 "title": "Schedule",
                 "content": "*No schedule configured*",
