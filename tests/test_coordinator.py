@@ -76,8 +76,6 @@ async def test_status_fetched_every_tick(coordinator, mock_client):
     coordinator._last_areas = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()  # suppress geometry block
-    # Must match active_map_id ("3") so the new mismatch-refetch condition doesn't fire.
-    coordinator._areas_fetched_for_map_id = "3"
 
     await coordinator._async_update_data()
 
@@ -107,7 +105,6 @@ async def test_statistics_fetched_after_600s(coordinator, mock_client):
     coordinator._last_areas = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()  # suppress geometry block
-    coordinator._areas_fetched_for_map_id = "3"  # matches active_map_id; suppress mismatch refetch
 
     await coordinator._async_update_data()
     assert mock_client.get_statistics.call_count == 1
@@ -1023,7 +1020,6 @@ async def test_async_set_active_map_updates_state(coordinator):
     assert coordinator._last_areas is None
     assert coordinator._last_map_geometry is None
     assert coordinator._known_area_ids == set()
-    assert coordinator._known_areas_map_id is None
     assert coordinator._robot_path == []
     assert coordinator._session_complete is False
     coordinator.async_request_refresh.assert_called_once()
@@ -1141,75 +1137,11 @@ def test_check_for_new_areas_signals_on_change(coordinator):
 def test_check_for_new_areas_no_signal_when_unchanged(coordinator):
     """No signal when area set is identical to known set."""
     coordinator._known_area_ids = {5, 6}
-    coordinator._known_areas_map_id = "3"
-    coordinator._areas_fetched_for_map_id = "3"
     areas_blob = {"areas": [{"id": 5}, {"id": 6}]}
 
     coordinator._check_for_new_areas(areas_blob)
 
     coordinator.hass.loop.call_soon.assert_not_called()
-
-
-def test_check_for_new_areas_signals_on_map_change_same_area_ids(coordinator):
-    """Signal fires when the map changes even if both maps share identical area IDs.
-
-    This covers the race where an in-flight get_areas() for the old map
-    completes after async_set_active_map() switches to the new map.  Without
-    the _known_areas_map_id guard the area-ID comparison sees no difference
-    and silently skips the signal, leaving room entities permanently unavailable.
-    """
-    from custom_components.rowenta_roboeye.coordinator import async_dispatcher_send
-
-    coordinator._known_area_ids = {5, 6}
-    coordinator._known_areas_map_id = "3"          # areas were last seen for map 3
-    coordinator._areas_fetched_for_map_id = "4"    # coordinator just fetched for map 4
-
-    # Both maps have the same area IDs — previously this would skip the signal
-    areas_blob = {"areas": [{"id": 5}, {"id": 6}]}
-
-    coordinator._check_for_new_areas(areas_blob)
-
-    coordinator.hass.loop.call_soon.assert_called_once_with(
-        async_dispatcher_send, coordinator.hass,
-        f"rowenta_roboeye_areas_updated_{coordinator.config_entry.entry_id}",
-    )
-    assert coordinator._known_areas_map_id == "4"
-
-
-def test_check_for_new_areas_updates_known_areas_map_id(coordinator):
-    """_known_areas_map_id is set to the freshly fetched map ID."""
-    coordinator._known_area_ids = set()
-    coordinator._known_areas_map_id = None
-    coordinator._areas_fetched_for_map_id = "7"
-
-    coordinator._check_for_new_areas({"areas": [{"id": 1}]})
-
-    assert coordinator._known_areas_map_id == "7"
-
-
-@pytest.mark.asyncio
-async def test_areas_refetch_triggered_when_fetched_for_wrong_map(coordinator, mock_client):
-    """Areas are re-fetched immediately when _areas_fetched_for_map_id doesn't
-    match the active map — even if _last_areas is fresh.
-
-    This reproduces the mid-poll race: an in-flight get_areas() completes for
-    the old map, writes _areas_fetched_for_map_id = old_map and _last_areas = now,
-    but active_map_id has already changed to new_map.  Without the extra condition
-    in the fetch guard the rooms stay unavailable for up to 300 s.
-    """
-    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
-    coordinator._last_areas = datetime.utcnow()           # fresh — within 300 s
-    coordinator._areas_fetched_for_map_id = "3"           # was fetched for old map
-    coordinator._manual_map_id = "57"                     # user just switched to map 57
-    coordinator._last_statistics = datetime.utcnow()
-    coordinator._last_robot_info = datetime.utcnow()
-    coordinator._last_map_geometry = datetime.utcnow()
-
-    await coordinator._async_update_data()
-
-    # Must have re-fetched for the NEW active map despite _last_areas being fresh
-    mock_client.get_areas.assert_called_with("57")
-    assert coordinator.areas_map_id == "57"
 
 
 # ── Pause / Resume — command queue drain and restore ──────────────────
