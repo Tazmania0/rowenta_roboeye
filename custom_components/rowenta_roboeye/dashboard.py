@@ -271,7 +271,16 @@ def _build_config(
                 "title": "Schedule",
                 "icon": "mdi:calendar-clock",
                 "entities": [
-                    f"switch.{_d}_schedule_{e['task_id']}"
+                    {
+                        "entity": f"switch.{_d}_schedule_{e['task_id']}",
+                        "name": (
+                            "/".join(e.get("days", []))
+                            + " "
+                            + e.get("time", "")
+                            + " — "
+                            + e.get("rooms_str", "All rooms")
+                        ),
+                    }
                     for e in (schedule_entries or [])
                     if isinstance(e, dict) and e.get("task_id") is not None
                 ],
