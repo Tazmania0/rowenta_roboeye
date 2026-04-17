@@ -378,8 +378,6 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
     command, so queuing behind active clean jobs would make the toggle unresponsive.
     """
 
-    _attr_has_entity_name = True
-
     def __init__(self, coordinator: RobEyeCoordinator, task_id: int) -> None:
         super().__init__(coordinator)
         self._task_id = task_id
