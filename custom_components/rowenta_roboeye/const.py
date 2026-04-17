@@ -92,6 +92,7 @@ API_SET_STOP = "/set/stop"
 API_SET_CLEAN_START_OR_CONTINUE = "/set/clean_start_or_continue"
 API_SET_FAN_SPEED = "/set/switch_cleaning_parameter_set"
 API_SET_MODIFY_AREA = "/set/modify_area"  # write per-room fan speed / strategy to robot map
+API_SET_MODIFY_SCHEDULED_TASK = "/set/modify_scheduled_task"
 
 # ── HA service names ──────────────────────────────────────────────────
 SERVICE_CLEAN_ROOM = "clean_room"

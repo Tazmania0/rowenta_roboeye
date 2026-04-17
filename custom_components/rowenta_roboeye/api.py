@@ -80,6 +80,7 @@ from .const import (
     API_SET_FAN_SPEED,
     API_SET_GO_HOME,
     API_SET_MODIFY_AREA,
+    API_SET_MODIFY_SCHEDULED_TASK,
     API_SET_STOP,
     API_SET_CLEAN_START_OR_CONTINUE,
     DEFAULT_PORT,
@@ -513,6 +514,18 @@ class RobEyeApiClient:
         return await self._get(
             API_SET_FAN_SPEED,
             params={"cleaning_parameter_set": cleaning_parameter_set},
+        )
+
+    async def set_schedule_enabled(self, task_id: int, enabled: bool) -> dict[str, Any]:
+        """Enable or disable a schedule task.
+
+        Confirmed 2026-04-16: GET /set/modify_scheduled_task?task_id=2&enabled=1 → {"cmd_id":215}
+        IMPORTANT: Do NOT route through coordinator.async_send_command() — call directly,
+        then async_request_refresh(). Settings write, not a motion command.
+        """
+        return await self._get(
+            API_SET_MODIFY_SCHEDULED_TASK,
+            params={"task_id": task_id, "enabled": int(enabled)},
         )
 
     # ── Config-flow connection test ───────────────────────────────────

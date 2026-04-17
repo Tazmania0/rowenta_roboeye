@@ -8,6 +8,7 @@ import pytest
 from custom_components.rowenta_roboeye.switch import (
     RobEyeDeepCleanSwitch,
     RobEyeRoomDeepCleanSwitch,
+    RobEyeScheduleSwitch,
 )
 from custom_components.rowenta_roboeye.const import (
     AREA_STATE_BLOCKING,
@@ -361,3 +362,125 @@ def test_room_switch_coordinator_update_no_change_no_overwrite():
     sw._handle_coordinator_update()      # stale cache still shows "normal"
 
     assert sw._is_on is True  # must NOT be reverted
+
+
+# ── RobEyeScheduleSwitch ──────────────────────────────────────────────
+
+_SCHED_ENTRY = {
+    "task_id": 2,
+    "time": {"days_of_week": [7], "hour": 20, "min": 36, "sec": 0},
+    "enabled": 1,
+    "task": {"map_id": 3, "cleaning_parameter_set": 0,
+             "cleaning_mode": 2, "parameters": [3, 10]},
+}
+
+
+def _make_schedule_coord(enabled: int = 1):
+    entry = {**_SCHED_ENTRY, "enabled": enabled}
+    coord = MagicMock()
+    coord.device_id = "SN123456"
+    coord.schedule = {"schedule": [entry]}
+    coord.areas = []
+    coord.client.set_schedule_enabled = AsyncMock(return_value={"cmd_id": 215})
+    coord.async_request_refresh = AsyncMock()
+    coord.async_send_command = MagicMock()
+    return coord, entry
+
+
+def _make_schedule_switch(enabled: int = 1):
+    coord, _ = _make_schedule_coord(enabled)
+    sw = RobEyeScheduleSwitch.__new__(RobEyeScheduleSwitch)
+    object.__setattr__(sw, "coordinator", coord)
+    object.__setattr__(sw, "_attr_unique_id", "")
+    object.__setattr__(sw, "entity_id", "")
+    RobEyeScheduleSwitch.__init__(sw, coord, task_id=2)
+    return sw, coord
+
+
+def test_schedule_switch_unique_id():
+    sw, _ = _make_schedule_switch()
+    assert sw._attr_unique_id == "schedule_2_SN123456"
+
+
+def test_schedule_switch_entity_id():
+    sw, _ = _make_schedule_switch()
+    assert sw.entity_id == "switch.SN123456_schedule_2"
+
+
+def test_schedule_switch_is_on():
+    sw, _ = _make_schedule_switch(enabled=1)
+    assert sw.is_on is True
+
+
+def test_schedule_switch_is_off():
+    sw, _ = _make_schedule_switch(enabled=0)
+    assert sw.is_on is False
+
+
+def test_schedule_switch_name_contains_time_and_day():
+    sw, _ = _make_schedule_switch()
+    assert "20:36" in sw.name
+    assert "Sun" in sw.name
+
+
+def test_schedule_switch_icon_on():
+    sw, _ = _make_schedule_switch(enabled=1)
+    assert sw.icon == "mdi:calendar-clock"
+
+
+def test_schedule_switch_icon_off():
+    sw, _ = _make_schedule_switch(enabled=0)
+    assert sw.icon == "mdi:calendar-remove"
+
+
+def test_schedule_switch_extra_attrs():
+    sw, _ = _make_schedule_switch()
+    attrs = sw.extra_state_attributes
+    assert attrs["task_id"] == 2
+    assert attrs["time"] == "20:36"
+    assert attrs["area_ids"] == [3, 10]
+    assert attrs["fan_speed"] == "default"
+    assert attrs["fan_raw"] == 0
+    assert attrs["map_id"] == 3
+
+
+@pytest.mark.asyncio
+async def test_schedule_switch_turn_on_bypasses_queue():
+    """Must call client directly — never async_send_command."""
+    sw, coord = _make_schedule_switch(enabled=0)
+    await sw.async_turn_on()
+    coord.client.set_schedule_enabled.assert_awaited_once_with(2, True)
+    coord.async_request_refresh.assert_awaited_once()
+    coord.async_send_command.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_schedule_switch_turn_off_bypasses_queue():
+    sw, coord = _make_schedule_switch(enabled=1)
+    await sw.async_turn_off()
+    coord.client.set_schedule_enabled.assert_awaited_once_with(2, False)
+    coord.async_request_refresh.assert_awaited_once()
+    coord.async_send_command.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_schedule_switch_api_error_does_not_raise():
+    """Failed toggle must log and not propagate; refresh must not be called."""
+    sw, coord = _make_schedule_switch()
+    coord.client.set_schedule_enabled.side_effect = Exception("timeout")
+    await sw.async_turn_on()  # must not raise
+    coord.async_request_refresh.assert_not_awaited()
+
+
+def test_schedule_switch_missing_entry_returns_safe_defaults():
+    """When task_id not in schedule data, is_on is False, name is fallback."""
+    coord, _ = _make_schedule_coord()
+    coord.schedule = {"schedule": []}  # entry removed
+    sw = RobEyeScheduleSwitch.__new__(RobEyeScheduleSwitch)
+    object.__setattr__(sw, "coordinator", coord)
+    object.__setattr__(sw, "_attr_unique_id", "")
+    object.__setattr__(sw, "entity_id", "")
+    RobEyeScheduleSwitch.__init__(sw, coord, task_id=2)
+    assert sw.is_on is False
+    assert sw.name == "Schedule 2"
+    assert sw.extra_state_attributes == {}
