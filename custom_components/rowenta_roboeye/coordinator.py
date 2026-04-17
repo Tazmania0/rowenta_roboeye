@@ -127,6 +127,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Track known area IDs so we can detect additions/removals without reload
         self._known_area_ids: set = set()
+        # Which map_id the _known_area_ids correspond to; used to detect map changes
+        # even when both maps share identical area ID sets.
+        self._known_areas_map_id: str | None = None
         # Which map_id was active when DATA_AREAS was last fetched.
         # Compared by platforms before creating entities to avoid stale-signal races.
         self._areas_fetched_for_map_id: str | None = None
@@ -302,6 +305,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_map_geometry = None
         self._areas_fetched_for_map_id = None  # invalidate until refresh fetches new areas
         self._known_area_ids = set()
+        self._known_areas_map_id = None
         self._robot_path = []
         self._last_session_grid = {}
         self._last_session_path = []
@@ -566,9 +570,17 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._last_live_map = now
 
             # ── Every 300 s: areas + sensor status ───────────────────
-            if self._last_areas is None or (
-                now - self._last_areas
-            ) >= timedelta(seconds=SCAN_INTERVAL_AREAS):
+            # Also re-fetch immediately if the stored areas belong to a different map
+            # than the currently active one.  This handles a race where a map switch
+            # arrives mid-poll: the in-flight get_areas() completes for the old map,
+            # sets _last_areas=now, but the active map has already changed, leaving
+            # _areas_fetched_for_map_id stale and room entities permanently unavailable
+            # until the normal 300 s timer fires.
+            if (
+                self._last_areas is None
+                or (now - self._last_areas) >= timedelta(seconds=SCAN_INTERVAL_AREAS)
+                or self._areas_fetched_for_map_id != _active_map_id
+            ):
                 # Fetch map_status and maps for informational display (map list,
                 # is_active flag in available_maps).  Not used to determine
                 # which map HA should display — that is always the HA-configured
@@ -693,6 +705,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _async_update_data returns and self.data is updated.  Without this
         deferral all platform callbacks would read the stale self.data
         (old map areas) and create entities for the wrong map.
+
+        The signal is also fired whenever the map changes, even when both maps
+        share identical area ID sets — otherwise entities for the new map are
+        never created because the area-ID comparison sees no difference.
         """
         areas = (
             areas_blob.get("areas", []) if isinstance(areas_blob, dict) else []
@@ -702,16 +718,21 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
         signal = f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}"
+        fetched_map = self._areas_fetched_for_map_id
+        map_changed = fetched_map != self._known_areas_map_id
 
-        if not self._known_area_ids:
+        if not self._known_area_ids or map_changed:
             self._known_area_ids = current_ids
+            self._known_areas_map_id = fetched_map
             # Fire signal so platforms create entities for the new map's rooms.
-            # This handles the map-switch case where async_set_active_map() resets
-            # _known_area_ids to set() — the first new-areas response must signal.
+            # This handles both initial load and map-switch (async_set_active_map
+            # resets _known_area_ids and _known_areas_map_id).
             if current_ids:
                 LOGGER.debug(
-                    "RobEye: initial/post-switch areas loaded (%d areas), signalling platforms",
+                    "RobEye: %s areas loaded (%d areas for map %s), signalling platforms",
+                    "map-switch" if map_changed and self._known_areas_map_id else "initial",
                     len(current_ids),
+                    fetched_map,
                 )
                 self.hass.loop.call_soon(async_dispatcher_send, self.hass, signal)
             return
@@ -725,6 +746,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 removed_ids,
             )
             self._known_area_ids = current_ids
+            self._known_areas_map_id = fetched_map
             self.hass.loop.call_soon(async_dispatcher_send, self.hass, signal)
 
     # ── Convenience properties ────────────────────────────────────────
