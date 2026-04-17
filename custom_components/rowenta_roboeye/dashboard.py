@@ -40,7 +40,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .const import room_selection_entity_id
+from .const import CLEANING_MODE_ALL, SCHEDULE_DAYS, room_selection_entity_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,6 +81,23 @@ def _config_hash(config: dict[str, Any]) -> str:
 def _available(hass: HomeAssistant, entity_id: str) -> bool:
     state = hass.states.get(entity_id)
     return state is not None and state.state not in ("unavailable", "unknown", "")
+
+
+def _schedule_label(entry: dict[str, Any], rooms: list[dict[str, Any]]) -> str:
+    """Return a human-readable label for a raw API schedule entry."""
+    t = entry.get("time", {}) if isinstance(entry.get("time"), dict) else {}
+    task = entry.get("task", {}) if isinstance(entry.get("task"), dict) else {}
+    days_str = "/".join(
+        SCHEDULE_DAYS.get(d, str(d)) for d in sorted(t.get("days_of_week", []))
+    )
+    time_str = f"{t.get('hour', 0):02d}:{t.get('min', 0):02d}"
+    if int(task.get("cleaning_mode", CLEANING_MODE_ALL)) != CLEANING_MODE_ALL:
+        area_ids = [int(a) for a in task.get("parameters", [])]
+        room_map = {r["id"]: r["name"] for r in rooms}
+        rooms_str = " + ".join(room_map.get(a, str(a)) for a in area_ids) or "Rooms"
+    else:
+        rooms_str = "All rooms"
+    return f"{days_str} {time_str} — {rooms_str}"
 
 
 # ── Config builder ────────────────────────────────────────────────────
@@ -273,13 +290,7 @@ def _build_config(
                 "entities": [
                     {
                         "entity": f"switch.{_d}_schedule_{e['task_id']}",
-                        "name": (
-                            "/".join(e.get("days", []))
-                            + " "
-                            + e.get("time", "")
-                            + " — "
-                            + e.get("rooms_str", "All rooms")
-                        ),
+                        "name": _schedule_label(e, rooms),
                     }
                     for e in (schedule_entries or [])
                     if isinstance(e, dict) and e.get("task_id") is not None
