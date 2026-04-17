@@ -65,10 +65,7 @@ async def async_setup_entry(
             return new_entities, new_ids
         for area in areas:
             area_id = area.get("id")
-            if area_id is None:
-                continue
-            area_id_key = str(area_id)
-            if (_map, area_id_key) in already_known:
+            if area_id is None or (_map, area_id) in already_known:
                 continue
             meta_raw = area.get("area_meta_data", "")
             if not meta_raw:
@@ -99,22 +96,17 @@ async def async_setup_entry(
                     room_name=room_name,
                 )
             )
-            new_ids.add((_map, area_id_key))
+            new_ids.add((_map, area_id))
         return new_entities, new_ids
 
     def _schedule_switches(already_known: set[int]) -> tuple[list, set[int]]:
         new_entities: list = []
         new_ids: set[int] = set()
-        active_map = str(coordinator.active_map_id).strip()
         for item in coordinator.schedule.get("schedule", []):
             if not isinstance(item, dict):
                 continue
             task_id = item.get("task_id")
             if task_id is None or int(task_id) in already_known:
-                continue
-            task = item.get("task", {}) if isinstance(item.get("task"), dict) else {}
-            task_map_id = str(task.get("map_id", "")).strip()
-            if task_map_id and active_map and task_map_id != active_map:
                 continue
             new_entities.append(RobEyeScheduleSwitch(coordinator, int(task_id)))
             new_ids.add(int(task_id))
