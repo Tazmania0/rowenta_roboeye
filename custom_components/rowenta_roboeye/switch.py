@@ -471,4 +471,5 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
                 err,
             )
             return
+        self.coordinator.invalidate_schedule_cache()
         await self.coordinator.async_request_refresh()

@@ -383,6 +383,7 @@ def _make_schedule_coord(enabled: int = 1):
     coord.areas = []
     coord.client.set_schedule_enabled = AsyncMock(return_value={"cmd_id": 215})
     coord.async_request_refresh = AsyncMock()
+    coord.invalidate_schedule_cache = MagicMock()
     coord.async_send_command = MagicMock()
     return coord, entry
 
@@ -450,6 +451,7 @@ async def test_schedule_switch_turn_on_bypasses_queue():
     sw, coord = _make_schedule_switch(enabled=0)
     await sw.async_turn_on()
     coord.client.set_schedule_enabled.assert_awaited_once_with(2, True)
+    coord.invalidate_schedule_cache.assert_called_once()
     coord.async_request_refresh.assert_awaited_once()
     coord.async_send_command.assert_not_called()
 
@@ -459,17 +461,36 @@ async def test_schedule_switch_turn_off_bypasses_queue():
     sw, coord = _make_schedule_switch(enabled=1)
     await sw.async_turn_off()
     coord.client.set_schedule_enabled.assert_awaited_once_with(2, False)
+    coord.invalidate_schedule_cache.assert_called_once()
     coord.async_request_refresh.assert_awaited_once()
     coord.async_send_command.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_schedule_switch_api_error_does_not_raise():
-    """Failed toggle must log and not propagate; refresh must not be called."""
+    """Failed toggle must log and not propagate; refresh and cache-invalidation must not be called."""
     sw, coord = _make_schedule_switch()
     coord.client.set_schedule_enabled.side_effect = Exception("timeout")
     await sw.async_turn_on()  # must not raise
+    coord.invalidate_schedule_cache.assert_not_called()
     coord.async_request_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_schedule_switch_invalidates_cache_before_refresh():
+    """Cache must be invalidated before the refresh so the refresh re-fetches schedule."""
+    call_order: list[str] = []
+    sw, coord = _make_schedule_switch(enabled=0)
+    coord.invalidate_schedule_cache.side_effect = lambda: call_order.append("invalidate")
+    coord.async_request_refresh.side_effect = lambda: call_order.append("refresh") or __import__("asyncio").coroutine(lambda: None)()
+
+    # Use an async side_effect for async_request_refresh
+    async def _refresh():
+        call_order.append("refresh")
+    coord.async_request_refresh.side_effect = _refresh
+
+    await sw.async_turn_on()
+    assert call_order == ["invalidate", "refresh"]
 
 
 def test_schedule_switch_missing_entry_returns_safe_defaults():

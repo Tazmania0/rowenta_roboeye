@@ -774,6 +774,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def schedule(self) -> dict[str, Any]:
         return (self.data or {}).get(DATA_SCHEDULE, {})
 
+    def invalidate_schedule_cache(self) -> None:
+        """Force schedule re-fetch on next coordinator refresh.
+
+        Call this after a successful /set/modify_scheduled_task so that
+        async_request_refresh() actually re-polls /get/schedule instead of
+        serving the stale cached value (which would flip the switch back).
+        """
+        self._last_schedule = None
+
     @property
     def robot_info(self) -> dict[str, Any]:
         return (self.data or {}).get(DATA_ROBOT_INFO, {})
