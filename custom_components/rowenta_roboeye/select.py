@@ -95,10 +95,7 @@ def _build_room_select_entities(
         return new_entities, new_ids
     for area in areas:
         area_id = area.get("id")
-        if area_id is None:
-            continue
-        area_id_key = str(area_id)
-        if (_map, area_id_key) in already_known:
+        if area_id is None or (_map, area_id) in already_known:
             continue
         meta_raw = area.get("area_meta_data", "")
         if not meta_raw:
@@ -129,7 +126,7 @@ def _build_room_select_entities(
                 room_name=room_name,
             )
         )
-        new_ids.add((_map, area_id_key))
+        new_ids.add((_map, area_id))
     return new_entities, new_ids
 
 
