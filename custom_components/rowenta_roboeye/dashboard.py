@@ -288,12 +288,16 @@ def _build_config(
                 "title": "Schedule",
                 "icon": "mdi:calendar-clock",
                 "entities": [
-                    {
-                        "entity": f"switch.{_d}_schedule_{e['task_id']}",
-                        "name": _schedule_label(e, rooms),
-                    }
+                    item
                     for e in (schedule_entries or [])
                     if isinstance(e, dict) and e.get("task_id") is not None
+                    for item in [
+                        {"type": "section", "label": _schedule_label(e, rooms)},
+                        {
+                            "entity": f"switch.{_d}_schedule_{e['task_id']}",
+                            "name": "Enabled",
+                        },
+                    ]
                 ],
             }] if schedule_entries else [{
                 "type": "markdown",
