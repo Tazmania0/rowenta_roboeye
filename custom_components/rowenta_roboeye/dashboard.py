@@ -266,36 +266,20 @@ def _build_config(
                     "\n{% endif %}"
                 ),
             },
-            {
-                "type": "markdown",
-                "title": "Schedule",
-                "content": (
-                    "{% set sched = state_attr('"
-                    + f"sensor.{_d}_schedule"
-                    + "', 'schedules') %}"
-                    "\n{% if sched %}"
-                    "\n{% for s in sched %}"
-                    "\n{{ '✅' if s.enabled else '⬜' }} "
-                    "**{{ s.days | join('/') }}** {{ s.time }}"
-                    " — {{ s.rooms_str }}"
-                    "{% if s.map_name %} *({{ s.map_name }})*{% endif %}"
-                    "{% if s.fan_raw > 0 %} · {{ s.fan_speed }}{% endif %}"
-                    "\n{% endfor %}"
-                    "\n{% else %}"
-                    "\n*No schedule configured*"
-                    "\n{% endif %}"
-                ),
-            },
             *([{
                 "type": "entities",
-                "title": "Cleaning Schedules",
+                "title": "Schedule",
                 "icon": "mdi:calendar-clock",
                 "entities": [
                     f"switch.{_d}_schedule_{e['task_id']}"
                     for e in (schedule_entries or [])
                     if isinstance(e, dict) and e.get("task_id") is not None
                 ],
-            }] if schedule_entries else []),
+            }] if schedule_entries else [{
+                "type": "markdown",
+                "title": "Schedule",
+                "content": "*No schedule configured*",
+            }]),
             *([{
                 "type": "entities",
                 "title": "Current Floor",
