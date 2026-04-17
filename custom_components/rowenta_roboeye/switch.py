@@ -383,6 +383,10 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
         self._task_id = task_id
         self._attr_unique_id = f"schedule_{task_id}_{coordinator.device_id}"
         self.entity_id = f"switch.{coordinator.device_id}_schedule_{task_id}"
+        # Optimistic state held between toggle and robot confirmation to prevent
+        # the switch bouncing back when the coordinator refreshes before the robot
+        # has processed the /set/modify_scheduled_task command.
+        self._optimistic_enabled: bool | None = None
 
     def _get_entry(self) -> dict | None:
         for item in self.coordinator.schedule.get("schedule", []):
@@ -430,8 +434,20 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
+        if self._optimistic_enabled is not None:
+            return self._optimistic_enabled
         entry = self._get_entry()
         return bool(int(entry.get("enabled", 0))) if entry else False
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        # Once the robot reports the expected enabled value, drop the optimistic
+        # override so future coordinator updates drive the displayed state normally.
+        if self._optimistic_enabled is not None:
+            entry = self._get_entry()
+            if entry is not None and bool(int(entry.get("enabled", 0))) == self._optimistic_enabled:
+                self._optimistic_enabled = None
+        self.async_write_ha_state()
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -459,6 +475,8 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
         await self._async_set_enabled(False)
 
     async def _async_set_enabled(self, enabled: bool) -> None:
+        self._optimistic_enabled = enabled
+        self.async_write_ha_state()
         try:
             await self.coordinator.client.set_schedule_enabled(self._task_id, enabled)
         except Exception as err:  # noqa: BLE001
@@ -468,6 +486,8 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
                 self._task_id,
                 err,
             )
+            self._optimistic_enabled = None
+            self.async_write_ha_state()
             return
         self.coordinator.invalidate_schedule_cache()
         await self.coordinator.async_request_refresh()

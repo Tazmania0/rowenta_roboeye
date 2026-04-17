@@ -394,6 +394,7 @@ def _make_schedule_switch(enabled: int = 1):
     object.__setattr__(sw, "coordinator", coord)
     object.__setattr__(sw, "_attr_unique_id", "")
     object.__setattr__(sw, "entity_id", "")
+    object.__setattr__(sw, "async_write_ha_state", MagicMock())
     RobEyeScheduleSwitch.__init__(sw, coord, task_id=2)
     return sw, coord
 
@@ -491,6 +492,65 @@ async def test_schedule_switch_invalidates_cache_before_refresh():
 
     await sw.async_turn_on()
     assert call_order == ["invalidate", "refresh"]
+
+
+@pytest.mark.asyncio
+async def test_schedule_switch_optimistic_on_turn_on():
+    """is_on must return True immediately after turn_on, before coordinator refreshes."""
+    sw, coord = _make_schedule_switch(enabled=0)
+    assert sw.is_on is False
+    # Don't await — check state after the optimistic write but before refresh resolves.
+    # We trigger the full flow and inspect the intermediate _optimistic_enabled value.
+    coord.async_request_refresh = AsyncMock()
+    await sw.async_turn_on()
+    # After a successful call the optimistic state is still set until coordinator confirms.
+    # (coordinator mock doesn't fire _handle_coordinator_update, so it stays set.)
+    assert sw._optimistic_enabled is True
+    assert sw.is_on is True
+
+
+@pytest.mark.asyncio
+async def test_schedule_switch_optimistic_on_turn_off():
+    """is_on must return False immediately after turn_off."""
+    sw, coord = _make_schedule_switch(enabled=1)
+    assert sw.is_on is True
+    coord.async_request_refresh = AsyncMock()
+    await sw.async_turn_off()
+    assert sw._optimistic_enabled is False
+    assert sw.is_on is False
+
+
+@pytest.mark.asyncio
+async def test_schedule_switch_api_error_reverts_optimistic():
+    """Failed toggle must revert optimistic state so the real value is shown."""
+    sw, coord = _make_schedule_switch(enabled=0)
+    coord.client.set_schedule_enabled.side_effect = Exception("timeout")
+    await sw.async_turn_on()
+    assert sw._optimistic_enabled is None
+    # is_on should fall back to coordinator data (enabled=0 → False)
+    assert sw.is_on is False
+
+
+def test_schedule_switch_handle_coordinator_update_clears_optimistic_when_confirmed():
+    """_handle_coordinator_update clears optimistic once robot reports matching state."""
+    sw, coord = _make_schedule_switch(enabled=0)
+    sw._optimistic_enabled = True
+    # Simulate coordinator data now showing enabled=1 (robot confirmed).
+    coord.schedule = {"schedule": [{**_SCHED_ENTRY, "enabled": 1}]}
+    sw._handle_coordinator_update()
+    assert sw._optimistic_enabled is None
+
+
+def test_schedule_switch_handle_coordinator_update_keeps_optimistic_while_pending():
+    """_handle_coordinator_update must NOT clear optimistic while robot still shows old value."""
+    sw, coord = _make_schedule_switch(enabled=0)
+    sw._optimistic_enabled = True
+    # Robot hasn't updated yet — still reports enabled=0.
+    coord.schedule = {"schedule": [{**_SCHED_ENTRY, "enabled": 0}]}
+    sw._handle_coordinator_update()
+    assert sw._optimistic_enabled is True
+    # is_on still reads from optimistic.
+    assert sw.is_on is True
 
 
 def test_schedule_switch_missing_entry_returns_safe_defaults():
