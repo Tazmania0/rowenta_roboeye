@@ -61,7 +61,7 @@ from .const import (
     room_selection_entity_id,
 )
 from .coordinator import RobEyeCoordinator
-from .entity import RobEyeEntity, async_remove_stale_room_entities
+from .entity import RobEyeEntity
 
 
 # ── Extended descriptor ───────────────────────────────────────────────
@@ -381,35 +381,43 @@ async def async_setup_entry(
     entities.append(RobEyeSelectedRoomCountSensor(coordinator))
 
     # ── Per-room sensors (from current area list) ─────────────────────
-    known_ids: set = set()
-    room_entities, new_ids = _build_room_sensor_entities(
-        coordinator, config_entry, coordinator.areas, known_ids
+    known_sensor_map: dict = {}
+    initial_sensors, initial_by_area = _build_room_sensor_entities(
+        coordinator, config_entry, coordinator.areas, set()
     )
-    entities.extend(room_entities)
-    known_ids.update(new_ids)
+    known_sensor_map.update(initial_by_area)
+    entities.extend(initial_sensors)
 
     async_add_entities(entities)
 
-    # ── Dynamic listener: add entities when new rooms appear ──────────
+    # ── Dynamic listener: add/remove entities when area set changes ───
     @callback
     def _async_on_areas_updated() -> None:
         """Called by the coordinator when the area set changes."""
-        current_area_ids = {a.get("id") for a in coordinator.areas if a.get("id") is not None}
+        if not coordinator._areas_ready:
+            LOGGER.debug("sensor: areas not ready after map switch, skipping update")
+            return
 
-        # Remove entities for areas that no longer exist on the active map
-        # (user split/merged/renamed rooms → old IDs are gone for good).
-        removed = async_remove_stale_room_entities(
-            hass, config_entry, coordinator, "sensor", current_area_ids
-        )
-        known_ids.difference_update(removed)
+        current_ids: set = {
+            area_id
+            for area in coordinator.areas
+            if (area_id := area.get("id")) is not None
+            and _parse_sensor_area_name(area)
+        }
 
-        new_entities, new_area_ids = _build_room_sensor_entities(
-            coordinator, config_entry, coordinator.areas, known_ids
+        stale_ids = set(known_sensor_map.keys()) - current_ids
+        for area_id in stale_ids:
+            for entity in known_sensor_map.pop(area_id):
+                LOGGER.debug("sensor: removing stale room sensor area_id=%s", area_id)
+                hass.async_create_task(entity.async_remove())
+
+        new_entities, new_by_area = _build_room_sensor_entities(
+            coordinator, config_entry, coordinator.areas, set(known_sensor_map.keys())
         )
         if new_entities:
             LOGGER.debug("sensor: adding %d new room entities", len(new_entities))
+            known_sensor_map.update(new_by_area)
             async_add_entities(new_entities)
-            known_ids.update(new_area_ids)
 
     config_entry.async_on_unload(
         async_dispatcher_connect(
@@ -746,47 +754,51 @@ class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
 
 # ── Room sensor factory ───────────────────────────────────────────────
 
+def _parse_sensor_area_name(area: dict) -> str:
+    """Return the room name from area_meta_data, or empty string."""
+    meta_raw = area.get("area_meta_data", "")
+    if not meta_raw:
+        return ""
+    try:
+        meta = json.loads(meta_raw)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    return meta.get("name", "").strip()
+
+
 def _build_room_sensor_entities(
     coordinator: RobEyeCoordinator,
     config_entry: ConfigEntry,
     areas: list[dict[str, Any]],
     already_known: set,
-) -> tuple[list[RobEyeRoomSensor], set]:
-    """Return NEW room sensor entities (not already in already_known) plus their IDs."""
-    new_entities: list[RobEyeRoomSensor] = []
-    new_ids: set = set()
+) -> tuple[list[RobEyeRoomSensor], dict]:
+    """Return (flat entity list, area_id→entities map) for new rooms only."""
+    flat: list[RobEyeRoomSensor] = []
+    by_area: dict = {}
 
     _map = coordinator.active_map_id
     # Guard: skip if areas data was fetched for a different map (stale-signal race).
     if coordinator.areas_map_id != _map:
-        return new_entities, new_ids
+        return flat, by_area
     for area in areas:
         area_id = area.get("id")
-        if area_id is None or (_map, area_id) in already_known:
+        if area_id is None or area_id in already_known:
             continue
-        meta_raw = area.get("area_meta_data", "")
-        if not meta_raw:
-            continue
-        try:
-            meta = json.loads(meta_raw)
-        except (json.JSONDecodeError, TypeError):
-            LOGGER.debug("Skipping area with unparseable meta_data: %s", meta_raw)
-            continue
-        room_name = meta.get("name", "").strip()
+        room_name = _parse_sensor_area_name(area)
         if not room_name:
+            LOGGER.debug("Skipping area with no name: id=%s", area_id)
             continue
         # Skip areas disabled for cleaning in the RobEye app
         if area.get("area_state") == AREA_STATE_BLOCKING:
             continue
-        new_entities.extend(
-            _build_room_sensors(
-                coordinator, config_entry, area_id, room_name,
-                coordinator.device_id, map_id=_map,
-            )
+        sensors = _build_room_sensors(
+            coordinator, config_entry, area_id, room_name,
+            coordinator.device_id, map_id=_map,
         )
-        new_ids.add((_map, area_id))
+        flat.extend(sensors)
+        by_area[area_id] = sensors
 
-    return new_entities, new_ids
+    return flat, by_area
 
 
 def _build_room_sensors(

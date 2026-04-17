@@ -152,6 +152,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Live session map tracking
         self._operation_map_id: str = map_id  # current session map; changes each new clean
         self._last_active_map_id: str = map_id  # tracks floor changes
+        self._areas_ready: bool = False
         self._manual_map_id: str | None = None  # user override via Select entity
 
         # Last-session replay state
@@ -296,6 +297,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_set_active_map(self, map_id: str) -> None:
         """Override the active map and force-reload all map-dependent data."""
+        self._areas_ready = False
         self._manual_map_id = map_id
         self._last_active_map_id = map_id
         self._last_areas = None
@@ -713,6 +715,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "RobEye: initial/post-switch areas loaded (%d areas), signalling platforms",
                     len(current_ids),
                 )
+                self._areas_ready = True
                 self.hass.loop.call_soon(async_dispatcher_send, self.hass, signal)
             return
 
@@ -725,6 +728,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 removed_ids,
             )
             self._known_area_ids = current_ids
+            self._areas_ready = True
             self.hass.loop.call_soon(async_dispatcher_send, self.hass, signal)
 
     # ── Convenience properties ────────────────────────────────────────

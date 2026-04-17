@@ -42,7 +42,7 @@ from .const import (
     room_selection_entity_id,
 )
 from .coordinator import RobEyeCoordinator
-from .entity import RobEyeEntity, async_remove_stale_room_entities
+from .entity import RobEyeEntity
 
 
 async def async_setup_entry(
@@ -53,51 +53,53 @@ async def async_setup_entry(
     coordinator: RobEyeCoordinator = hass.data[DOMAIN][config_entry.entry_id]
 
     entities: list = [RobEyeDeepCleanSwitch(coordinator)]
-    known_ids: set = set()
+    known_entities_map: dict = {}
     known_task_ids: set[int] = set()
 
-    def _room_switches(areas: list, already_known: set) -> tuple[list, set]:
+    def _parse_switch_area_name(area: dict) -> str:
+        meta_raw = area.get("area_meta_data", "")
+        if not meta_raw:
+            return ""
+        try:
+            meta = _json.loads(meta_raw)
+        except Exception:
+            return ""
+        return meta.get("name", "").strip()
+
+    def _room_switches(areas: list, already_known: set) -> tuple[list, dict]:
         new_entities: list = []
-        new_ids: set = set()
+        by_area: dict = {}
         _map = coordinator.active_map_id
         # Guard: skip if areas data was fetched for a different map (stale-signal race).
         if coordinator.areas_map_id != _map:
-            return new_entities, new_ids
+            return new_entities, by_area
         for area in areas:
             area_id = area.get("id")
-            if area_id is None or (_map, area_id) in already_known:
+            if area_id is None or area_id in already_known:
                 continue
-            meta_raw = area.get("area_meta_data", "")
-            if not meta_raw:
-                continue
-            try:
-                meta = _json.loads(meta_raw)
-            except Exception:
-                continue
-            room_name = meta.get("name", "").strip()
+            room_name = _parse_switch_area_name(area)
             if not room_name:
                 continue
             # Skip areas disabled for cleaning in the RobEye app
             if area.get("area_state") == AREA_STATE_BLOCKING:
                 continue
-            new_entities.append(
+            entities_for_area = [
                 RobEyeRoomDeepCleanSwitch(
                     coordinator=coordinator,
                     config_entry=config_entry,
                     area_id=str(area_id),
                     room_name=room_name,
-                )
-            )
-            new_entities.append(
+                ),
                 RobEyeRoomSelectSwitch(
                     coordinator=coordinator,
                     config_entry=config_entry,
                     area_id=str(area_id),
                     room_name=room_name,
-                )
-            )
-            new_ids.add((_map, area_id))
-        return new_entities, new_ids
+                ),
+            ]
+            new_entities.extend(entities_for_area)
+            by_area[area_id] = entities_for_area
+        return new_entities, by_area
 
     def _schedule_switches(already_known: set[int]) -> tuple[list, set[int]]:
         new_entities: list = []
@@ -112,9 +114,9 @@ async def async_setup_entry(
             new_ids.add(int(task_id))
         return new_entities, new_ids
 
-    room_switches, new_ids = _room_switches(coordinator.areas, known_ids)
-    entities.extend(room_switches)
-    known_ids.update(new_ids)
+    initial_switches, initial_by_area = _room_switches(coordinator.areas, set())
+    known_entities_map.update(initial_by_area)
+    entities.extend(initial_switches)
 
     schedule_switches, new_task_ids = _schedule_switches(known_task_ids)
     entities.extend(schedule_switches)
@@ -124,13 +126,27 @@ async def async_setup_entry(
 
     @callback
     def _on_areas_updated() -> None:
-        current_area_ids = {a.get("id") for a in coordinator.areas if a.get("id") is not None}
-        removed = async_remove_stale_room_entities(hass, config_entry, coordinator, "switch", current_area_ids)
-        known_ids.difference_update(removed)
-        new_entities, new_area_ids = _room_switches(coordinator.areas, known_ids)
+        if not coordinator._areas_ready:
+            LOGGER.debug("switch: areas not ready after map switch, skipping update")
+            return
+
+        current_ids: set = {
+            area_id
+            for area in coordinator.areas
+            if (area_id := area.get("id")) is not None
+            and _parse_switch_area_name(area)
+        }
+
+        stale_ids = set(known_entities_map.keys()) - current_ids
+        for area_id in stale_ids:
+            for entity in known_entities_map.pop(area_id):
+                LOGGER.debug("switch: removing stale room switch area_id=%s", area_id)
+                hass.async_create_task(entity.async_remove())
+
+        new_entities, new_by_area = _room_switches(coordinator.areas, set(known_entities_map.keys()))
         if new_entities:
+            known_entities_map.update(new_by_area)
             async_add_entities(new_entities)
-            known_ids.update(new_area_ids)
 
     @callback
     def _on_coordinator_updated() -> None:

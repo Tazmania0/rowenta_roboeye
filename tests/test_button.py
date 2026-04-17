@@ -328,7 +328,7 @@ def test_build_room_button_entities_skips_no_metadata():
 def test_build_room_button_entities_skips_already_known():
     coord = _make_coordinator()
     entry = _make_config_entry()
-    already_known = {("3", 3)}  # (map_id, area_id) already added
+    already_known = {3}  # area_id already added
     entities, ids = _build_room_button_entities(coord, entry, coord.areas, already_known)
     # Only Kitchen (id=11) should be returned
     assert len(entities) == 1
@@ -354,7 +354,7 @@ def test_build_room_button_entities_stale_map_guard():
     entry = _make_config_entry()
     entities, ids = _build_room_button_entities(coord, entry, coord.areas, set())
     assert entities == []
-    assert ids == set()
+    assert ids == []
 
 
 def test_build_room_button_entities_skips_invalid_json_meta():
