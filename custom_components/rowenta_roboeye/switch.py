@@ -53,8 +53,8 @@ async def async_setup_entry(
     coordinator: RobEyeCoordinator = hass.data[DOMAIN][config_entry.entry_id]
 
     entities: list = [RobEyeDeepCleanSwitch(coordinator)]
-    known_entities_map: dict = {}
-    _swi_map_id: str = coordinator.active_map_id
+    # Per-map entity tracking: map_id -> {area_id -> [entities]}
+    known_entities_by_map: dict[str, dict] = {}
     known_task_ids: set[int] = set()
 
     def _parse_switch_area_name(area: dict) -> str:
@@ -71,7 +71,6 @@ async def async_setup_entry(
         new_entities: list = []
         by_area: dict = {}
         _map = coordinator.active_map_id
-        # Guard: skip if areas data was fetched for a different map (stale-signal race).
         if coordinator.areas_map_id != _map:
             return new_entities, by_area
         for area in areas:
@@ -81,7 +80,6 @@ async def async_setup_entry(
             room_name = _parse_switch_area_name(area)
             if not room_name:
                 continue
-            # Skip areas disabled for cleaning in the RobEye app
             if area.get("area_state") == AREA_STATE_BLOCKING:
                 continue
             entities_for_area = [
@@ -115,9 +113,12 @@ async def async_setup_entry(
             new_ids.add(int(task_id))
         return new_entities, new_ids
 
-    initial_switches, initial_by_area = _room_switches(coordinator.areas, set())
-    known_entities_map.update(initial_by_area)
-    entities.extend(initial_switches)
+    _active = coordinator.active_map_id
+    if coordinator.areas_map_id == _active:
+        initial_switches, initial_by_area = _room_switches(coordinator.areas, set())
+        if initial_by_area:
+            known_entities_by_map[_active] = initial_by_area
+        entities.extend(initial_switches)
 
     schedule_switches, new_task_ids = _schedule_switches(known_task_ids)
     entities.extend(schedule_switches)
@@ -127,12 +128,13 @@ async def async_setup_entry(
 
     @callback
     def _on_areas_updated() -> None:
-        nonlocal _swi_map_id
         if coordinator.areas_map_id != coordinator.active_map_id:
             LOGGER.debug("switch: areas fetched for wrong map, skipping update")
             return
 
         active_map = coordinator.active_map_id
+        map_entities = known_entities_by_map.setdefault(active_map, {})
+
         current_ids: set = {
             area_id
             for area in coordinator.areas
@@ -140,23 +142,17 @@ async def async_setup_entry(
             and _parse_switch_area_name(area)
         }
 
-        # When the active map changes, treat ALL existing entities as stale — area
-        # IDs can overlap between maps, so a simple set-difference would miss them.
-        stale_ids = (
-            set(known_entities_map.keys())
-            if _swi_map_id != active_map
-            else set(known_entities_map.keys()) - current_ids
-        )
+        # Only remove entities for areas deleted from this specific map.
+        stale_ids = set(map_entities.keys()) - current_ids
         for area_id in stale_ids:
-            for entity in known_entities_map.pop(area_id):
-                LOGGER.debug("switch: removing stale room switch area_id=%s", area_id)
+            for entity in map_entities.pop(area_id):
+                LOGGER.debug("switch: removing deleted-area switch area_id=%s", area_id)
                 hass.async_create_task(entity.async_remove())
 
-        new_entities, new_by_area = _room_switches(coordinator.areas, set(known_entities_map.keys()))
+        new_entities, new_by_area = _room_switches(coordinator.areas, set(map_entities.keys()))
         if new_entities:
-            known_entities_map.update(new_by_area)
+            map_entities.update(new_by_area)
             async_add_entities(new_entities)
-        _swi_map_id = active_map
 
     @callback
     def _on_coordinator_updated() -> None:
@@ -250,6 +246,10 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         self.entity_id = f"switch.{coordinator.device_id}_map{_map}_room_{area_id}_deep_clean"
         self._is_on: bool = False
         self._last_robot_strategy: str | None = None  # last strategy_mode read from robot
+
+    @property
+    def available(self) -> bool:
+        return self._map_id == self.coordinator.active_map_id and super().available
 
     @property
     def is_on(self) -> bool:
@@ -362,6 +362,10 @@ class RobEyeRoomSelectSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         self._attr_name = f"{room_name} Selected"
         self.entity_id = room_selection_entity_id(coordinator.device_id, _map, area_id)
         self._is_on: bool = False
+
+    @property
+    def available(self) -> bool:
+        return self._map_id == self.coordinator.active_map_id and super().available
 
     @property
     def is_on(self) -> bool:

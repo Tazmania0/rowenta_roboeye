@@ -44,26 +44,29 @@ async def async_setup_entry(
         RobEyeCleanSelectedButton(coordinator),
     ]
 
-    # Initial room buttons
-    known_entities: dict = {}
-    _btn_map_id: str = coordinator.active_map_id
-    initial_buttons, initial_ids = _build_room_button_entities(
-        coordinator, config_entry, coordinator.areas, set()
-    )
-    for entity, area_id in zip(initial_buttons, initial_ids):
-        known_entities[area_id] = entity
-    entities.extend(initial_buttons)
+    # Per-map entity tracking: map_id -> {area_id -> entity}
+    known_entities_by_map: dict[str, dict] = {}
+
+    _active = coordinator.active_map_id
+    if coordinator.areas_map_id == _active:
+        initial_buttons, initial_ids = _build_room_button_entities(
+            coordinator, config_entry, coordinator.areas, set()
+        )
+        if initial_ids:
+            known_entities_by_map[_active] = dict(zip(initial_ids, initial_buttons))
+        entities.extend(initial_buttons)
     async_add_entities(entities)
 
     # Dynamic listener
     @callback
     def _async_on_areas_updated() -> None:
-        nonlocal _btn_map_id
         if coordinator.areas_map_id != coordinator.active_map_id:
             LOGGER.debug("button: areas fetched for wrong map, skipping update")
             return
 
         active_map = coordinator.active_map_id
+        map_entities = known_entities_by_map.setdefault(active_map, {})
+
         current_ids: set = {
             area_id
             for area in coordinator.areas
@@ -72,27 +75,21 @@ async def async_setup_entry(
             and _parse_area_name(area)
         }
 
-        # When the active map changes, treat ALL existing entities as stale — area
-        # IDs can overlap between maps, so a simple set-difference would miss them.
-        stale_ids = (
-            set(known_entities.keys())
-            if _btn_map_id != active_map
-            else set(known_entities.keys()) - current_ids
-        )
+        # Only remove entities for areas deleted from this specific map.
+        stale_ids = set(map_entities.keys()) - current_ids
         for area_id in stale_ids:
-            entity = known_entities.pop(area_id)
-            LOGGER.debug("button: removing stale room button area_id=%s", area_id)
+            entity = map_entities.pop(area_id)
+            LOGGER.debug("button: removing deleted-area button area_id=%s", area_id)
             hass.async_create_task(entity.async_remove())
 
         new_entities, new_area_ids = _build_room_button_entities(
-            coordinator, config_entry, coordinator.areas, set(known_entities.keys())
+            coordinator, config_entry, coordinator.areas, set(map_entities.keys())
         )
         if new_entities:
             LOGGER.debug("button: adding %d new room buttons", len(new_entities))
             for entity, area_id in zip(new_entities, new_area_ids):
-                known_entities[area_id] = entity
+                map_entities[area_id] = entity
             async_add_entities(new_entities)
-        _btn_map_id = active_map
 
     config_entry.async_on_unload(
         async_dispatcher_connect(
@@ -296,6 +293,10 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
         self._fan_speed_select_id = f"select.{_dev}_map{_map}_room_{area_id}_fan_speed"
         self._strategy_select_id = f"select.{_dev}_map{_map}_room_{area_id}_strategy"
         self._deep_clean_switch_id = f"switch.{_dev}_map{_map}_room_{area_id}_deep_clean"
+
+    @property
+    def available(self) -> bool:
+        return self._map_id == self.coordinator.active_map_id and super().available
 
     async def async_press(self) -> None:
         LOGGER.debug("button: clean room %s", self._area_id)

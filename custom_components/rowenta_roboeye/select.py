@@ -51,23 +51,31 @@ async def async_setup_entry(
         RobEyeActiveMapSelect(coordinator),
     ]
 
-    known_entities_map: dict = {}
-    _sel_map_id: str = coordinator.active_map_id
-    initial_selects, initial_by_area = _build_room_select_entities(
-        coordinator, config_entry, coordinator.areas, set()
-    )
-    known_entities_map.update(initial_by_area)
-    entities.extend(initial_selects)
+    # Per-map entity tracking: map_id -> {area_id -> [entities]}
+    # Entities for inactive maps stay registered but show as unavailable.
+    # This avoids the async_remove/async_add race that caused duplicate-ID errors
+    # when switching maps: we never remove+recreate entities for map switches.
+    known_entities_by_map: dict[str, dict] = {}
+
+    _active = coordinator.active_map_id
+    if coordinator.areas_map_id == _active:
+        initial_selects, initial_by_area = _build_room_select_entities(
+            coordinator, config_entry, coordinator.areas, set()
+        )
+        if initial_by_area:
+            known_entities_by_map[_active] = initial_by_area
+        entities.extend(initial_selects)
     async_add_entities(entities)
 
     @callback
     def _async_on_areas_updated() -> None:
-        nonlocal _sel_map_id
         if coordinator.areas_map_id != coordinator.active_map_id:
             LOGGER.debug("select: areas fetched for wrong map, skipping update")
             return
 
         active_map = coordinator.active_map_id
+        map_entities = known_entities_by_map.setdefault(active_map, {})
+
         current_ids: set = {
             area_id
             for area in coordinator.areas
@@ -75,26 +83,22 @@ async def async_setup_entry(
             and _parse_select_area_name(area)
         }
 
-        # When the active map changes, treat ALL existing entities as stale — area
-        # IDs can overlap between maps, so a simple set-difference would miss them.
-        stale_ids = (
-            set(known_entities_map.keys())
-            if _sel_map_id != active_map
-            else set(known_entities_map.keys()) - current_ids
-        )
+        # Only remove entities for areas deleted from this specific map.
+        # Entities for other maps are left alone — they become unavailable
+        # while that map is inactive and come back when the user switches back.
+        stale_ids = set(map_entities.keys()) - current_ids
         for area_id in stale_ids:
-            for entity in known_entities_map.pop(area_id):
-                LOGGER.debug("select: removing stale room select area_id=%s", area_id)
+            for entity in map_entities.pop(area_id):
+                LOGGER.debug("select: removing deleted-area select area_id=%s", area_id)
                 hass.async_create_task(entity.async_remove())
 
         new_entities, new_by_area = _build_room_select_entities(
-            coordinator, config_entry, coordinator.areas, set(known_entities_map.keys())
+            coordinator, config_entry, coordinator.areas, set(map_entities.keys())
         )
         if new_entities:
             LOGGER.debug("select: adding %d new room selects", len(new_entities))
-            known_entities_map.update(new_by_area)
+            map_entities.update(new_by_area)
             async_add_entities(new_entities)
-        _sel_map_id = active_map
 
     config_entry.async_on_unload(
         async_dispatcher_connect(
@@ -243,6 +247,10 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         self.entity_id = f"select.{coordinator.device_id}_map{_map}_room_{area_id}_fan_speed"
         self._selected: str = "normal"
         self._last_robot_raw: str | None = None  # last cleaning_parameter_set read from robot
+
+    @property
+    def available(self) -> bool:
+        return self._map_id == self.coordinator.active_map_id and super().available
 
     @property
     def current_option(self) -> str:
@@ -471,6 +479,10 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
         self._attr_name = f"{room_name} Strategy"
         self.entity_id = f"select.{coordinator.device_id}_map{_map}_room_{area_id}_strategy"
         self._selected: str = STRATEGY_LABELS[STRATEGY_DEFAULT]
+
+    @property
+    def available(self) -> bool:
+        return self._map_id == self.coordinator.active_map_id and super().available
 
     @property
     def current_option(self) -> str:
