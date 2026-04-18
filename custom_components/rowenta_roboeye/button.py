@@ -174,7 +174,17 @@ class RobEyeStopButton(RobEyeBaseButton):
         self.entity_id = f"button.{coordinator.device_id}_stop"
 
     async def async_press(self) -> None:
-        await self.coordinator.async_send_command(self.coordinator.client.stop)
+        await self.coordinator.async_send_command(
+            self.coordinator.client.stop,
+            label="stop(advance)",
+        )
+        if self.coordinator._paused_jobs:
+            await self.coordinator.async_advance_to_next_job()
+        else:
+            await self.coordinator.async_send_command(
+                self.coordinator.client.go_home,
+                label="go_home",
+            )
 
 
 class RobEyeCleanAllButton(RobEyeBaseButton):
