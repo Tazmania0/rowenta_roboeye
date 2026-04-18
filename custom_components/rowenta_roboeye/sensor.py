@@ -382,6 +382,7 @@ async def async_setup_entry(
 
     # ── Per-room sensors (from current area list) ─────────────────────
     known_sensor_map: dict = {}
+    _sensor_map_id: str = coordinator.active_map_id
     initial_sensors, initial_by_area = _build_room_sensor_entities(
         coordinator, config_entry, coordinator.areas, set()
     )
@@ -394,10 +395,12 @@ async def async_setup_entry(
     @callback
     def _async_on_areas_updated() -> None:
         """Called by the coordinator when the area set changes."""
+        nonlocal _sensor_map_id
         if coordinator.areas_map_id != coordinator.active_map_id:
             LOGGER.debug("sensor: areas fetched for wrong map, skipping update")
             return
 
+        active_map = coordinator.active_map_id
         current_ids: set = {
             area_id
             for area in coordinator.areas
@@ -405,7 +408,13 @@ async def async_setup_entry(
             and _parse_sensor_area_name(area)
         }
 
-        stale_ids = set(known_sensor_map.keys()) - current_ids
+        # When the active map changes, treat ALL existing entities as stale — area
+        # IDs can overlap between maps, so a simple set-difference would miss them.
+        stale_ids = (
+            set(known_sensor_map.keys())
+            if _sensor_map_id != active_map
+            else set(known_sensor_map.keys()) - current_ids
+        )
         for area_id in stale_ids:
             for entity in known_sensor_map.pop(area_id):
                 LOGGER.debug("sensor: removing stale room sensor area_id=%s", area_id)
@@ -418,6 +427,7 @@ async def async_setup_entry(
             LOGGER.debug("sensor: adding %d new room entities", len(new_entities))
             known_sensor_map.update(new_by_area)
             async_add_entities(new_entities)
+        _sensor_map_id = active_map
 
     config_entry.async_on_unload(
         async_dispatcher_connect(

@@ -52,6 +52,7 @@ async def async_setup_entry(
     ]
 
     known_entities_map: dict = {}
+    _sel_map_id: str = coordinator.active_map_id
     initial_selects, initial_by_area = _build_room_select_entities(
         coordinator, config_entry, coordinator.areas, set()
     )
@@ -61,10 +62,12 @@ async def async_setup_entry(
 
     @callback
     def _async_on_areas_updated() -> None:
+        nonlocal _sel_map_id
         if coordinator.areas_map_id != coordinator.active_map_id:
             LOGGER.debug("select: areas fetched for wrong map, skipping update")
             return
 
+        active_map = coordinator.active_map_id
         current_ids: set = {
             area_id
             for area in coordinator.areas
@@ -72,7 +75,13 @@ async def async_setup_entry(
             and _parse_select_area_name(area)
         }
 
-        stale_ids = set(known_entities_map.keys()) - current_ids
+        # When the active map changes, treat ALL existing entities as stale — area
+        # IDs can overlap between maps, so a simple set-difference would miss them.
+        stale_ids = (
+            set(known_entities_map.keys())
+            if _sel_map_id != active_map
+            else set(known_entities_map.keys()) - current_ids
+        )
         for area_id in stale_ids:
             for entity in known_entities_map.pop(area_id):
                 LOGGER.debug("select: removing stale room select area_id=%s", area_id)
@@ -85,6 +94,7 @@ async def async_setup_entry(
             LOGGER.debug("select: adding %d new room selects", len(new_entities))
             known_entities_map.update(new_by_area)
             async_add_entities(new_entities)
+        _sel_map_id = active_map
 
     config_entry.async_on_unload(
         async_dispatcher_connect(

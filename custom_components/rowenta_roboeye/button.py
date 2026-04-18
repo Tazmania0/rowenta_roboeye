@@ -46,6 +46,7 @@ async def async_setup_entry(
 
     # Initial room buttons
     known_entities: dict = {}
+    _btn_map_id: str = coordinator.active_map_id
     initial_buttons, initial_ids = _build_room_button_entities(
         coordinator, config_entry, coordinator.areas, set()
     )
@@ -57,10 +58,12 @@ async def async_setup_entry(
     # Dynamic listener
     @callback
     def _async_on_areas_updated() -> None:
+        nonlocal _btn_map_id
         if coordinator.areas_map_id != coordinator.active_map_id:
             LOGGER.debug("button: areas fetched for wrong map, skipping update")
             return
 
+        active_map = coordinator.active_map_id
         current_ids: set = {
             area_id
             for area in coordinator.areas
@@ -69,7 +72,13 @@ async def async_setup_entry(
             and _parse_area_name(area)
         }
 
-        stale_ids = set(known_entities.keys()) - current_ids
+        # When the active map changes, treat ALL existing entities as stale — area
+        # IDs can overlap between maps, so a simple set-difference would miss them.
+        stale_ids = (
+            set(known_entities.keys())
+            if _btn_map_id != active_map
+            else set(known_entities.keys()) - current_ids
+        )
         for area_id in stale_ids:
             entity = known_entities.pop(area_id)
             LOGGER.debug("button: removing stale room button area_id=%s", area_id)
@@ -83,6 +92,7 @@ async def async_setup_entry(
             for entity, area_id in zip(new_entities, new_area_ids):
                 known_entities[area_id] = entity
             async_add_entities(new_entities)
+        _btn_map_id = active_map
 
     config_entry.async_on_unload(
         async_dispatcher_connect(
