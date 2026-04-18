@@ -63,6 +63,8 @@ def _entity(coord=None) -> RobEyeActiveMapSelect:
     object.__setattr__(entity, "coordinator", coord)
     object.__setattr__(entity, "_attr_unique_id", "active_map_test")
     object.__setattr__(entity, "_name_to_id", {})
+    # async_select_option calls async_write_ha_state for optimistic update.
+    object.__setattr__(entity, "async_write_ha_state", MagicMock())
     return entity
 
 
@@ -547,13 +549,15 @@ def test_room_fan_speed_available_same_map():
     assert entity.available is True
 
 
-def test_room_fan_speed_unavailable_different_map():
-    # Create entity while map is "3" (sets _map_id = "3"),
-    # then switch coordinator to map "4" → unavailable.
+def test_room_fan_speed_stays_available_on_map_switch():
+    # Entities no longer become unavailable on map switch — they remain
+    # available (showing stale data) until explicitly removed by
+    # _async_on_areas_updated.  This prevents the "unavailable" flash in the
+    # Lovelace dashboard during the transition window.
     coord = _make_room_coordinator(active_map_id="3")
     entity = _room_fan_entity(coord=coord)
     coord.active_map_id = "4"
-    assert entity.available is False
+    assert entity.available is True
 
 
 @pytest.mark.asyncio
@@ -780,13 +784,15 @@ def test_room_strategy_available_same_map():
     assert entity.available is True
 
 
-def test_room_strategy_unavailable_different_map():
-    # Create entity while map is "3" (sets _map_id = "3"),
-    # then switch coordinator to map "4" → unavailable.
+def test_room_strategy_stays_available_on_map_switch():
+    # Entities no longer become unavailable on map switch — they remain
+    # available (showing stale data) until explicitly removed by
+    # _async_on_areas_updated.  This prevents the "unavailable" flash in the
+    # Lovelace dashboard during the transition window.
     coord = _make_room_coordinator(active_map_id="3")
     entity = _room_strategy_entity(coord=coord)
     coord.active_map_id = "4"
-    assert entity.available is False
+    assert entity.available is True
 
 
 @pytest.mark.asyncio
