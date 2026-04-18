@@ -245,10 +245,6 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         self._last_robot_raw: str | None = None  # last cleaning_parameter_set read from robot
 
     @property
-    def available(self) -> bool:
-        return super().available and self._map_id == self.coordinator.active_map_id
-
-    @property
     def current_option(self) -> str:
         return self._selected
 
@@ -348,6 +344,9 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
 
     @property
     def current_option(self) -> str | None:
+        # Always rebuild _name_to_id here: HA calls current_option before options
+        # in state assembly, so _name_to_id could be stale and cause a flicker.
+        self._build_options()
         active_id = self.coordinator.active_map_id
         for name, map_id in self._name_to_id.items():
             if map_id == active_id:
@@ -378,6 +377,12 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
 
     async def async_select_option(self, option: str) -> None:
         map_id = self._name_to_id.get(option, option)
+        # Optimistically write the new map to the coordinator and push state to
+        # HA immediately.  This eliminates the 1-2 s "flicker" where the selector
+        # briefly reverts to the previous map while waiting for the next
+        # coordinator refresh cycle to propagate _manual_map_id.
+        self.coordinator._manual_map_id = map_id
+        self.async_write_ha_state()
         await self.coordinator.async_set_active_map(map_id)
 
 
@@ -466,10 +471,6 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
         self._attr_name = f"{room_name} Strategy"
         self.entity_id = f"select.{coordinator.device_id}_map{_map}_room_{area_id}_strategy"
         self._selected: str = STRATEGY_LABELS[STRATEGY_DEFAULT]
-
-    @property
-    def available(self) -> bool:
-        return super().available and self._map_id == self.coordinator.active_map_id
 
     @property
     def current_option(self) -> str:

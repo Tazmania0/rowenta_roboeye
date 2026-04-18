@@ -252,10 +252,6 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         self._last_robot_strategy: str | None = None  # last strategy_mode read from robot
 
     @property
-    def available(self) -> bool:
-        return super().available and self._map_id == self.coordinator.active_map_id
-
-    @property
     def is_on(self) -> bool:
         return self._is_on
 
@@ -366,10 +362,6 @@ class RobEyeRoomSelectSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         self._attr_name = f"{room_name} Selected"
         self.entity_id = room_selection_entity_id(coordinator.device_id, _map, area_id)
         self._is_on: bool = False
-
-    @property
-    def available(self) -> bool:
-        return super().available and self._map_id == self.coordinator.active_map_id
 
     @property
     def is_on(self) -> bool:

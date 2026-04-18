@@ -297,10 +297,6 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
         self._strategy_select_id = f"select.{_dev}_map{_map}_room_{area_id}_strategy"
         self._deep_clean_switch_id = f"switch.{_dev}_map{_map}_room_{area_id}_deep_clean"
 
-    @property
-    def available(self) -> bool:
-        return super().available and self._map_id == self.coordinator.active_map_id
-
     async def async_press(self) -> None:
         LOGGER.debug("button: clean room %s", self._area_id)
         fan_speed_label = self._get_room_fan_speed()

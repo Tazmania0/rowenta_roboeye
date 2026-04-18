@@ -226,13 +226,15 @@ def test_room_switch_available_same_map():
     assert sw.available is True
 
 
-def test_room_switch_unavailable_different_map():
-    # Create switch while map is "3" (sets _map_id = "3"),
-    # then switch coordinator to map "4" → unavailable.
+def test_room_switch_stays_available_on_map_switch():
+    # Entities no longer become unavailable on map switch — they remain
+    # available (showing stale data) until explicitly removed by
+    # _async_on_areas_updated.  This prevents the "unavailable" flash in the
+    # Lovelace dashboard during the transition window.
     coord = _make_coordinator(active_map_id="3")
     sw = _make_room_switch(coord=coord)
     coord.active_map_id = "4"
-    assert sw.available is False
+    assert sw.available is True
 
 
 @pytest.mark.asyncio

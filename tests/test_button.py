@@ -191,13 +191,15 @@ def test_room_button_available_same_map():
     assert btn.available is True
 
 
-def test_room_button_unavailable_different_map():
-    # Create button while map is "3" (sets _map_id = "3"),
-    # then switch coordinator to map "4" → unavailable.
+def test_room_button_stays_available_on_map_switch():
+    # Entities no longer become unavailable on map switch — they remain
+    # available (showing stale data) until explicitly removed by
+    # _async_on_areas_updated.  This prevents the "unavailable" flash in the
+    # Lovelace dashboard during the transition window.
     coord = _make_coordinator(active_map_id="3")
     btn = _make_room_button(coord=coord)
     coord.active_map_id = "4"
-    assert btn.available is False
+    assert btn.available is True
 
 
 @pytest.mark.asyncio
