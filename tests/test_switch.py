@@ -226,14 +226,14 @@ def test_room_switch_available_same_map():
     assert sw.available is True
 
 
-def test_room_switch_stays_available_on_map_switch():
-    # Entities no longer become unavailable on map switch — they remain
-    # available (showing stale data) until explicitly removed by
-    # _async_on_areas_updated.  This prevents the "unavailable" flash in the
-    # Lovelace dashboard during the transition window.
+def test_room_switch_unavailable_on_map_switch():
+    # Entity becomes unavailable when active map changes away from its map.
     coord = _make_coordinator(active_map_id="3")
     sw = _make_room_switch(coord=coord)
+    assert sw.available is True
     coord.active_map_id = "4"
+    assert sw.available is False
+    coord.active_map_id = "3"
     assert sw.available is True
 
 
