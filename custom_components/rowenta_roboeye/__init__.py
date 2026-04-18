@@ -231,6 +231,20 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             _async_sync_room_selection_booleans(hass, coordinator)
         )
 
+        # After a deliberate map switch the first dashboard save may race ahead of
+        # entity state initialisation, leaving room entities showing "unavailable"
+        # briefly.  Schedule a second verification pass 5 s later: if areas still
+        # look wrong we force a coordinator refresh; either way we re-render the
+        # dashboard so Lovelace picks up the now-stable entity states.
+        if getattr(coordinator, "_post_switch_verify_pending", False):
+            coordinator._post_switch_verify_pending = False
+            LOGGER.debug("RobEye: post-map-switch detected — scheduling 5 s verification")
+            hass.async_create_task(
+                _async_post_switch_verify(
+                    hass, config_entry, coordinator, dashboard_manager, friendly_name
+                )
+            )
+
     config_entry.async_on_unload(
         async_dispatcher_connect(
             hass,
@@ -320,6 +334,66 @@ async def _async_initial_dashboard(
             "notification_id": "rowenta_roboeye_restart_required",
         },
     )
+
+
+async def _async_post_switch_verify(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    coordinator: RobEyeCoordinator,
+    dashboard_manager: RobEyeDashboardManager,
+    friendly_name: str,
+) -> None:
+    """Secondary check run 5 s after a map switch to fix stale "unavailable" states.
+
+    The first dashboard save races against async entity initialisation — the
+    Lovelace config is correct but entities haven't written their state yet.
+    Waiting 5 s lets every platform task complete.  We then:
+      1. Force a coordinator refresh when areas look stale (handles the robot
+         taking more than one poll cycle to return the new map's room data).
+      2. Unconditionally invalidate + regenerate the dashboard so Lovelace
+         re-reads entity states that are now fully initialised.
+    The hash guard inside async_create_dashboard makes step 2 a no-op when the
+    room config is already correct.
+    """
+    await asyncio.sleep(5)
+
+    if config_entry.state not in (
+        ConfigEntryState.LOADED,
+        ConfigEntryState.SETUP_IN_PROGRESS,
+    ):
+        return
+
+    areas_stale = (
+        not getattr(coordinator, "_areas_ready", True)
+        or coordinator.areas_map_id != coordinator.active_map_id
+        or not coordinator.areas
+    )
+
+    if areas_stale:
+        LOGGER.debug(
+            "RobEye: post-switch verify — areas stale (ready=%s map_id areas=%s active=%s), forcing refresh",
+            getattr(coordinator, "_areas_ready", "?"),
+            coordinator.areas_map_id,
+            coordinator.active_map_id,
+        )
+        await coordinator.async_request_refresh()
+
+    dashboard_manager.invalidate()
+    await async_create_dashboard(
+        hass,
+        coordinator.areas,
+        coordinator.robot_info,
+        manager=dashboard_manager,
+        device_id=coordinator.device_id,
+        active_map_id=coordinator.active_map_id,
+        friendly_name=friendly_name,
+        available_maps=coordinator.available_maps,
+        schedule_entries=_schedule_for_map(
+            coordinator.schedule.get("schedule"),
+            coordinator.active_map_id,
+        ),
+    )
+    LOGGER.debug("RobEye: post-switch dashboard verification complete")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
