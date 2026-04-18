@@ -54,6 +54,7 @@ async def async_setup_entry(
 
     entities: list = [RobEyeDeepCleanSwitch(coordinator)]
     known_entities_map: dict = {}
+    _swi_map_id: str = coordinator.active_map_id
     known_task_ids: set[int] = set()
 
     def _parse_switch_area_name(area: dict) -> str:
@@ -126,10 +127,12 @@ async def async_setup_entry(
 
     @callback
     def _on_areas_updated() -> None:
+        nonlocal _swi_map_id
         if coordinator.areas_map_id != coordinator.active_map_id:
             LOGGER.debug("switch: areas fetched for wrong map, skipping update")
             return
 
+        active_map = coordinator.active_map_id
         current_ids: set = {
             area_id
             for area in coordinator.areas
@@ -137,7 +140,13 @@ async def async_setup_entry(
             and _parse_switch_area_name(area)
         }
 
-        stale_ids = set(known_entities_map.keys()) - current_ids
+        # When the active map changes, treat ALL existing entities as stale — area
+        # IDs can overlap between maps, so a simple set-difference would miss them.
+        stale_ids = (
+            set(known_entities_map.keys())
+            if _swi_map_id != active_map
+            else set(known_entities_map.keys()) - current_ids
+        )
         for area_id in stale_ids:
             for entity in known_entities_map.pop(area_id):
                 LOGGER.debug("switch: removing stale room switch area_id=%s", area_id)
@@ -147,6 +156,7 @@ async def async_setup_entry(
         if new_entities:
             known_entities_map.update(new_by_area)
             async_add_entities(new_entities)
+        _swi_map_id = active_map
 
     @callback
     def _on_coordinator_updated() -> None:
