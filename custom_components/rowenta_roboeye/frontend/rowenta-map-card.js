@@ -1,10 +1,11 @@
-// Rowenta Xplorer 120 — Live Map Card  v2.6.1
+// Rowenta Xplorer 120 — Live Map Card  v2.7.0
 // Renders rooms, walls, dock, robot, live outline and post-run session
 // replay (cleaning grid + robot trail) from _build_live_map_payload() schema.
 // v2.6.0: avoidance zones rendered as hatched red overlay.
 // v2.6.1: auto-unfreeze and full reload when active map_id changes.
+// v2.7.0: room selection + control bar (Start/Pause, Stop, Go Home, Clean Selected).
 
-const VERSION = "2.6.1";
+const VERSION = "2.7.0";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -74,16 +75,17 @@ class RowentaMapCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._hass    = null;
-    this._config  = {};
-    this._frozen  = false;
-    this._lastAttrs = null;
+    this._hass          = null;
+    this._config        = {};
+    this._selectedRooms = new Set();
   }
 
   setConfig(config) {
     if (!config) throw new Error("No configuration provided");
+    const prevEntity = this._config?.entity;
     this._config = {
       entity:                "sensor.rowenta_xplorer_120_live_map",
+      vacuum_entity:         null,
       rotate:                0,
       show_dock:             true,
       show_walls:            true,
@@ -94,21 +96,14 @@ class RowentaMapCard extends HTMLElement {
       show_redundant_rooms:  false,
       ...config,
     };
+    if (config.entity !== prevEntity) {
+      this._selectedRooms = new Set();
+    }
     if (this._hass) this._render();
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (this._frozen) {
-      // Auto-unfreeze when the active map changes so stale geometry is not shown.
-      const newMapId = hass.states[this._config.entity]?.attributes?.map_id;
-      const oldMapId = this._lastAttrs?.map_id;
-      if (newMapId !== undefined && oldMapId !== undefined && newMapId !== oldMapId) {
-        this._frozen = false;
-      } else {
-        return;
-      }
-    }
     try { this._render(); }
     catch (err) {
       console.error("rowenta-map-card:", err);
@@ -128,7 +123,6 @@ class RowentaMapCard extends HTMLElement {
       return;
     }
     const attrs = state.attributes || {};
-    this._lastAttrs = attrs;
     this._renderFull(state.state || "idle", attrs);
   }
 
@@ -159,7 +153,9 @@ class RowentaMapCard extends HTMLElement {
                      : mapState === "error"            ? "#F44336"
                      : "var(--secondary-text-color)";
 
-    const frozen = this._frozen;
+    const vacState         = this._hass?.states[this._vacuumEntityId]?.state;
+    const isVacuumCleaning = vacState === "cleaning";
+    const selCount         = this._selectedRooms.size;
 
     const svgHtml = this._buildSvg(
       rooms, avoidanceZones, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
@@ -181,17 +177,6 @@ class RowentaMapCard extends HTMLElement {
           background: ${stateColor}22; color: ${stateColor};
           border: 1px solid ${stateColor}; white-space: nowrap;
         }
-        .fbtn {
-          padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
-          border: 1px solid var(--divider-color); white-space: nowrap;
-          background: ${frozen ? "#ff572222" : "var(--secondary-background-color)"};
-          color: ${frozen ? "#ff5722" : "var(--primary-text-color)"};
-          font-weight: ${frozen ? "bold" : "normal"};
-        }
-        .frozen-bar {
-          background: #ff572218; border-bottom: 2px solid #ff5722;
-          padding: 3px 14px; font-size: 11px; color: #ff5722;
-        }
         .svg-wrap { display: block; width: 100%; background: #0d1a2a; overflow: hidden; }
         .svg-wrap svg {
           display: block; width: 100%; height: auto; max-width: 100%;
@@ -209,6 +194,30 @@ class RowentaMapCard extends HTMLElement {
           50%       { opacity: 0.45; }
         }
         .robot-active { animation: pulse 1.5s infinite; }
+        .ctrl-bar {
+          display: flex; gap: 8px; padding: 10px 12px;
+          border-top: 1px solid var(--divider-color);
+          background: var(--card-background-color);
+          flex-wrap: wrap;
+        }
+        .ctrl-btn {
+          flex: 1 1 auto; min-width: 70px; padding: 8px 4px;
+          border: none; border-radius: 8px; font-size: 12px; font-weight: 600;
+          cursor: pointer; background: var(--secondary-background-color);
+          color: var(--primary-text-color);
+          transition: background 0.15s, opacity 0.15s;
+        }
+        .ctrl-btn:hover { opacity: 0.85; }
+        .ctrl-btn.primary { background: var(--primary-color, #03a9f4); color: #fff; }
+        .ctrl-btn.danger  { background: #e53935; color: #fff; }
+        .ctrl-btn.clean-sel {
+          background: ${selCount > 0 ? "#4CAF50" : "var(--secondary-background-color)"};
+          color: ${selCount > 0 ? "#fff" : "var(--primary-text-color)"};
+        }
+        .sel-hint {
+          font-size: 11px; color: var(--secondary-text-color);
+          padding: 2px 12px 8px; text-align: center;
+        }
       </style>
       <ha-card>
         <div class="hdr">
@@ -218,22 +227,77 @@ class RowentaMapCard extends HTMLElement {
             mapping: "MAPPING", session_complete: "LAST SESSION",
             paused: "PAUSED", error: "ERROR / STUCK", idle: "IDLE",
           })[mapState] || mapState.toUpperCase()}</span>
-          <button class="fbtn" id="fbtn">${frozen ? "▶ Live" : "⏸ Freeze"}</button>
         </div>
-        ${frozen ? `<div class="frozen-bar">⏸ Frozen — click Live to resume</div>` : ""}
         <div class="svg-wrap">${svgHtml}</div>
+        <div class="sel-hint">
+          ${selCount > 0
+            ? `${selCount} room${selCount > 1 ? "s" : ""} selected — tap to deselect`
+            : "Tap rooms to select for targeted cleaning"}
+        </div>
+        <div class="ctrl-bar">
+          <button class="ctrl-btn primary" id="btn-start">
+            ${isVacuumCleaning ? "⏸ Pause" : "▶ Start"}
+          </button>
+          <button class="ctrl-btn danger" id="btn-stop">⏹ Stop</button>
+          <button class="ctrl-btn" id="btn-home">⌂ Go Home</button>
+          <button class="ctrl-btn clean-sel" id="btn-clean-sel">
+            ${selCount > 0
+              ? `🧹 Clean ${selCount} Room${selCount > 1 ? "s" : ""}`
+              : "🧹 Clean All"}
+          </button>
+        </div>
       </ha-card>`;
 
-    this.shadowRoot.getElementById("fbtn")?.addEventListener("click", () => {
-      if (this._frozen) {
-        this._frozen = false;
-        this._render();
+    const entityId = this._vacuumEntityId;
+
+    this.shadowRoot.getElementById("btn-start")?.addEventListener("click", () => {
+      const state = this._hass?.states[entityId]?.state;
+      if (state === "cleaning") {
+        this._callService("vacuum", "pause", { entity_id: entityId });
       } else {
-        this._frozen = true;
-        this._renderFull(
-          this._hass?.states[this._config.entity]?.state || "idle",
-          this._lastAttrs || {}
-        );
+        this._callService("vacuum", "start", { entity_id: entityId });
+      }
+    });
+
+    this.shadowRoot.getElementById("btn-stop")?.addEventListener("click", () => {
+      this._callService("vacuum", "stop", { entity_id: entityId });
+      this._selectedRooms.clear();
+      this._render();
+    });
+
+    this.shadowRoot.getElementById("btn-home")?.addEventListener("click", () => {
+      this._callService("vacuum", "return_to_base", { entity_id: entityId });
+    });
+
+    this.shadowRoot.getElementById("btn-clean-sel")?.addEventListener("click", () => {
+      if (this._selectedRooms.size === 0) {
+        this._callService("vacuum", "start", { entity_id: entityId });
+      } else {
+        this._callService("rowenta_roboeye", "clean_room", {
+          entity_id: entityId,
+          room_ids:  Array.from(this._selectedRooms),
+        });
+        this._selectedRooms.clear();
+        this._render();
+      }
+    });
+
+    this.shadowRoot.querySelector(".svg-wrap svg")?.addEventListener("click", (e) => {
+      let el = e.target;
+      while (el && el !== e.currentTarget) {
+        if (el.classList?.contains("room-hit")) {
+          const areaId = el.dataset.areaId;
+          if (areaId) {
+            if (this._selectedRooms.has(areaId)) {
+              this._selectedRooms.delete(areaId);
+            } else {
+              this._selectedRooms.add(areaId);
+            }
+            this._render();
+          }
+          return;
+        }
+        el = el.parentElement;
       }
     });
   }
@@ -313,22 +377,31 @@ class RowentaMapCard extends HTMLElement {
       const p = room.polygon || [];
       if (p.length < 3) continue;
       if (room.redundant && !cfg.show_redundant_rooms) continue;
+      const sel = this._selectedRooms.has(String(room.id));
       if (room.redundant) {
         // Redundant auto-segment: very faint, dashed border, no fill
         const dashLen = (sw * 4).toFixed(1);
         const gapLen  = (sw * 2.5).toFixed(1);
-        roomFills += `<polygon points="${pts2str(p)}"
-          fill="none"
-          stroke="${room.color}" stroke-width="${(sw * 0.8).toFixed(1)}" stroke-linejoin="round"
-          stroke-dasharray="${dashLen},${gapLen}" stroke-opacity="0.35"
-          data-room="${this._esc(room.name)}"
-          style="cursor:pointer"/>`;
+        roomFills += `<g class="room-hit" data-area-id="${room.id}" style="cursor:pointer">
+          <polygon points="${pts2str(p)}"
+            fill="${sel ? "rgba(33,150,243,0.35)" : "none"}"
+            stroke="${sel ? "#2196F3" : room.color}"
+            stroke-width="${(sw * 0.8).toFixed(1)}" stroke-linejoin="round"
+            stroke-dasharray="${dashLen},${gapLen}"
+            stroke-opacity="${sel ? "0.9" : "0.35"}"
+            ${sel ? 'filter="url(#sel-glow)"' : ""}/>
+        </g>`;
       } else {
-        roomFills += `<polygon points="${pts2str(p)}"
-          fill="${room.color}" fill-opacity="${roomOpacity}"
-          stroke="${room.color}" stroke-width="${sw.toFixed(1)}" stroke-linejoin="round"
-          data-room="${this._esc(room.name)}"
-          style="cursor:pointer"/>`;
+        const fill   = sel ? "rgba(33,150,243,0.45)" : room.color;
+        const fop    = sel ? "1"                      : String(roomOpacity);
+        const stroke = sel ? "#2196F3"                : room.color;
+        const ssw    = sel ? (sw * 2).toFixed(1)      : sw.toFixed(1);
+        roomFills += `<g class="room-hit" data-area-id="${room.id}" style="cursor:pointer">
+          <polygon points="${pts2str(p)}"
+            fill="${fill}" fill-opacity="${fop}"
+            stroke="${stroke}" stroke-width="${ssw}" stroke-linejoin="round"
+            ${sel ? 'filter="url(#sel-glow)"' : ""}/>
+        </g>`;
       }
     }
 
@@ -541,6 +614,10 @@ class RowentaMapCard extends HTMLElement {
           <line x1="0" y1="0" x2="0" y2="${hatchSize}"
             stroke="#f44336" stroke-width="${hatchSW}" stroke-opacity="0.8"/>
         </pattern>
+        <filter id="sel-glow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="0" stdDeviation="3"
+            flood-color="#2196F3" flood-opacity="0.7"/>
+        </filter>
       </defs>
       ${floorFill}
       ${roomFills}
@@ -554,6 +631,19 @@ class RowentaMapCard extends HTMLElement {
       ${robotIcon}
       ${sessionBadge}
     </svg>`;
+  }
+
+  // Derive the vacuum entity_id from config, falling back to a transformation
+  // of the map sensor entity (sensor.xxx_live_map → vacuum.xxx).
+  get _vacuumEntityId() {
+    if (this._config.vacuum_entity) return this._config.vacuum_entity;
+    const e = this._config.entity || "";
+    return e.replace(/^sensor\./, "vacuum.").replace(/_live_map$/, "");
+  }
+
+  _callService(domain, service, data) {
+    if (!this._hass) return;
+    this._hass.callService(domain, service, data);
   }
 
   _esc(s) {
