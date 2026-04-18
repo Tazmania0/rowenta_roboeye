@@ -40,6 +40,8 @@ def _make_coordinator(status=None, areas=None, device_id="dev123", active_map_id
     # status["cleaning_parameter_set"] is exercised when no HA preference exists.
     coord.ha_fan_speed = None
     coord.async_send_command = AsyncMock()
+    coord.async_advance_to_next_job = AsyncMock()
+    coord._paused_jobs = []
     coord.client = MagicMock()
     coord.client.go_home = AsyncMock()
     coord.client.stop = AsyncMock()
@@ -111,11 +113,25 @@ def test_stop_entity_id():
 
 
 @pytest.mark.asyncio
-async def test_stop_press_calls_stop():
+async def test_stop_press_no_queue_stops_and_goes_home():
     coord = _make_coordinator()
+    coord._paused_jobs = []
     btn = _make_button(RobEyeStopButton, coord)
     await btn.async_press()
-    coord.async_send_command.assert_called_once_with(coord.client.stop)
+    assert coord.async_send_command.call_count == 2
+    coord.async_send_command.assert_any_call(coord.client.stop, label="stop(advance)")
+    coord.async_send_command.assert_any_call(coord.client.go_home, label="go_home")
+    coord.async_advance_to_next_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stop_press_with_queue_advances_to_next_job():
+    coord = _make_coordinator()
+    coord._paused_jobs = [("dummy_job",)]
+    btn = _make_button(RobEyeStopButton, coord)
+    await btn.async_press()
+    coord.async_send_command.assert_called_once_with(coord.client.stop, label="stop(advance)")
+    coord.async_advance_to_next_job.assert_called_once()
 
 
 # ── RobEyeCleanAllButton ──────────────────────────────────────────────
