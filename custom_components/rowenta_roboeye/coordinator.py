@@ -593,20 +593,37 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Always use the HA-configured map ID (manual override or setup map_id).
                 _fetched_for = self._manual_map_id or self.map_id
                 new_areas_blob = await self.client.get_areas(_fetched_for)
-                self._areas_fetched_for_map_id = _fetched_for
-                data[DATA_AREAS] = new_areas_blob
 
-                try:
-                    data[DATA_SENSOR_STATUS] = await self.client.get_sensor_status()
-                except CannotConnect:
-                    LOGGER.debug("get_sensor_status unavailable, skipping")
-                try:
-                    data[DATA_ROBOT_FLAGS] = await self.client.get_robot_flags()
-                except CannotConnect:
-                    LOGGER.debug("get_robot_flags unavailable, skipping")
+                # Race guard: if the user switched maps via async_set_active_map
+                # while we were awaiting get_areas, _fetched_for now points at
+                # the OLD map.  Discard the stale blob without updating
+                # _last_areas / _areas_fetched_for_map_id so the next refresh
+                # re-fetches for the correct map.  Also skip the sensor_status
+                # and robot_flags fetches here — the map-switch refresh will
+                # collect them in its own pass.
+                _current_map_id = self._manual_map_id or self.map_id
+                if _fetched_for != _current_map_id:
+                    LOGGER.debug(
+                        "RobEye: areas fetched for map %s but active map is now %s — "
+                        "discarding stale response",
+                        _fetched_for,
+                        _current_map_id,
+                    )
+                else:
+                    self._areas_fetched_for_map_id = _fetched_for
+                    data[DATA_AREAS] = new_areas_blob
 
-                self._last_areas = now
-                self._check_for_new_areas(new_areas_blob)
+                    try:
+                        data[DATA_SENSOR_STATUS] = await self.client.get_sensor_status()
+                    except CannotConnect:
+                        LOGGER.debug("get_sensor_status unavailable, skipping")
+                    try:
+                        data[DATA_ROBOT_FLAGS] = await self.client.get_robot_flags()
+                    except CannotConnect:
+                        LOGGER.debug("get_robot_flags unavailable, skipping")
+
+                    self._last_areas = now
+                    self._check_for_new_areas(new_areas_blob)
 
             # ── Every 600 s: lifetime statistics ─────────────────────
             if self._last_statistics is None or (

@@ -1085,6 +1085,41 @@ async def test_areas_fetched_for_ha_configured_map(coordinator, mock_client):
     assert coordinator.areas_map_id == "3"
 
 
+@pytest.mark.asyncio
+async def test_areas_discarded_when_map_switched_mid_fetch(coordinator, mock_client):
+    """Regression: if the user switches maps while get_areas() is in flight,
+    the stale response must be discarded so the next refresh re-fetches for
+    the new map.  Without this guard, _last_areas would be marked fresh and
+    room entities for the new map would never be created (dashboard shows
+    "unavailable" until the 300 s interval elapses)."""
+    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
+    coordinator._manual_map_id = None  # start on setup map "3"
+    coordinator._last_areas = None     # force areas bucket to run
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()  # suppress geometry block
+    coordinator._known_area_ids = set()
+    coordinator._areas_fetched_for_map_id = None
+
+    # Simulate user flipping maps during the get_areas() HTTP await.
+    async def _switch_during_fetch(*_args, **_kwargs):
+        coordinator._manual_map_id = "57"
+        return dict(MOCK_AREAS)
+
+    mock_client.get_areas.side_effect = _switch_during_fetch
+
+    await coordinator._async_update_data()
+
+    # Stale response must have been discarded entirely.
+    assert coordinator._last_areas is None, (
+        "stale fetch must not update _last_areas — next refresh needs to re-fetch"
+    )
+    assert coordinator._areas_fetched_for_map_id is None
+    assert DATA_AREAS not in coordinator.data or coordinator.data.get(DATA_AREAS) != MOCK_AREAS
+    # _known_area_ids untouched → no stale-map signal was dispatched.
+    assert coordinator._known_area_ids == set()
+
+
 # ── _check_for_new_areas signal behaviour ────────────────────────────────────
 
 def test_check_for_new_areas_signals_on_first_areas(coordinator):
