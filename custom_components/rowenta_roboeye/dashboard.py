@@ -83,6 +83,42 @@ def _available(hass: HomeAssistant, entity_id: str) -> bool:
     return state is not None and state.state not in ("unavailable", "unknown", "")
 
 
+def _room_entities_registered(
+    hass: HomeAssistant,
+    device_id: str,
+    active_map_id: str,
+    rooms: list[dict[str, Any]],
+) -> bool:
+    """Return True when all per-room entities referenced by the dashboard exist.
+
+    After a map switch the coordinator listener may schedule a dashboard save
+    BEFORE the platform entity-add tasks have completed.  If we save then,
+    Lovelace receives a config that references entity IDs not yet in the
+    state machine and renders "unavailable" cards — the visible bug users
+    report.
+
+    Returning False here defers the save; the next coordinator tick, the
+    5-second post-switch verify, or the initial-dashboard retry loop will
+    retry once the entity-add tasks have registered the switches/selects/
+    buttons for the active map.
+
+    We probe the room-selection switch (one per room, referenced by the
+    Multi-Room Cleaning card) because it is added in the same
+    async_add_entities batch as the other per-room entities — if it exists,
+    the rest of the batch exists too.
+    """
+    if not rooms or not active_map_id:
+        return True
+    for room in rooms:
+        rid = room.get("id")
+        if rid is None:
+            continue
+        eid = room_selection_entity_id(device_id, str(active_map_id), str(rid))
+        if hass.states.get(eid) is None:
+            return False
+    return True
+
+
 def _schedule_label(entry: dict[str, Any], rooms: list[dict[str, Any]]) -> str:
     """Return a human-readable label for a raw API schedule entry."""
     t = entry.get("time", {}) if isinstance(entry.get("time"), dict) else {}
@@ -555,6 +591,17 @@ class RobEyeDashboardManager:
                 break
 
         rooms = _extract_rooms(areas)
+
+        # Defer save until per-room entities for the active map are registered
+        # in hass.states.  Without this, a map-switch save races ahead of the
+        # async entity-add tasks and Lovelace renders "unavailable" cards.
+        if not _room_entities_registered(hass, device_id, active_map_id, rooms):
+            _LOGGER.debug(
+                "Dashboard update deferred — room entities for map %s not yet registered",
+                active_map_id,
+            )
+            return False
+
         title = friendly_name or self._title
         config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title, available_maps=available_maps, schedule_entries=schedule_entries)
         new_hash = _config_hash(config)
