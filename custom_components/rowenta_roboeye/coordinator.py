@@ -622,8 +622,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     except CannotConnect:
                         LOGGER.debug("get_robot_flags unavailable, skipping")
 
-                    self._last_areas = now
                     self._check_for_new_areas(new_areas_blob)
+                    # Only advance the 300 s timer when areas are confirmed non-empty.
+                    # If the robot returned an empty areas list (transient API quirk
+                    # seen in ~20-30% of map switches), keep _last_areas=None so the
+                    # bucket retries on the next tick (5-15 s) rather than waiting a
+                    # full 300 s cycle.  _areas_ready is set True by
+                    # _check_for_new_areas only when current_ids is non-empty.
+                    if self._areas_ready:
+                        self._last_areas = now
 
             # ── Every 600 s: lifetime statistics ─────────────────────
             if self._last_statistics is None or (
