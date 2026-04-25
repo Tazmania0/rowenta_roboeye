@@ -249,7 +249,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
 
     @property
     def available(self) -> bool:
-        return self._map_id == self.coordinator.active_map_id and super().available
+        return self.coordinator.map_available_for(self._map_id) and super().available
 
     @property
     def is_on(self) -> bool:
@@ -365,7 +365,7 @@ class RobEyeRoomSelectSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
 
     @property
     def available(self) -> bool:
-        return self._map_id == self.coordinator.active_map_id and super().available
+        return self.coordinator.map_available_for(self._map_id) and super().available
 
     @property
     def is_on(self) -> bool:

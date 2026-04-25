@@ -50,6 +50,8 @@ def _make_coordinator(data=None):
     coord.active_map_id = "3"
     # async_set_active_map must be an AsyncMock so it can be awaited
     coord.async_set_active_map = AsyncMock()
+    # Simulate stable-state availability (no transition tracking needed in unit tests)
+    coord.map_available_for = lambda mid: mid == coord.active_map_id
     return coord
 
 
@@ -504,6 +506,8 @@ def _make_room_coordinator(active_map_id="3", areas=None):
     coord.areas = areas if areas is not None else []
     # async_send_command must be an AsyncMock so it can be awaited in select_option
     coord.async_send_command = AsyncMock()
+    # Simulate stable-state availability (no transition tracking needed in unit tests)
+    coord.map_available_for = lambda mid: mid == coord.active_map_id
     return coord
 
 
