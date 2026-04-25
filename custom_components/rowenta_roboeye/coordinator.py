@@ -316,15 +316,18 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
           Entities stamped with the PREVIOUSLY committed map_id stay available
           so the dashboard never shows an "unavailable" flash while new-map
           entities are being created (typically 1-5 s of HTTP round-trips).
-          Once the new map's areas are committed, _prev_committed_map_id is
-          cleared and this method reverts to the normal check.
+
+        Just after the new map's areas are committed but before the next
+        coordinator tick (_prev_committed_map_id still set):
+          Old-map entities remain available for one full coordinator cycle so
+          new-map entities have time to initialise in the state machine before
+          old-map entities flip to unavailable.  _prev_committed_map_id is
+          cleared at the start of the following tick by _async_update_data.
         """
         active = self.active_map_id
-        committed = self._areas_fetched_for_map_id
-        if committed == active:
-            return entity_map_id == active
-        # Transition: keep the previously-committed map's entities available.
-        if entity_map_id == self._prev_committed_map_id:
+        # Keep old-map entities available until the next coordinator tick clears
+        # _prev_committed_map_id (see deferred cleanup in _async_update_data).
+        if self._prev_committed_map_id and entity_map_id == self._prev_committed_map_id:
             return True
         return entity_map_id == active
 
@@ -377,6 +380,25 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         now = datetime.utcnow()
         data: dict[str, Any] = dict(self.data or {})
+
+        # Deferred transition-guard cleanup: clear _prev_committed_map_id now
+        # that at least one full coordinator tick has elapsed since the new
+        # map's areas were committed.  By this point new-map entities are fully
+        # initialised in the state machine, so old-map entities can safely flip
+        # to unavailable on the async_update_listeners() call that follows.
+        _current_active = self._manual_map_id or self.map_id
+        if (
+            self._prev_committed_map_id is not None
+            and self._areas_fetched_for_map_id is not None
+            and self._areas_fetched_for_map_id == _current_active
+        ):
+            LOGGER.debug(
+                "RobEye: clearing map-switch transition guard "
+                "(old=%s new=%s committed)",
+                self._prev_committed_map_id,
+                self._areas_fetched_for_map_id,
+            )
+            self._prev_committed_map_id = None
 
         try:
             # ── Every 15 s: status ───────────────────────────────────
@@ -667,15 +689,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if _areas_list:
                         # Non-empty response: commit the areas data.
                         self._areas_fetched_for_map_id = _fetched_for
-                        # Clear the transition guard now that the new map's
-                        # areas are confirmed.  Entities stamped with
-                        # _prev_committed_map_id will flip to unavailable on
-                        # the next async_write_ha_state() call — but by the
-                        # time async_update_listeners() fires (immediately
-                        # after _async_update_data returns), the SIGNAL will
-                        # fire and new entities will be added, so the dashboard
-                        # regenerates before users notice the brief state change.
-                        self._prev_committed_map_id = None
+                        # NOTE: _prev_committed_map_id is intentionally NOT
+                        # cleared here.  async_update_listeners() runs
+                        # synchronously right after _async_update_data returns
+                        # (BEFORE the call_soon-deferred SIGNAL fires and
+                        # new-map entities are added).  Clearing here would
+                        # flip old-map entities to "unavailable" during that
+                        # window — the visible flash.  Instead we defer the
+                        # cleanup to the START of the next _async_update_data
+                        # call, by which time new-map entities are initialised.
                         data[DATA_AREAS] = new_areas_blob
                     else:
                         # Robot returned an empty areas list — a transient quirk
