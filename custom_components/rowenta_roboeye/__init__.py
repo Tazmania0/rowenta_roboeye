@@ -241,8 +241,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     def _on_areas_changed() -> None:
         LOGGER.debug("Areas changed — immediate dashboard regen")
         dashboard_manager.invalidate()
-        hass.async_create_task(
-            async_create_dashboard(
+
+        async def _areas_changed_task() -> None:
+            # Sync room-selection input_booleans FIRST so that
+            # _room_entities_registered() finds them when async_create_dashboard
+            # checks.  Scheduling both as separate tasks let async_create_dashboard
+            # race ahead (it was scheduled first) and always fail the guard,
+            # forcing the 5-second post-switch verify to do the real save.
+            await _async_sync_room_selection_booleans(hass, coordinator)
+            await async_create_dashboard(
                 hass,
                 coordinator.areas,
                 coordinator.robot_info,
@@ -256,10 +263,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                     coordinator.active_map_id,
                 ),
             )
-        )
-        hass.async_create_task(
-            _async_sync_room_selection_booleans(hass, coordinator)
-        )
+
+        hass.async_create_task(_areas_changed_task())
 
     config_entry.async_on_unload(
         async_dispatcher_connect(

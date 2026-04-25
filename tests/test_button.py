@@ -52,6 +52,8 @@ def _make_coordinator(status=None, areas=None, device_id="dev123", active_map_id
     coord.hass.states.get = MagicMock(return_value=None)
     coord.hass.services = MagicMock()
     coord.hass.services.async_call = AsyncMock()
+    # Simulate stable-state availability (no transition tracking needed in unit tests)
+    coord.map_available_for = lambda mid: mid == coord.active_map_id
     return coord
 
 

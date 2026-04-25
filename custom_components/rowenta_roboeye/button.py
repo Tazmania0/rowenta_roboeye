@@ -306,7 +306,7 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
 
     @property
     def available(self) -> bool:
-        return self._map_id == self.coordinator.active_map_id and super().available
+        return self.coordinator.map_available_for(self._map_id) and super().available
 
     async def async_press(self) -> None:
         LOGGER.debug("button: clean room %s", self._area_id)

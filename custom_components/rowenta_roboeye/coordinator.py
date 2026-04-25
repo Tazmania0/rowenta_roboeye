@@ -158,6 +158,13 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_active_map_id: str = map_id  # tracks floor changes
         self._areas_ready: bool = False
         self._manual_map_id: str | None = None  # user override via Select entity
+        # The map_id for which entities exist in HA before the CURRENT switch.
+        # Kept non-None from when async_set_active_map is called until the new
+        # map's areas are committed (_areas_fetched_for_map_id set).  Entities
+        # stamped with this map_id remain available during the transition so the
+        # dashboard never shows an "unavailable" flash while new-map entities are
+        # being created.
+        self._prev_committed_map_id: str | None = None
 
         # Last-session replay state
         self._robot_path: list[tuple[float, float]] = []
@@ -299,6 +306,28 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         return self._areas_fetched_for_map_id
 
+    def map_available_for(self, entity_map_id: str) -> bool:
+        """Return True if a per-map entity stamped with entity_map_id should be available.
+
+        Normal operation (no switch in progress):
+          Only entities for the currently active map are available.
+
+        During a map switch (_areas_fetched_for_map_id is None):
+          Entities stamped with the PREVIOUSLY committed map_id stay available
+          so the dashboard never shows an "unavailable" flash while new-map
+          entities are being created (typically 1-5 s of HTTP round-trips).
+          Once the new map's areas are committed, _prev_committed_map_id is
+          cleared and this method reverts to the normal check.
+        """
+        active = self.active_map_id
+        committed = self._areas_fetched_for_map_id
+        if committed == active:
+            return entity_map_id == active
+        # Transition: keep the previously-committed map's entities available.
+        if entity_map_id == self._prev_committed_map_id:
+            return True
+        return entity_map_id == active
+
     async def async_set_active_map(self, map_id: str) -> None:
         """Override the active map and force-reload all map-dependent data."""
         self._areas_ready = False
@@ -307,6 +336,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_active_map_id = map_id
         self._last_areas = None
         self._last_map_geometry = None
+        # Save the last committed map_id BEFORE clearing.  Per-map entities
+        # check this via map_available_for() so they remain available during
+        # the transition window (while new-map areas are being fetched) and
+        # only go unavailable once the new map's areas are committed.
+        self._prev_committed_map_id = self._areas_fetched_for_map_id
         self._areas_fetched_for_map_id = None  # invalidate until refresh fetches new areas
         self._known_area_ids = set()
         self._robot_path = []
@@ -633,6 +667,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if _areas_list:
                         # Non-empty response: commit the areas data.
                         self._areas_fetched_for_map_id = _fetched_for
+                        # Clear the transition guard now that the new map's
+                        # areas are confirmed.  Entities stamped with
+                        # _prev_committed_map_id will flip to unavailable on
+                        # the next async_write_ha_state() call — but by the
+                        # time async_update_listeners() fires (immediately
+                        # after _async_update_data returns), the SIGNAL will
+                        # fire and new entities will be added, so the dashboard
+                        # regenerates before users notice the brief state change.
+                        self._prev_committed_map_id = None
                         data[DATA_AREAS] = new_areas_blob
                     else:
                         # Robot returned an empty areas list — a transient quirk

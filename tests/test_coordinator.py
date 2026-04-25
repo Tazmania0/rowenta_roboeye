@@ -1696,3 +1696,129 @@ async def test_queue_eta_different_rooms_per_job(coordinator):
     eta = coordinator.queue_eta_seconds
     # 600 (job1 room1) + 300 (job2 room2) = 900 s
     assert eta == 900
+
+
+# ── map_available_for / transition-guard tests ───────────────────────────────
+
+def test_map_available_for_stable_state(coordinator):
+    """When committed == active, only entities for the active map are available."""
+    coordinator._manual_map_id = "3"
+    coordinator._areas_fetched_for_map_id = "3"
+    coordinator._prev_committed_map_id = None
+
+    assert coordinator.map_available_for("3") is True
+    assert coordinator.map_available_for("1") is False
+    assert coordinator.map_available_for("57") is False
+
+
+def test_map_available_for_transition_keeps_prev_map_available(coordinator):
+    """During a map switch (committed=None), entities for the previously-committed
+    map stay available so the dashboard never shows an 'unavailable' flash.
+    Entities for the new active map are also available (handles switching BACK
+    to a previously-visited map whose entities still exist in HA)."""
+    coordinator._manual_map_id = "3"          # switched to map 3
+    coordinator._areas_fetched_for_map_id = None  # not yet fetched
+    coordinator._prev_committed_map_id = "1"  # was on map 1
+
+    # Map 1 entities must remain available during the transition
+    assert coordinator.map_available_for("1") is True
+    # Map 3 entities: available if they already exist (e.g. switching back).
+    # In practice, brand-new map 3 entities haven't been created yet so
+    # nobody calls map_available_for("3") — but if they do exist they should
+    # already show as available immediately.
+    assert coordinator.map_available_for("3") is True
+    # Completely unrelated map entities are always unavailable
+    assert coordinator.map_available_for("57") is False
+
+
+def test_map_available_for_clears_after_new_areas_committed(coordinator):
+    """Once new-map areas are committed, only new-map entities are available."""
+    coordinator._manual_map_id = "3"
+    coordinator._areas_fetched_for_map_id = "3"   # committed after fetch
+    coordinator._prev_committed_map_id = None      # cleared at commit time
+
+    assert coordinator.map_available_for("3") is True
+    assert coordinator.map_available_for("1") is False
+
+
+def test_map_available_for_no_prev_during_first_load(coordinator):
+    """On first startup (no previous map), only the active map qualifies."""
+    coordinator._manual_map_id = None
+    coordinator.map_id = "3"
+    coordinator._areas_fetched_for_map_id = None
+    coordinator._prev_committed_map_id = None
+
+    # Nothing committed yet — active map entity is available (it's being loaded)
+    assert coordinator.map_available_for("3") is True
+    assert coordinator.map_available_for("1") is False
+
+
+@pytest.mark.asyncio
+async def test_async_set_active_map_saves_prev_committed(coordinator):
+    """async_set_active_map saves _areas_fetched_for_map_id into
+    _prev_committed_map_id before clearing it, so per-map entities for
+    the old map stay available during the transition window."""
+    coordinator.data = {}
+    coordinator._areas_fetched_for_map_id = "1"  # was on map 1
+    coordinator._prev_committed_map_id = None
+    coordinator.async_request_refresh = AsyncMock()
+
+    await coordinator.async_set_active_map("3")
+
+    assert coordinator._prev_committed_map_id == "1", (
+        "_prev_committed_map_id must be set to the previously committed map_id"
+    )
+    assert coordinator._areas_fetched_for_map_id is None, (
+        "_areas_fetched_for_map_id must be cleared to start fresh fetch"
+    )
+    assert coordinator._manual_map_id == "3"
+
+
+@pytest.mark.asyncio
+async def test_nonempty_areas_clears_prev_committed_map_id(coordinator, mock_client):
+    """When areas for the new map are fetched non-empty, _prev_committed_map_id
+    is cleared so old-map entities correctly go unavailable once the new-map
+    entities are ready."""
+    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
+    coordinator._last_areas = None
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+    coordinator._known_area_ids = set()
+    coordinator._areas_fetched_for_map_id = None
+    coordinator._areas_ready = False
+    coordinator._prev_committed_map_id = "1"   # set by previous async_set_active_map
+
+    mock_client.get_areas.return_value = MOCK_AREAS
+
+    await coordinator._async_update_data()
+
+    assert coordinator._prev_committed_map_id is None, (
+        "_prev_committed_map_id must be cleared once new-map areas are committed"
+    )
+    assert coordinator._areas_fetched_for_map_id is not None
+    assert coordinator._areas_ready is True
+
+
+@pytest.mark.asyncio
+async def test_empty_areas_does_not_clear_prev_committed_map_id(coordinator, mock_client):
+    """When areas come back empty (transient API quirk), _prev_committed_map_id
+    is left intact so old-map entities stay available during the retry window."""
+    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
+    coordinator._last_areas = None
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+    coordinator._known_area_ids = set()
+    coordinator._areas_fetched_for_map_id = None
+    coordinator._areas_ready = False
+    coordinator._prev_committed_map_id = "1"
+
+    mock_client.get_areas.return_value = {"areas": []}
+
+    await coordinator._async_update_data()
+
+    assert coordinator._prev_committed_map_id == "1", (
+        "_prev_committed_map_id must be preserved while areas retry is pending"
+    )
+    assert coordinator._areas_fetched_for_map_id is None

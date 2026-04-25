@@ -30,6 +30,8 @@ def _make_coordinator(device_id="dev123", cleaning_strategy=STRATEGY_DEFAULT, ac
     coord.areas = []
     coord.async_send_command = AsyncMock()
     coord.client = MagicMock()
+    # Simulate stable-state availability (no transition tracking needed in unit tests)
+    coord.map_available_for = lambda mid: mid == coord.active_map_id
     return coord
 
 
