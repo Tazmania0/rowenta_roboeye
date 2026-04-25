@@ -592,7 +592,19 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 # Always use the HA-configured map ID (manual override or setup map_id).
                 _fetched_for = self._manual_map_id or self.map_id
-                new_areas_blob = await self.client.get_areas(_fetched_for)
+                try:
+                    new_areas_blob: dict | None = await self.client.get_areas(_fetched_for)
+                except CannotConnect:
+                    # Robot's embedded server can be briefly unreachable during a
+                    # map switch (busy processing internal state).  Treat as a
+                    # non-fatal transient error: keep _areas_fetched_for_map_id at
+                    # its current value so entities stay available, and retry on
+                    # the next coordinator tick by leaving _last_areas=None.
+                    LOGGER.debug(
+                        "RobEye: get_areas failed for map %s — will retry next cycle",
+                        _fetched_for,
+                    )
+                    new_areas_blob = None
 
                 # Race guard: if the user switched maps via async_set_active_map
                 # while we were awaiting get_areas, _fetched_for now points at
@@ -602,7 +614,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # and robot_flags fetches here — the map-switch refresh will
                 # collect them in its own pass.
                 _current_map_id = self._manual_map_id or self.map_id
-                if _fetched_for != _current_map_id:
+                if new_areas_blob is None:
+                    pass  # transient failure — skip areas processing, retry next tick
+                elif _fetched_for != _current_map_id:
                     LOGGER.debug(
                         "RobEye: areas fetched for map %s but active map is now %s — "
                         "discarding stale response",
@@ -610,8 +624,34 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         _current_map_id,
                     )
                 else:
-                    self._areas_fetched_for_map_id = _fetched_for
-                    data[DATA_AREAS] = new_areas_blob
+                    _areas_list = (
+                        new_areas_blob.get("areas", [])
+                        if isinstance(new_areas_blob, dict)
+                        else []
+                    )
+
+                    if _areas_list:
+                        # Non-empty response: commit the areas data.
+                        self._areas_fetched_for_map_id = _fetched_for
+                        data[DATA_AREAS] = new_areas_blob
+                    else:
+                        # Robot returned an empty areas list — a transient quirk
+                        # seen during map switches.  Store the empty blob so
+                        # entities read [] rather than stale data from the old
+                        # map, but do NOT update _areas_fetched_for_map_id: the
+                        # None value keeps the platform guard
+                        # (areas_map_id != active_map_id) active so that no
+                        # signal callbacks run with empty area data.
+                        # Schedule a fast retry (2 s) so rooms appear sooner
+                        # than the next normal coordinator tick (up to 15 s).
+                        data[DATA_AREAS] = new_areas_blob
+                        if not self._areas_ready:
+                            self.hass.loop.call_later(
+                                2.0,
+                                lambda: self.hass.async_create_task(
+                                    self.async_request_refresh()
+                                ),
+                            )
 
                     try:
                         data[DATA_SENSOR_STATUS] = await self.client.get_sensor_status()
@@ -622,15 +662,13 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     except CannotConnect:
                         LOGGER.debug("get_robot_flags unavailable, skipping")
 
-                    self._check_for_new_areas(new_areas_blob)
-                    # Only advance the 300 s timer when areas are confirmed non-empty.
-                    # If the robot returned an empty areas list (transient API quirk
-                    # seen in ~20-30% of map switches), keep _last_areas=None so the
-                    # bucket retries on the next tick (5-15 s) rather than waiting a
-                    # full 300 s cycle.  _areas_ready is set True by
-                    # _check_for_new_areas only when current_ids is non-empty.
-                    if self._areas_ready:
-                        self._last_areas = now
+                    if _areas_list:
+                        self._check_for_new_areas(new_areas_blob)
+                        # Advance the 300 s timer only when areas are confirmed
+                        # non-empty.  _areas_ready is set True by
+                        # _check_for_new_areas only when current_ids is non-empty.
+                        if self._areas_ready:
+                            self._last_areas = now
 
             # ── Every 600 s: lifetime statistics ─────────────────────
             if self._last_statistics is None or (
