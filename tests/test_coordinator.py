@@ -1124,8 +1124,12 @@ async def test_areas_discarded_when_map_switched_mid_fetch(coordinator, mock_cli
 async def test_empty_areas_after_map_switch_does_not_advance_timer(coordinator, mock_client):
     """Regression: when get_areas returns empty data right after a map switch,
     _last_areas must NOT be advanced so the next tick retries the fetch instead
-    of waiting the full 300 s interval.  This was the root cause of the 20-30%
-    'unavailable entities after map switch' bug."""
+    of waiting the full 300 s interval.
+    _areas_fetched_for_map_id must also stay None so that platform guards
+    (areas_map_id != active_map_id) correctly block signal callbacks from
+    running with empty area data.
+    A fast 2-second retry must be scheduled via call_later so rooms appear
+    sooner than the next normal coordinator tick (up to 15 s when idle)."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
     coordinator._last_areas = None          # post-switch: force bucket to run
     coordinator._last_statistics = datetime.utcnow()
@@ -1146,8 +1150,49 @@ async def test_empty_areas_after_map_switch_does_not_advance_timer(coordinator, 
     )
     # _areas_ready stays False because no areas were loaded
     assert coordinator._areas_ready is False
+    # _areas_fetched_for_map_id must stay None so platform guards block callbacks
+    assert coordinator._areas_fetched_for_map_id is None, (
+        "empty areas must not set _areas_fetched_for_map_id — guard must stay active"
+    )
     # No signal dispatched (no entities to create yet)
     coordinator.hass.loop.call_soon.assert_not_called()
+    # A fast retry must be scheduled (2 s) so rooms appear quickly
+    coordinator.hass.loop.call_later.assert_called_once()
+    delay_arg = coordinator.hass.loop.call_later.call_args[0][0]
+    assert delay_arg == pytest.approx(2.0)
+
+
+@pytest.mark.asyncio
+async def test_get_areas_cannot_connect_is_non_fatal(coordinator, mock_client):
+    """get_areas() raising CannotConnect must not propagate to UpdateFailed.
+
+    The robot's embedded HTTP server can be briefly unreachable while it
+    processes an internal map switch.  Making this failure non-fatal keeps
+    all entities available through the transient error, and the 300-s bucket
+    retries automatically on the next coordinator tick."""
+    from homeassistant.helpers.update_coordinator import UpdateFailed
+
+    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
+    coordinator._last_areas = None          # force bucket to run
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+    coordinator._areas_fetched_for_map_id = None
+    coordinator._areas_ready = False
+
+    mock_client.get_areas.side_effect = CannotConnect("connection timeout")
+
+    # Must NOT raise — the failure is non-fatal
+    result = await coordinator._async_update_data()
+    assert result is not None, "coordinator must return data even when get_areas fails"
+
+    # Timer must stay None so the bucket fires again next tick
+    assert coordinator._last_areas is None
+    assert coordinator._areas_ready is False
+    # _areas_fetched_for_map_id unchanged (stays None)
+    assert coordinator._areas_fetched_for_map_id is None
+    # No quick-retry scheduled (only done for empty response, not CannotConnect)
+    coordinator.hass.loop.call_later.assert_not_called()
 
 
 @pytest.mark.asyncio
