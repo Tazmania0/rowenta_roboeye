@@ -381,13 +381,22 @@ async def async_setup_entry(
     entities.append(RobEyeSelectedRoomCountSensor(coordinator))
 
     # ── Per-room sensors (from current area list) ─────────────────────
-    known_sensor_map: dict = {}
-    _sensor_map_id: str = coordinator.active_map_id
-    initial_sensors, initial_by_area = _build_room_sensor_entities(
-        coordinator, config_entry, coordinator.areas, set()
-    )
-    known_sensor_map.update(initial_by_area)
-    entities.extend(initial_sensors)
+    # Per-map entity tracking: map_id -> {area_id -> [entities]}
+    # Entities for inactive maps stay registered but show as unavailable via
+    # RobEyeRoomSensor.available → coordinator.map_available_for().
+    # This matches the pattern used by select/switch/button and prevents the
+    # orphaned-entity accumulation that occurred when entities were removed
+    # via async_remove() on every map switch (unique_ids include map_id, so
+    # each switch created new registry entries while old ones became orphans).
+    known_sensors_by_map: dict[str, dict] = {}
+    _active = coordinator.active_map_id
+    if coordinator.areas_map_id == _active:
+        initial_sensors, initial_by_area = _build_room_sensor_entities(
+            coordinator, config_entry, coordinator.areas, set()
+        )
+        if initial_by_area:
+            known_sensors_by_map[_active] = initial_by_area
+        entities.extend(initial_sensors)
 
     async_add_entities(entities)
 
@@ -395,12 +404,13 @@ async def async_setup_entry(
     @callback
     def _async_on_areas_updated() -> None:
         """Called by the coordinator when the area set changes."""
-        nonlocal _sensor_map_id
         if coordinator.areas_map_id != coordinator.active_map_id:
             LOGGER.debug("sensor: areas fetched for wrong map, skipping update")
             return
 
         active_map = coordinator.active_map_id
+        map_sensors = known_sensors_by_map.setdefault(active_map, {})
+
         current_ids: set = {
             area_id
             for area in coordinator.areas
@@ -408,26 +418,22 @@ async def async_setup_entry(
             and _parse_sensor_area_name(area)
         }
 
-        # When the active map changes, treat ALL existing entities as stale — area
-        # IDs can overlap between maps, so a simple set-difference would miss them.
-        stale_ids = (
-            set(known_sensor_map.keys())
-            if _sensor_map_id != active_map
-            else set(known_sensor_map.keys()) - current_ids
-        )
+        # Only remove entities for areas deleted from this specific map.
+        # Entities for inactive maps are left alive; map_available_for() makes
+        # them unavailable while their map is not selected.
+        stale_ids = set(map_sensors.keys()) - current_ids
         for area_id in stale_ids:
-            for entity in known_sensor_map.pop(area_id):
-                LOGGER.debug("sensor: removing stale room sensor area_id=%s", area_id)
+            for entity in map_sensors.pop(area_id):
+                LOGGER.debug("sensor: removing deleted-area sensor area_id=%s", area_id)
                 hass.async_create_task(entity.async_remove())
 
         new_entities, new_by_area = _build_room_sensor_entities(
-            coordinator, config_entry, coordinator.areas, set(known_sensor_map.keys())
+            coordinator, config_entry, coordinator.areas, set(map_sensors.keys())
         )
         if new_entities:
             LOGGER.debug("sensor: adding %d new room entities", len(new_entities))
-            known_sensor_map.update(new_by_area)
+            map_sensors.update(new_by_area)
             async_add_entities(new_entities)
-        _sensor_map_id = active_map
 
     config_entry.async_on_unload(
         async_dispatcher_connect(
@@ -742,6 +748,7 @@ class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
         super().__init__(coordinator)
         self._value_fn = value_fn
         _map = coordinator.active_map_id
+        self._map_id = _map
         self._attr_unique_id = (
             f"room_{area_id}_map{_map}_{unique_suffix}_{coordinator.device_id}"
         )
@@ -753,6 +760,10 @@ class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
         self._attr_native_unit_of_measurement = native_unit
         self._attr_icon = icon
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.map_available_for(self._map_id) and super().available
 
     @property
     def native_value(self) -> Any:
