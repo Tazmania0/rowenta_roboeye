@@ -89,33 +89,41 @@ def _room_entities_registered(
     active_map_id: str,
     rooms: list[dict[str, Any]],
 ) -> bool:
-    """Return True when all per-room entities referenced by the dashboard exist.
+    """Return True when the platform entities referenced by room cards are in hass.states.
 
-    After a map switch the coordinator listener may schedule a dashboard save
-    BEFORE the platform entity-add tasks have completed.  If we save then,
-    Lovelace receives a config that references entity IDs not yet in the
-    state machine and renders "unavailable" cards — the visible bug users
-    report.
+    After a map switch, SIGNAL_AREAS_UPDATED triggers three independent
+    async_add_entities calls (button / select / switch).  Each schedules
+    entity-setup tasks that write to hass.states only AFTER async_added_to_hass()
+    completes.  Meanwhile _on_areas_changed runs _async_sync_room_selection_booleans()
+    and then calls async_create_dashboard() — but the input_boolean helpers it
+    creates are NOT the same entities as the platform ones.  Probing for those
+    input_booleans always returns True (they were created moments earlier in the
+    same task), allowing the dashboard to save before button/select/switch entities
+    exist.  That is the root cause of the "unavailable" card flash.
 
-    Returning False here defers the save; the next coordinator tick, the
-    5-second post-switch verify, or the initial-dashboard retry loop will
-    retry once the entity-add tasks have registered the switches/selects/
-    buttons for the active map.
+    We probe three platform entity types the room cards reference directly.
+    A platform entity appears in hass.states only after async_write_ha_state()
+    fires inside its async_added_to_hass().  If all three exist for every room,
+    the other per-room entities from the same async_add_entities batches are
+    also registered.
 
-    We probe the room-selection switch (one per room, referenced by the
-    Multi-Room Cleaning card) because it is added in the same
-    async_add_entities batch as the other per-room entities — if it exists,
-    the rest of the batch exists too.
+    Returning False defers the save; the next coordinator tick or the 5-second
+    post-switch verify retries once all batches have completed.
     """
     if not rooms or not active_map_id:
         return True
+    _m = f"map{active_map_id}_"
     for room in rooms:
         rid = room.get("id")
         if rid is None:
             continue
-        eid = room_selection_entity_id(device_id, str(active_map_id), str(rid))
-        if hass.states.get(eid) is None:
-            return False
+        for eid in (
+            f"button.{device_id}_{_m}clean_room_{rid}",
+            f"select.{device_id}_{_m}room_{rid}_fan_speed",
+            f"switch.{device_id}_{_m}room_{rid}_deep_clean",
+        ):
+            if hass.states.get(eid) is None:
+                return False
     return True
 
 
