@@ -243,54 +243,25 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         dashboard_manager.invalidate()
 
         async def _areas_changed_task() -> None:
-            # Sync room-selection input_booleans first so they exist when
-            # the dashboard is saved.
+            # Sync room-selection input_booleans FIRST so that
+            # _room_entities_registered() finds them when async_create_dashboard
+            # checks.  Scheduling both as separate tasks let async_create_dashboard
+            # race ahead (it was scheduled first) and always fail the guard,
+            # forcing the 5-second post-switch verify to do the real save.
             await _async_sync_room_selection_booleans(hass, coordinator)
-
-            # Platform signal callbacks (button / select / switch) call
-            # async_add_entities() synchronously, but the actual entity
-            # setup (async_added_to_hass → async_write_ha_state) happens
-            # in separate tasks queued AFTER this one.  A single attempt
-            # will therefore find _room_entities_registered() returning
-            # False ~20-30% of the time on first-visit switches, handing
-            # off to the 5-second post-switch verify — which can race the
-            # coordinator tick that clears _prev_committed_map_id and
-            # makes old-map entities unavailable.
-            #
-            # Fix: poll every 200 ms (up to 4 s) so the dashboard is
-            # always saved within one event-loop "breath" of entity setup
-            # completing, well before any coordinator tick fires.
-            _map_at_start = coordinator.active_map_id
-            for _attempt in range(20):
-                if coordinator.active_map_id != _map_at_start:
-                    LOGGER.debug(
-                        "RobEye: _areas_changed_task: map changed mid-poll "
-                        "(%s → %s) — aborting",
-                        _map_at_start,
-                        coordinator.active_map_id,
-                    )
-                    return
-                saved = await async_create_dashboard(
-                    hass,
-                    coordinator.areas,
-                    coordinator.robot_info,
-                    manager=dashboard_manager,
-                    device_id=coordinator.device_id,
-                    active_map_id=coordinator.active_map_id,
-                    friendly_name=friendly_name,
-                    available_maps=coordinator.available_maps,
-                    schedule_entries=_schedule_for_map(
-                        coordinator.schedule.get("schedule"),
-                        coordinator.active_map_id,
-                    ),
-                )
-                if saved:
-                    return
-                await asyncio.sleep(0.2)
-
-            LOGGER.debug(
-                "RobEye: _areas_changed_task: dashboard not saved after "
-                "20 attempts — post-switch verify will retry"
+            await async_create_dashboard(
+                hass,
+                coordinator.areas,
+                coordinator.robot_info,
+                manager=dashboard_manager,
+                device_id=coordinator.device_id,
+                active_map_id=coordinator.active_map_id,
+                friendly_name=friendly_name,
+                available_maps=coordinator.available_maps,
+                schedule_entries=_schedule_for_map(
+                    coordinator.schedule.get("schedule"),
+                    coordinator.active_map_id,
+                ),
             )
 
         hass.async_create_task(_areas_changed_task())
