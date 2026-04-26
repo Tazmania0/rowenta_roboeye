@@ -122,7 +122,8 @@ def _room_entities_registered(
             f"select.{device_id}_{_m}room_{rid}_fan_speed",
             f"switch.{device_id}_{_m}room_{rid}_deep_clean",
         ):
-            if hass.states.get(eid) is None:
+            state = hass.states.get(eid)
+            if state is None or state.state in ("unavailable", "unknown"):
                 return False
     return True
 
