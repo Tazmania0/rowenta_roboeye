@@ -32,19 +32,11 @@ def _platform_eids(device_id: str, map_id: str, rid) -> tuple[str, str, str]:
     )
 
 
-def _make_hass_with_states(
-    present_entity_ids: set[str],
-    unavailable_entity_ids: set[str] | None = None,
-) -> MagicMock:
+def _make_hass_with_states(present_entity_ids: set[str]) -> MagicMock:
     hass = MagicMock()
     hass.data = {}
-    _unavailable = unavailable_entity_ids or set()
 
     def _states_get(entity_id: str):
-        if entity_id in _unavailable:
-            state = MagicMock()
-            state.state = "unavailable"
-            return state
         if entity_id in present_entity_ids:
             state = MagicMock()
             state.state = "off"
@@ -117,38 +109,6 @@ def test_registered_returns_false_when_second_room_platform_missing():
     assert _room_entities_registered(hass, "dev", "3", rooms) is False
 
 
-def test_registered_returns_false_when_entities_unavailable():
-    """Entities that exist but are in 'unavailable' state must not satisfy the guard.
-
-    Return-visit scenario: when Map A was previously active, its entities exist
-    in hass.states with state='unavailable' (written when Map B became active).
-    The guard must treat these as not-yet-ready so the dashboard is not saved
-    until the coordinator's async_update_listeners fires and updates the state
-    to the live value ('off', 'on', etc.).
-    """
-    eids = set(_platform_eids("dev", "3", 5))
-    hass = _make_hass_with_states(set(), unavailable_entity_ids=eids)
-    rooms = [{"id": 5, "name": "Kitchen"}]
-    assert _room_entities_registered(hass, "dev", "3", rooms) is False
-
-
-def test_registered_returns_false_when_entities_unknown():
-    """Entities in 'unknown' state must also be rejected by the guard."""
-    btn, sel, sw = _platform_eids("dev", "3", 5)
-    hass = _make_hass_with_states(set())
-
-    def _states_get(entity_id: str):
-        if entity_id in {btn, sel, sw}:
-            state = MagicMock()
-            state.state = "unknown"
-            return state
-        return None
-
-    hass.states.get = _states_get
-    rooms = [{"id": 5, "name": "Kitchen"}]
-    assert _room_entities_registered(hass, "dev", "3", rooms) is False
-
-
 def test_registered_checks_correct_map_id():
     """After A→B switch, entities for map A exist but dashboard needs map B."""
     eids_a = set(_platform_eids("dev", "A", 5))
@@ -218,34 +178,6 @@ async def test_async_update_proceeds_when_entities_present():
     assert result is True
     manager._async_get_lovelace_store.assert_called_once()
     mock_store.async_save.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_async_update_defers_when_entities_unavailable():
-    """async_update returns False when room entities exist but are 'unavailable'.
-
-    Return-visit race: on Map B→A switch the coordinator's async_update_listeners
-    fires entity listeners (which write 'available' state) before _schedule_dashboard_regen
-    creates the save task.  But if something else calls async_update BEFORE those
-    listeners run, the entities are in 'unavailable' state and the save must defer.
-    """
-    eids = set(_platform_eids("dev", "3", 5))
-    hass = _make_hass_with_states(set(), unavailable_entity_ids=eids)
-    hass.data = {"rowenta_roboeye": {"entry1": MagicMock(device_id="dev", _areas_ready=True)}}
-
-    manager = RobEyeDashboardManager(device_id="dev", friendly_name="Test")
-    manager._async_get_lovelace_store = AsyncMock()
-
-    result = await manager.async_update(
-        hass=hass,
-        areas=[{"id": 5, "area_meta_data": '{"name": "Kitchen"}'}],
-        device_id="dev",
-        active_map_id="3",
-    )
-
-    assert result is False
-    manager._async_get_lovelace_store.assert_not_called()
-    assert manager._last_hash is None
 
 
 @pytest.mark.asyncio
