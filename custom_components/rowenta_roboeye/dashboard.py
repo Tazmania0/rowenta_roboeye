@@ -33,6 +33,7 @@ Change-detection:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -89,26 +90,21 @@ def _room_entities_registered(
     active_map_id: str,
     rooms: list[dict[str, Any]],
 ) -> bool:
-    """Return True when the platform entities referenced by room cards are in hass.states.
+    """Return True when every per-room entity referenced by the dashboard exists in hass.states.
 
-    After a map switch, SIGNAL_AREAS_UPDATED triggers three independent
-    async_add_entities calls (button / select / switch).  Each schedules
-    entity-setup tasks that write to hass.states only AFTER async_added_to_hass()
-    completes.  Meanwhile _on_areas_changed runs _async_sync_room_selection_booleans()
-    and then calls async_create_dashboard() — but the input_boolean helpers it
-    creates are NOT the same entities as the platform ones.  Probing for those
-    input_booleans always returns True (they were created moments earlier in the
-    same task), allowing the dashboard to save before button/select/switch entities
-    exist.  That is the root cause of the "unavailable" card flash.
+    After a map switch, SIGNAL_AREAS_UPDATED triggers four independent
+    async_add_entities calls — sensor (4 per room), select (2 per room),
+    button (1 per room), switch (2 per room).  Each schedules entity-setup
+    tasks that write to hass.states only after async_added_to_hass()
+    completes.  The platforms run those tasks interleaved with everything
+    else queued on the event loop.
 
-    We probe three platform entity types the room cards reference directly.
-    A platform entity appears in hass.states only after async_write_ha_state()
-    fires inside its async_added_to_hass().  If all three exist for every room,
-    the other per-room entities from the same async_add_entities batches are
-    also registered.
-
-    Returning False defers the save; the next coordinator tick or the 5-second
-    post-switch verify retries once all batches have completed.
+    Earlier revisions of this guard probed only three of the platform entity
+    types and ignored sensors entirely.  When sensor setup tasks lagged
+    behind, the guard returned True and the dashboard was saved with sensor
+    cards rendering "unavailable".  This check now covers every entity_id
+    the room cards in _build_config reference, so an "all green" result here
+    really does mean Lovelace can render every card live.
     """
     if not rooms or not active_map_id:
         return True
@@ -117,11 +113,25 @@ def _room_entities_registered(
         rid = room.get("id")
         if rid is None:
             continue
-        for eid in (
+        # Order chosen to fail fast: sensors are added in the FIRST
+        # async_add_entities batch (Platform.SENSOR is registered before the
+        # switch/select/button platforms), but RoomSensor has no
+        # async_added_to_hass override so it usually appears quickly.
+        # Selects/switches restore prior state via async_get_last_state which
+        # is the slowest path — checking those last is ineffectual either way,
+        # the loop simply iterates until something is missing.
+        eids = (
+            f"sensor.{device_id}_{_m}room_{rid}_last_cleaned",
+            f"sensor.{device_id}_{_m}room_{rid}_cleanings",
+            f"sensor.{device_id}_{_m}room_{rid}_area",
+            f"sensor.{device_id}_{_m}room_{rid}_avg_clean_time",
             f"button.{device_id}_{_m}clean_room_{rid}",
             f"select.{device_id}_{_m}room_{rid}_fan_speed",
+            f"select.{device_id}_{_m}room_{rid}_strategy",
             f"switch.{device_id}_{_m}room_{rid}_deep_clean",
-        ):
+            room_selection_entity_id(device_id, active_map_id, str(rid)),
+        )
+        for eid in eids:
             if hass.states.get(eid) is None:
                 return False
     return True
@@ -554,6 +564,14 @@ class RobEyeDashboardManager:
     def __init__(self, device_id: str = _DEV, friendly_name: str | None = None) -> None:
         self._last_hash: str | None = None
         self._sidebar_hidden: bool = False
+        # Serializes async_update() so the dozen+ callers that can race
+        # (coordinator listener, areas-changed signal, initial-dashboard
+        # retry loop, options reload) never run concurrently against the
+        # same Lovelace store.  Without this, two writers can both pass the
+        # _room_entities_registered check, then write configs with
+        # interleaved hashes — the first "bad" write stamps _last_hash and
+        # the later "good" write is skipped as a no-op.
+        self._save_lock = asyncio.Lock()
         # Per-device dashboard identity — URL path is always derived from device_id
         # for stability (renames don't create orphaned dashboards).
         if device_id == _DEV or not device_id:
@@ -573,6 +591,11 @@ class RobEyeDashboardManager:
         """Force a save on the next async_update() call (e.g. after room change)."""
         self._last_hash = None
 
+    # Internal poll cadence used by async_update() to wait for per-room
+    # platform entities to settle in hass.states before saving.
+    _ENTITY_POLL_INTERVAL_S = 0.2
+    _ENTITY_POLL_TIMEOUT_S = 8.0
+
     async def async_update(
         self,
         hass: HomeAssistant,
@@ -585,28 +608,84 @@ class RobEyeDashboardManager:
     ) -> bool:
         """Create or update the dashboard only when config has changed.
 
+        Serialized via self._save_lock so concurrent callers (coordinator
+        listener, areas-changed signal, options reload) cannot interleave
+        their writes.  Inside the lock the manager polls for the active
+        map's per-room entities to appear in hass.states, then saves.
+
         Returns True if the dashboard is ready (saved or unchanged),
-        False if the lovelace store is not yet available or save failed.
+        False if the lovelace store is not yet available, the wait timed
+        out, or the user switched maps mid-wait.
         """
-        # Guard: skip rebuild while a map switch is in progress.
+        async with self._save_lock:
+            return await self._async_update_locked(
+                hass=hass,
+                areas=areas,
+                device_id=device_id,
+                active_map_id=active_map_id,
+                friendly_name=friendly_name,
+                available_maps=available_maps,
+                schedule_entries=schedule_entries,
+            )
+
+    async def _async_update_locked(
+        self,
+        hass: HomeAssistant,
+        areas: list[dict[str, Any]],
+        device_id: str,
+        active_map_id: str,
+        friendly_name: str | None,
+        available_maps: list[dict[str, Any]] | None,
+        schedule_entries: list[dict[str, Any]] | None,
+    ) -> bool:
+        # Locate the matching coordinator (if any) so we can detect a
+        # mid-wait map switch and respect _areas_ready.
+        coordinator = None
         for entry_data in hass.data.get(DOMAIN, {}).values():
             if getattr(entry_data, "device_id", None) == device_id:
-                if not getattr(entry_data, "_areas_ready", True):
-                    _LOGGER.debug(
-                        "Dashboard update skipped — areas not ready (map switch in progress)"
-                    )
-                    return False
+                coordinator = entry_data
                 break
+
+        # Guard: skip rebuild while a map switch is in progress (areas
+        # being refetched).  The next caller after areas commit will run.
+        if coordinator is not None and not getattr(coordinator, "_areas_ready", True):
+            _LOGGER.debug(
+                "Dashboard update skipped — areas not ready (map switch in progress)"
+            )
+            return False
 
         rooms = _extract_rooms(areas)
 
-        # Defer save until per-room entities for the active map are registered
-        # in hass.states.  Without this, a map-switch save races ahead of the
-        # async entity-add tasks and Lovelace renders "unavailable" cards.
-        if not _room_entities_registered(hass, device_id, active_map_id, rooms):
+        # Poll for per-room entities to appear in hass.states.  Each
+        # asyncio.sleep(0) hand-off lets the platform async_add_entities
+        # tasks make progress; entity setup typically completes within a
+        # few hundred ms, so the 8 s timeout is comfortably above the 99th
+        # percentile while still bounded.  If the user switches maps
+        # mid-wait we abort so the next invocation saves the new map.
+        deadline_iters = max(
+            1, int(self._ENTITY_POLL_TIMEOUT_S / self._ENTITY_POLL_INTERVAL_S)
+        )
+        ready = False
+        for _ in range(deadline_iters):
+            if (
+                coordinator is not None
+                and coordinator.active_map_id != active_map_id
+            ):
+                _LOGGER.debug(
+                    "Dashboard update aborted — map changed mid-wait (%s → %s)",
+                    active_map_id, coordinator.active_map_id,
+                )
+                return False
+            if _room_entities_registered(hass, device_id, active_map_id, rooms):
+                ready = True
+                break
+            await asyncio.sleep(self._ENTITY_POLL_INTERVAL_S)
+
+        if not ready:
             _LOGGER.debug(
-                "Dashboard update deferred — room entities for map %s not yet registered",
-                active_map_id,
+                "Dashboard update deferred — room entities for map %s "
+                "not registered after %.1fs",
+                active_map_id, self._ENTITY_POLL_TIMEOUT_S,
             )
             return False
 

@@ -149,10 +149,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._brush_left_notified: bool = False
         self._brush_right_notified: bool = False
 
-        # Set to True by async_set_active_map so _on_areas_changed in __init__.py
-        # knows to schedule a post-switch verification pass after 5 s.
-        self._post_switch_verify_pending: bool = False
-
         # Live session map tracking
         self._operation_map_id: str = map_id  # current session map; changes each new clean
         self._last_active_map_id: str = map_id  # tracks floor changes
@@ -334,7 +330,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_active_map(self, map_id: str) -> None:
         """Override the active map and force-reload all map-dependent data."""
         self._areas_ready = False
-        self._post_switch_verify_pending = True
         self._manual_map_id = map_id
         self._last_active_map_id = map_id
         self._last_areas = None

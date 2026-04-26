@@ -182,7 +182,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     )
 
     # Regenerate dashboard on every coordinator update.
-    # async_create_dashboard is a no-op when config hasn't changed (hash-based dedup).
+    # The dashboard manager serializes saves on its own asyncio.Lock and
+    # internally polls for per-room entities to appear in hass.states, so
+    # callers do not need to debounce or stagger.  Hash-based dedup makes
+    # repeated calls cheap when nothing has changed.
     @callback
     def _schedule_dashboard_regen(*_args: object) -> None:
         hass.async_create_task(
@@ -202,53 +205,28 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             )
         )
 
-        # Primary trigger for the post-switch verify task.
-        #
-        # async_update_listeners() (which calls this callback) runs BEFORE the
-        # call_soon-deferred SIGNAL_AREAS_UPDATED dispatch, so this listener
-        # sees _post_switch_verify_pending=True while _on_areas_changed has not
-        # yet been called.  Clearing the flag here means _on_areas_changed will
-        # find it False and skip its own (now-redundant) verify scheduling.
-        #
-        # The areas_map_id guard ensures we only schedule once areas for the
-        # new map are actually loaded — guarding against premature scheduling
-        # on an intermediate coordinator update that didn't fetch areas.
-        if (
-            getattr(coordinator, "_post_switch_verify_pending", False)
-            and getattr(coordinator, "_areas_ready", False)
-            and coordinator.areas_map_id == coordinator.active_map_id
-        ):
-            coordinator._post_switch_verify_pending = False
-            LOGGER.debug(
-                "RobEye: post-switch verify scheduled (areas ready for map %s)",
-                coordinator.active_map_id,
-            )
-            hass.async_create_task(
-                _async_post_switch_verify(
-                    hass, config_entry, coordinator, dashboard_manager, friendly_name
-                )
-            )
-
     config_entry.async_on_unload(
         coordinator.async_add_listener(_schedule_dashboard_regen)
     )
 
-    # When rooms change, regenerate dashboard immediately and sync selection booleans.
-    # _post_switch_verify_pending is consumed by _schedule_dashboard_regen (called
-    # via async_update_listeners, which runs before this call_soon-fired signal), so
-    # the verify task is already scheduled by the time this callback runs.
+    # When the room set changes, invalidate the cached hash so the next
+    # save actually writes (instead of being deduped) and schedule one
+    # rebuild.  The manager's internal poll-and-wait handles the entity
+    # readiness race; an extra "verify after 5 s" task is no longer needed
+    # because the lock-protected save already waits for entities to settle.
     @callback
     def _on_areas_changed() -> None:
-        LOGGER.debug("Areas changed — immediate dashboard regen")
+        LOGGER.debug("Areas changed — invalidating dashboard hash and triggering rebuild")
         dashboard_manager.invalidate()
 
         async def _areas_changed_task() -> None:
-            # Sync room-selection input_booleans FIRST so that
-            # _room_entities_registered() finds them when async_create_dashboard
-            # checks.  Scheduling both as separate tasks let async_create_dashboard
-            # race ahead (it was scheduled first) and always fail the guard,
-            # forcing the 5-second post-switch verify to do the real save.
-            await _async_sync_room_selection_booleans(hass, coordinator)
+            # Keep the legacy room-selection input_boolean sync (other user
+            # automations may reference these helpers) but do NOT block the
+            # dashboard save on it — they are independent and the dashboard
+            # references switch entities, not input_booleans.
+            hass.async_create_task(
+                _async_sync_room_selection_booleans(hass, coordinator)
+            )
             await async_create_dashboard(
                 hass,
                 coordinator.areas,
@@ -355,98 +333,6 @@ async def _async_initial_dashboard(
             "notification_id": "rowenta_roboeye_restart_required",
         },
     )
-
-
-async def _async_post_switch_verify(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    coordinator: RobEyeCoordinator,
-    dashboard_manager: RobEyeDashboardManager,
-    friendly_name: str,
-) -> None:
-    """Secondary check run 5 s after a map switch to fix stale "unavailable" states.
-
-    The first dashboard save races against async entity initialisation — the
-    Lovelace config is correct but entities haven't written their state yet.
-    Waiting 5 s lets every platform task complete.  We then:
-      1. Force a coordinator refresh when areas look stale and poll up to 3 s
-         for areas to settle (handles async_request_refresh not blocking).
-      2. Unconditionally invalidate + regenerate the dashboard so Lovelace
-         re-reads entity states that are now fully initialised.
-      3. If the save is deferred (e.g. new-map entities still initialising),
-         wait another 5 s and retry once — covering the case where entity
-         async_add_entities tasks queue behind other work.
-    The hash guard inside async_create_dashboard makes step 2 a no-op when the
-    room config is already correct.
-    """
-    await asyncio.sleep(5)
-
-    if config_entry.state not in (
-        ConfigEntryState.LOADED,
-        ConfigEntryState.SETUP_IN_PROGRESS,
-    ):
-        return
-
-    areas_stale = (
-        not getattr(coordinator, "_areas_ready", True)
-        or coordinator.areas_map_id != coordinator.active_map_id
-        or not coordinator.areas
-    )
-
-    if areas_stale:
-        LOGGER.debug(
-            "RobEye: post-switch verify — areas stale (ready=%s map_id areas=%s active=%s), forcing refresh",
-            getattr(coordinator, "_areas_ready", "?"),
-            coordinator.areas_map_id,
-            coordinator.active_map_id,
-        )
-        await coordinator.async_request_refresh()
-        # async_request_refresh only *schedules* the refresh; poll until areas
-        # are actually ready (up to ~3 s) before proceeding.
-        for _ in range(6):
-            if (
-                getattr(coordinator, "_areas_ready", False)
-                and coordinator.areas_map_id == coordinator.active_map_id
-            ):
-                break
-            await asyncio.sleep(0.5)
-
-    def _create_dashboard_kwargs() -> dict:
-        return dict(
-            hass=hass,
-            areas=coordinator.areas,
-            robot_info=coordinator.robot_info,
-            manager=dashboard_manager,
-            device_id=coordinator.device_id,
-            active_map_id=coordinator.active_map_id,
-            friendly_name=friendly_name,
-            available_maps=coordinator.available_maps,
-            schedule_entries=_schedule_for_map(
-                coordinator.schedule.get("schedule"),
-                coordinator.active_map_id,
-            ),
-        )
-
-    dashboard_manager.invalidate()
-    saved = await async_create_dashboard(**_create_dashboard_kwargs())
-
-    if not saved:
-        # Dashboard save deferred — most likely because async_add_entities for
-        # the new map's rooms is still queued behind other event-loop tasks.
-        # Wait another 5 s for entity initialisation to settle and retry once.
-        LOGGER.debug(
-            "RobEye: post-switch verify — first attempt deferred, retrying in 5 s"
-        )
-        await asyncio.sleep(5)
-        if config_entry.state not in (
-            ConfigEntryState.LOADED,
-            ConfigEntryState.SETUP_IN_PROGRESS,
-        ):
-            return
-        dashboard_manager.invalidate()
-        await async_create_dashboard(**_create_dashboard_kwargs())
-
-    LOGGER.debug("RobEye: post-switch dashboard verification complete")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
