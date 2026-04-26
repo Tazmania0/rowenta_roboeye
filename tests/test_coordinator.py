@@ -1775,10 +1775,16 @@ async def test_async_set_active_map_saves_prev_committed(coordinator):
 
 
 @pytest.mark.asyncio
-async def test_nonempty_areas_clears_prev_committed_map_id(coordinator, mock_client):
+async def test_nonempty_areas_defers_prev_committed_map_id_clear(coordinator, mock_client):
     """When areas for the new map are fetched non-empty, _prev_committed_map_id
-    is cleared so old-map entities correctly go unavailable once the new-map
-    entities are ready."""
+    is NOT cleared immediately — it is deferred to the START of the following tick.
+
+    This lets async_update_listeners() (which fires right after _async_update_data
+    returns) see the guard still set, keeping old-map entities available while
+    new-map entities complete their async_added_to_hass() setup.  The guard is
+    cleared at the beginning of the next _async_update_data call once
+    _areas_fetched_for_map_id == active_map_id.
+    """
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
     coordinator._last_areas = None
     coordinator._last_statistics = datetime.utcnow()
@@ -1791,13 +1797,24 @@ async def test_nonempty_areas_clears_prev_committed_map_id(coordinator, mock_cli
 
     mock_client.get_areas.return_value = MOCK_AREAS
 
+    # First tick: areas committed but guard still set (deferred cleanup)
     await coordinator._async_update_data()
 
-    assert coordinator._prev_committed_map_id is None, (
-        "_prev_committed_map_id must be cleared once new-map areas are committed"
+    assert coordinator._prev_committed_map_id == "1", (
+        "_prev_committed_map_id must NOT be cleared on the commit tick — "
+        "async_update_listeners fires right after this returns, and new-map "
+        "entities have not yet completed async_added_to_hass()"
     )
     assert coordinator._areas_fetched_for_map_id is not None
     assert coordinator._areas_ready is True
+
+    # Second tick: deferred cleanup fires at the top of _async_update_data
+    await coordinator._async_update_data()
+
+    assert coordinator._prev_committed_map_id is None, (
+        "_prev_committed_map_id must be cleared at the START of the tick that "
+        "follows the commit tick, by which time new-map entities are initialised"
+    )
 
 
 @pytest.mark.asyncio
