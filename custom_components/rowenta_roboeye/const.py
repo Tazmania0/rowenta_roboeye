@@ -281,8 +281,10 @@ IMMEDIATE_COMMAND_NAMES: frozenset = frozenset({
 # ── Resilience ────────────────────────────────────────────────────────
 MAX_POLL_FAILURES = 3
 
-# ── Dynamic entity discovery signal ──────────────────────────────────
+# ── Dynamic entity discovery signals ─────────────────────────────────
 SIGNAL_AREAS_UPDATED = f"{DOMAIN}_areas_updated"
+# Fired when the set of permanent maps on the device changes (map deleted).
+SIGNAL_MAPS_UPDATED = f"{DOMAIN}_maps_updated"
 
 # ── Room selection change signal ──────────────────────────────────────
 # Fired by RobEyeRoomSelectSwitch on every state change so that

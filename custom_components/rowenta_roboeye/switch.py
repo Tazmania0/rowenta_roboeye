@@ -36,6 +36,7 @@ from .const import (
     LOGGER,
     SCHEDULE_DAYS,
     SIGNAL_AREAS_UPDATED,
+    SIGNAL_MAPS_UPDATED,
     SIGNAL_ROOM_SELECTION_CHANGED,
     STRATEGY_DEFAULT,
     STRATEGY_DEEP,
@@ -44,6 +45,8 @@ from .const import (
 from .coordinator import RobEyeCoordinator
 from .entity import (
     RobEyeEntity,
+    async_remove_entities_for_deleted_maps,
+    async_remove_stale_room_entities,
     find_room_registry_records,
     pick_room_name_from_records,
 )
@@ -119,6 +122,16 @@ async def async_setup_entry(
 
     _active = coordinator.active_map_id
     if coordinator.areas_map_id == _active:
+        # Purge registry entries for areas that no longer exist on the active map.
+        current_area_ids: set = {
+            a.get("id")
+            for a in coordinator.areas
+            if a.get("id") is not None and _parse_switch_area_name(a)
+        }
+        async_remove_stale_room_entities(
+            hass, config_entry, coordinator, "switch", current_area_ids
+        )
+
         initial_switches, initial_by_area = _room_switches(coordinator.areas, set())
         if initial_by_area:
             known_entities_by_map[_active] = initial_by_area
@@ -152,12 +165,15 @@ async def async_setup_entry(
             and _parse_switch_area_name(area)
         }
 
-        # Only remove entities for areas deleted from this specific map.
         stale_ids = set(map_entities.keys()) - current_ids
         for area_id in stale_ids:
             for entity in map_entities.pop(area_id):
                 LOGGER.debug("switch: removing deleted-area switch area_id=%s", area_id)
-                hass.async_create_task(entity.async_remove())
+                if entity.registry_entry:
+                    from homeassistant.helpers import entity_registry as er
+                    er.async_get(hass).async_remove(entity.entity_id)
+                else:
+                    hass.async_create_task(entity.async_remove())
 
         new_entities, new_by_area = _room_switches(coordinator.areas, set(map_entities.keys()))
         if new_entities:
@@ -171,11 +187,28 @@ async def async_setup_entry(
             async_add_entities(new_entities)
             known_task_ids.update(new_task_ids)
 
+    @callback
+    def _on_maps_updated(deleted_map_ids: set[str]) -> None:
+        removed = async_remove_entities_for_deleted_maps(
+            hass, config_entry, "switch", deleted_map_ids
+        )
+        for map_id, area_id in removed:
+            known_entities_by_map.get(map_id, {}).pop(area_id, None)
+        for map_id in deleted_map_ids:
+            known_entities_by_map.pop(map_id, None)
+
     config_entry.async_on_unload(
         async_dispatcher_connect(
             hass,
             f"{SIGNAL_AREAS_UPDATED}_{config_entry.entry_id}",
             _on_areas_updated,
+        )
+    )
+    config_entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            f"{SIGNAL_MAPS_UPDATED}_{config_entry.entry_id}",
+            _on_maps_updated,
         )
     )
     config_entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_updated))
