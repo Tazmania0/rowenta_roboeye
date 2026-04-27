@@ -432,7 +432,7 @@ async def async_setup_entry(
         map_sensors = known_sensors_by_map.setdefault(active_map, {})
 
         current_ids: set = {
-            area_id
+            str(area_id)
             for area in coordinator.areas
             if (area_id := area.get("id")) is not None
             and _parse_sensor_area_name(area)
@@ -846,7 +846,10 @@ def _build_room_sensor_entities(
         return flat, by_area
     for area in areas:
         area_id = area.get("id")
-        if area_id is None or area_id in already_known:
+        if area_id is None:
+            continue
+        area_id = str(area_id)
+        if area_id in already_known:
             continue
         room_name = _parse_sensor_area_name(area)
         if not room_name:
