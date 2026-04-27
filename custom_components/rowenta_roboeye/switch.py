@@ -47,6 +47,7 @@ from .const import (
 from .coordinator import RobEyeCoordinator
 from .entity import (
     RobEyeEntity,
+    async_remove_duplicate_room_entities,
     async_remove_entities_for_deleted_maps,
     async_remove_stale_room_entities,
     find_room_registry_records,
@@ -142,11 +143,18 @@ async def async_setup_entry(
             known_entities_by_map[_active] = initial_by_area
         entities.extend(initial_switches)
 
-    entities.extend(
-        _register_stub_room_switches_from_registry(
-            hass, config_entry, coordinator, known_entities_by_map
-        )
+    stub_switches = _register_stub_room_switches_from_registry(
+        hass, config_entry, coordinator, known_entities_by_map
     )
+    entities.extend(stub_switches)
+
+    room_uids = {
+        e._attr_unique_id
+        for e in entities
+        if isinstance(e, (RobEyeRoomDeepCleanSwitch, RobEyeRoomSelectSwitch))
+        and e._attr_unique_id
+    }
+    async_remove_duplicate_room_entities(hass, config_entry, "switch", room_uids)
 
     schedule_switches, new_task_ids = _schedule_switches(known_task_ids)
     entities.extend(schedule_switches)

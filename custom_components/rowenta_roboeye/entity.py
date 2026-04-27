@@ -137,6 +137,51 @@ def async_remove_entities_for_deleted_maps(
     return removed
 
 
+def async_remove_duplicate_room_entities(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    platform: str,
+    canonical_unique_ids: set[str],
+) -> None:
+    """Remove registry entries that are stale duplicates of currently-loaded entities.
+
+    When device_id changes between HA restarts (e.g. serial number becomes
+    available after first-boot fallback to entry_id), every room entity gets a
+    new unique_id while the old registry entries linger.  Those orphans remain
+    attributed to this integration and appear as unavailable duplicates in the UI.
+
+    This function removes any registry entry whose unique_id is NOT in
+    ``canonical_unique_ids`` but whose (area_id, map_id) IS represented by a
+    canonical entry — i.e. it has been superseded by a freshly-created entity.
+    """
+    if not canonical_unique_ids:
+        return
+
+    covered: set[tuple[str, str]] = set()
+    for uid in canonical_unique_ids:
+        parsed = _parse_room_entity_uid(uid)
+        if parsed:
+            covered.add(parsed)
+
+    if not covered:
+        return
+
+    ent_reg = er.async_get(hass)
+    for entry in list(er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)):
+        if entry.domain != platform:
+            continue
+        if entry.unique_id in canonical_unique_ids:
+            continue
+        parsed = _parse_room_entity_uid(entry.unique_id)
+        if parsed and parsed in covered:
+            LOGGER.info(
+                "RobEye: removing stale duplicate %s (uid=%s) — superseded by current entity",
+                entry.entity_id,
+                entry.unique_id,
+            )
+            ent_reg.async_remove(entry.entity_id)
+
+
 def async_remove_stale_room_entities(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
