@@ -145,14 +145,19 @@ def async_remove_duplicate_room_entities(
 ) -> None:
     """Remove registry entries that are stale duplicates of currently-loaded entities.
 
-    When device_id changes between HA restarts (e.g. serial number becomes
-    available after first-boot fallback to entry_id), every room entity gets a
-    new unique_id while the old registry entries linger.  Those orphans remain
-    attributed to this integration and appear as unavailable duplicates in the UI.
+    Room entity unique_ids embed the format ``…_map{map_id}_{area_id}_{entry_id}``.
+    Across integration upgrades the format has changed (e.g. map_id was added,
+    area_id normalisation changed).  Each format change leaves old registry entries
+    with the previous unique_id as unavailable orphans still attributed to this
+    integration — appearing as duplicate entities in the UI.
 
     This function removes any registry entry whose unique_id is NOT in
     ``canonical_unique_ids`` but whose (area_id, map_id) IS represented by a
     canonical entry — i.e. it has been superseded by a freshly-created entity.
+
+    The cleanup is scoped to the calling config_entry via
+    ``async_entries_for_config_entry``, so multiple devices (each with its own
+    config entry) are handled independently with no cross-contamination.
     """
     if not canonical_unique_ids:
         return

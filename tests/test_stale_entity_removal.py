@@ -242,7 +242,7 @@ def _make_registry_entry(unique_id: str, entity_id: str, domain: str = "button")
 
 
 def test_dedup_removes_old_uid_for_same_area():
-    """Registry entry with old device_id uid is removed when a fresh uid covers same area."""
+    """Registry entry with old-format uid is removed when a fresh uid covers the same area."""
     from custom_components.rowenta_roboeye.entity import async_remove_duplicate_room_entities
 
     old_entry = _make_registry_entry(
