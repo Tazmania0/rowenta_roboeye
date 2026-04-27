@@ -415,13 +415,27 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         self._selected = option
         self.async_write_ha_state()
         # Persist the new fan speed to the robot's saved map immediately.
+        # Always include strategy_mode so the firmware doesn't reset it to a
+        # default value when only cleaning_parameter_set is provided.
         raw = FAN_SPEED_REVERSE_MAP.get(option)
         if raw:
+            # Read strategy from the per-room deep-clean switch's current HA state
+            # (optimistically updated) rather than stale coordinator.areas cache.
+            switch_eid = (
+                f"switch.{self.coordinator.device_id}"
+                f"_map{self._map_id}_room_{self._area_id}_deep_clean"
+            )
+            switch_state = self.coordinator.hass.states.get(switch_eid)
+            if switch_state is not None and switch_state.state == "on":
+                current_strategy = "deep"
+            else:
+                current_strategy = "normal"
             await self.coordinator.async_send_command(
                 self.coordinator.client.modify_area,
                 map_id=self.coordinator.active_map_id,
                 area_id=self._area_id,
                 cleaning_parameter_set=raw,
+                strategy_mode=current_strategy,
             )
 
 
@@ -621,9 +635,26 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
         self.async_write_ha_state()
         # Robot only accepts "normal" or "deep" for strategy_mode.
         # All three non-deep options (Default, Normal, Walls & Corners) → "normal".
+        # Always include cleaning_parameter_set so the firmware doesn't reset it.
+        fan_eid = (
+            f"select.{self.coordinator.device_id}"
+            f"_map{self._map_id}_room_{self._area_id}_fan_speed"
+        )
+        fan_state = self.coordinator.hass.states.get(fan_eid)
+        if fan_state is not None and fan_state.state in FAN_SPEEDS:
+            current_cps = FAN_SPEED_REVERSE_MAP.get(fan_state.state, "1")
+        else:
+            current_cps = "1"
+            for area in self.coordinator.areas:
+                if str(area.get("id", "")) == self._area_id:
+                    cps = area.get("cleaning_parameter_set")
+                    if cps is not None:
+                        current_cps = str(cps)
+                    break
         await self.coordinator.async_send_command(
             self.coordinator.client.modify_area,
             map_id=self.coordinator.active_map_id,
             area_id=self._area_id,
+            cleaning_parameter_set=current_cps,
             strategy_mode="normal",
         )

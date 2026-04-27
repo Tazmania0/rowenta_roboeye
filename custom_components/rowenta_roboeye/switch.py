@@ -33,6 +33,8 @@ from .const import (
     CLEANING_MODE_ALL,
     DOMAIN,
     FAN_SPEED_LABELS,
+    FAN_SPEED_REVERSE_MAP,
+    FAN_SPEEDS,
     LOGGER,
     SCHEDULE_DAYS,
     SIGNAL_AREAS_UPDATED,
@@ -409,13 +411,38 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
                 break
         self.async_write_ha_state()
 
+    def _current_room_fan_speed_raw(self) -> str:
+        """Return the current raw cleaning_parameter_set for this room.
+
+        Reads from the per-room fan-speed select's HA state (optimistic, up to date)
+        and falls back to coordinator.areas (may be stale by up to 300 s).
+        Always including cleaning_parameter_set prevents the firmware from resetting
+        it when only strategy_mode is supplied in a partial modify_area call.
+        """
+        fan_eid = (
+            f"select.{self.coordinator.device_id}"
+            f"_map{self._map_id}_room_{self._area_id}_fan_speed"
+        )
+        fan_state = self.coordinator.hass.states.get(fan_eid)
+        if fan_state is not None and fan_state.state in FAN_SPEEDS:
+            return FAN_SPEED_REVERSE_MAP.get(fan_state.state, "1")
+        for area in self.coordinator.areas:
+            if str(area.get("id", "")) == self._area_id:
+                cps = area.get("cleaning_parameter_set")
+                if cps is not None:
+                    return str(cps)
+                break
+        return "1"
+
     async def async_turn_on(self, **kwargs) -> None:  # type: ignore[override]
         self._is_on = True
         self.async_write_ha_state()
+        # Always include cleaning_parameter_set so the firmware doesn't reset it.
         await self.coordinator.async_send_command(
             self.coordinator.client.modify_area,
             map_id=self.coordinator.active_map_id,
             area_id=self._area_id,
+            cleaning_parameter_set=self._current_room_fan_speed_raw(),
             strategy_mode="deep",
         )
 
@@ -424,10 +451,12 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         self.async_write_ha_state()
         # "normal" is the only non-deep value the robot accepts.
         # The strategy select holds the granular choice (Default/Normal/Walls&Corners).
+        # Always include cleaning_parameter_set so the firmware doesn't reset it.
         await self.coordinator.async_send_command(
             self.coordinator.client.modify_area,
             map_id=self.coordinator.active_map_id,
             area_id=self._area_id,
+            cleaning_parameter_set=self._current_room_fan_speed_raw(),
             strategy_mode="normal",
         )
 

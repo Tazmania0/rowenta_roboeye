@@ -962,6 +962,16 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         self._last_schedule = None
 
+    def invalidate_areas_cache(self) -> None:
+        """Force areas re-fetch on next coordinator refresh.
+
+        Call after /set/modify_area so that async_request_refresh() re-polls
+        /get/areas instead of serving the stale cached value.  Without this,
+        coordinator.data[DATA_AREAS] would remain stale for up to 300 s after
+        a per-room fan-speed or strategy change.
+        """
+        self._last_areas = None
+
     @property
     def robot_info(self) -> dict[str, Any]:
         return (self.data or {}).get(DATA_ROBOT_INFO, {})
@@ -1343,6 +1353,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         response.get("error_code"),
                         response.get("error_tag", ""),
                     )
+                if func_name == "modify_area":
+                    # Invalidate the areas cache so async_request_refresh() below
+                    # re-polls /get/areas instead of serving the 300-s stale cache.
+                    self.invalidate_areas_cache()
                 await self.async_request_refresh()
             except CannotConnect as err:
                 LOGGER.error("RobEye immediate command %s failed: %s", _label, err)
