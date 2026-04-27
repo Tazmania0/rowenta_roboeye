@@ -228,3 +228,163 @@ def test_build_room_button_entities_skips_blocking():
 
     assert 10 in ids
     assert 12 not in ids, "blocking area must be skipped"
+
+
+# ── async_remove_duplicate_room_entities ─────────────────────────────────
+
+
+def _make_registry_entry(unique_id: str, entity_id: str, domain: str = "button"):
+    entry = MagicMock()
+    entry.unique_id = unique_id
+    entry.entity_id = entity_id
+    entry.domain = domain
+    return entry
+
+
+def test_dedup_removes_old_uid_for_same_area():
+    """Registry entry with old device_id uid is removed when a fresh uid covers same area."""
+    from custom_components.rowenta_roboeye.entity import async_remove_duplicate_room_entities
+
+    old_entry = _make_registry_entry(
+        "clean_room_map3_10_old_device_id",
+        "button.robot_map3_clean_room_10",
+    )
+    new_uid = "clean_room_map3_10_new_device_id"
+
+    ent_reg = MagicMock()
+    ent_reg.async_remove = MagicMock()
+
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[old_entry],
+        ),
+    ):
+        async_remove_duplicate_room_entities(
+            hass, config_entry, "button", {new_uid}
+        )
+
+    ent_reg.async_remove.assert_called_once_with(old_entry.entity_id)
+
+
+def test_dedup_keeps_canonical_uid():
+    """The canonical entry itself is NOT removed."""
+    from custom_components.rowenta_roboeye.entity import async_remove_duplicate_room_entities
+
+    canonical_uid = "clean_room_map3_10_current_device"
+    canonical_entry = _make_registry_entry(canonical_uid, "button.robot_map3_clean_room_10")
+
+    ent_reg = MagicMock()
+    ent_reg.async_remove = MagicMock()
+
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[canonical_entry],
+        ),
+    ):
+        async_remove_duplicate_room_entities(
+            hass, config_entry, "button", {canonical_uid}
+        )
+
+    ent_reg.async_remove.assert_not_called()
+
+
+def test_dedup_removes_multiple_stale_uids_same_area():
+    """All stale duplicates for a single area are removed."""
+    from custom_components.rowenta_roboeye.entity import async_remove_duplicate_room_entities
+
+    new_uid = "clean_room_map3_10_current"
+    stale1 = _make_registry_entry("clean_room_map3_10_old1", "button.x_10_old1")
+    stale2 = _make_registry_entry("clean_room_map3_10_old2", "button.x_10_old2")
+    canonical = _make_registry_entry(new_uid, "button.x_10_current")
+
+    ent_reg = MagicMock()
+    removed = []
+    ent_reg.async_remove = MagicMock(side_effect=lambda eid: removed.append(eid))
+
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[stale1, stale2, canonical],
+        ),
+    ):
+        async_remove_duplicate_room_entities(
+            hass, config_entry, "button", {new_uid}
+        )
+
+    assert set(removed) == {stale1.entity_id, stale2.entity_id}
+
+
+def test_dedup_ignores_different_platform():
+    """Entries from a different platform domain are not touched."""
+    from custom_components.rowenta_roboeye.entity import async_remove_duplicate_room_entities
+
+    new_uid = "clean_room_map3_10_current"
+    # This has the same area/map as new_uid but belongs to "sensor" platform
+    wrong_platform = _make_registry_entry(
+        "clean_room_map3_10_old", "sensor.robot_map3_room_10", domain="sensor"
+    )
+
+    ent_reg = MagicMock()
+    ent_reg.async_remove = MagicMock()
+
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[wrong_platform],
+        ),
+    ):
+        async_remove_duplicate_room_entities(
+            hass, config_entry, "button", {new_uid}
+        )
+
+    ent_reg.async_remove.assert_not_called()
+
+
+def test_dedup_noop_when_no_canonical_uids():
+    """Empty canonical set → nothing is removed (safety guard)."""
+    from custom_components.rowenta_roboeye.entity import async_remove_duplicate_room_entities
+
+    ent_reg = MagicMock()
+    ent_reg.async_remove = MagicMock()
+
+    hass = MagicMock()
+    config_entry = MagicMock()
+
+    # Should return early without touching the registry at all
+    async_remove_duplicate_room_entities(hass, config_entry, "button", set())
+
+    ent_reg.async_remove.assert_not_called()

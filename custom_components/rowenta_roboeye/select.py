@@ -39,6 +39,7 @@ from .const import (
 from .coordinator import RobEyeCoordinator
 from .entity import (
     RobEyeEntity,
+    async_remove_duplicate_room_entities,
     async_remove_entities_for_deleted_maps,
     async_remove_stale_room_entities,
     find_room_registry_records,
@@ -83,11 +84,18 @@ async def async_setup_entry(
             known_entities_by_map[_active] = initial_by_area
         entities.extend(initial_selects)
 
-    entities.extend(
-        _register_stub_room_selects_from_registry(
-            hass, config_entry, coordinator, known_entities_by_map
-        )
+    stub_selects = _register_stub_room_selects_from_registry(
+        hass, config_entry, coordinator, known_entities_by_map
     )
+    entities.extend(stub_selects)
+
+    room_uids = {
+        e._attr_unique_id
+        for e in entities
+        if isinstance(e, (RobEyeRoomFanSpeedSelect, RobEyeRoomStrategySelect))
+        and e._attr_unique_id
+    }
+    async_remove_duplicate_room_entities(hass, config_entry, "select", room_uids)
 
     async_add_entities(entities)
 
