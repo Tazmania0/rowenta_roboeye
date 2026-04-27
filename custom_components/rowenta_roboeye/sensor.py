@@ -61,7 +61,11 @@ from .const import (
     room_selection_entity_id,
 )
 from .coordinator import RobEyeCoordinator
-from .entity import RobEyeEntity
+from .entity import (
+    RobEyeEntity,
+    find_room_registry_records,
+    pick_room_name_from_records,
+)
 
 
 # ── Extended descriptor ───────────────────────────────────────────────
@@ -381,13 +385,9 @@ async def async_setup_entry(
     entities.append(RobEyeSelectedRoomCountSensor(coordinator))
 
     # ── Per-room sensors (from current area list) ─────────────────────
-    # Per-map entity tracking: map_id -> {area_id -> [entities]}
-    # Entities for inactive maps stay registered but show as unavailable via
-    # RobEyeRoomSensor.available → coordinator.map_available_for().
-    # This matches the pattern used by select/switch/button and prevents the
-    # orphaned-entity accumulation that occurred when entities were removed
-    # via async_remove() on every map switch (unique_ids include map_id, so
-    # each switch created new registry entries while old ones became orphans).
+    # Per-map entity tracking: map_id -> {area_id -> [entities]}.  Inactive-map
+    # entities stay registered but show as unavailable via map_available_for()
+    # so map switches do not orphan them in the entity registry.
     known_sensors_by_map: dict[str, dict] = {}
     _active = coordinator.active_map_id
     if coordinator.areas_map_id == _active:
@@ -397,6 +397,12 @@ async def async_setup_entry(
         if initial_by_area:
             known_sensors_by_map[_active] = initial_by_area
         entities.extend(initial_sensors)
+
+    entities.extend(
+        _register_stub_room_sensors_from_registry(
+            hass, config_entry, coordinator, known_sensors_by_map
+        )
+    )
 
     async_add_entities(entities)
 
@@ -744,16 +750,18 @@ class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
         native_unit: str | None = None,
         icon: str | None = None,
         forced_entity_id: str | None = None,
+        map_id: str | None = None,
     ) -> None:
         super().__init__(coordinator)
         self._value_fn = value_fn
-        _map = coordinator.active_map_id
+        # When map_id is provided explicitly, use it (recreating stub entities
+        # for inactive maps from the registry).  Otherwise bind to the
+        # currently active map (the normal live-creation path).
+        _map = map_id if map_id is not None else coordinator.active_map_id
         self._map_id = _map
         self._attr_unique_id = (
             f"room_{area_id}_map{_map}_{unique_suffix}_{coordinator.device_id}"
         )
-        # Use the human-readable room name directly — this is what HA displays.
-        # unique_id is stable (area_id-based) so entity_id doesn't change.
         self._attr_name = display_name
         if forced_entity_id is not None:
             self.entity_id = forced_entity_id
@@ -822,6 +830,63 @@ def _build_room_sensor_entities(
     return flat, by_area
 
 
+# Ordered longest-first so " Avg Clean Time" matches before " Time" / " Avg".
+_ROOM_SENSOR_NAME_SUFFIXES = (
+    " Avg Clean Time",
+    " Last Cleaned",
+    " Cleanings",
+    " Area",
+)
+
+
+def _register_stub_room_sensors_from_registry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    coordinator: RobEyeCoordinator,
+    known_sensors_by_map: dict[str, dict],
+) -> list[RobEyeRoomSensor]:
+    """Re-claim sensor registry entries belonging to inactive maps.
+
+    Mutates ``known_sensors_by_map`` in place so the SIGNAL_AREAS_UPDATED
+    listener treats stubs as already-tracked when the user switches back to
+    the corresponding map.
+    """
+    records = find_room_registry_records(hass, config_entry, "sensor")
+    if not records:
+        return []
+
+    by_room: dict[tuple[str, str], list] = {}
+    for rec in records:
+        if rec.area_id in known_sensors_by_map.get(rec.map_id, {}):
+            continue
+        by_room.setdefault((rec.map_id, rec.area_id), []).append(rec)
+
+    stubs: list[RobEyeRoomSensor] = []
+    for (map_id, area_id), recs in by_room.items():
+        room_name = (
+            pick_room_name_from_records(recs, _ROOM_SENSOR_NAME_SUFFIXES)
+            or f"Room {area_id}"
+        )
+        sensors = _build_room_sensors(
+            coordinator,
+            config_entry,
+            area_id=area_id,
+            room_name=room_name,
+            device_id=coordinator.device_id,
+            map_id=map_id,
+            stub_value_fn=lambda _c: None,
+        )
+        stubs.extend(sensors)
+        known_sensors_by_map.setdefault(map_id, {})[area_id] = sensors
+
+    if stubs:
+        LOGGER.debug(
+            "sensor: re-claiming %d stub entities for inactive maps from registry",
+            len(stubs),
+        )
+    return stubs
+
+
 def _build_room_sensors(
     coordinator: RobEyeCoordinator,
     config_entry: ConfigEntry,
@@ -829,8 +894,14 @@ def _build_room_sensors(
     room_name: str,
     device_id: str | None = None,
     map_id: str = "",
+    stub_value_fn: Callable[[RobEyeCoordinator], Any] | None = None,
 ) -> list[RobEyeRoomSensor]:
-    """Return the four per-room sensor entities for a discovered area."""
+    """Return the four per-room sensor entities for a discovered area.
+
+    When ``stub_value_fn`` is provided it overrides every sensor's value
+    extractor — used by the registry-rebuild path to claim entries for
+    inactive maps without trying to read live area data.
+    """
 
     def _stats(c: RobEyeCoordinator) -> dict[str, Any]:
         for a in c.areas:
@@ -840,6 +911,7 @@ def _build_room_sensors(
 
     _dev = device_id or coordinator.device_id
     _m = f"map{map_id}_" if map_id else ""
+    _vfn = stub_value_fn
     return [
         RobEyeRoomSensor(
             coordinator=coordinator,
@@ -848,8 +920,9 @@ def _build_room_sensors(
             unique_suffix=f"{_m}cleanings",
             display_name=f"{room_name} Cleanings",
             icon="mdi:counter",
-            value_fn=lambda c: _stats(c).get("cleaning_counter"),
+            value_fn=_vfn or (lambda c: _stats(c).get("cleaning_counter")),
             forced_entity_id=f"sensor.{_dev}_{_m}room_{area_id}_cleanings",
+            map_id=map_id or None,
         ),
         RobEyeRoomSensor(
             coordinator=coordinator,
@@ -859,8 +932,9 @@ def _build_room_sensors(
             display_name=f"{room_name} Area",
             native_unit=UnitOfArea.SQUARE_METERS,
             icon="mdi:texture-box",
-            value_fn=lambda c: round(_stats(c).get("area_size", 0) / 500_000, 2),  # API = 0.5 mm² units
+            value_fn=_vfn or (lambda c: round(_stats(c).get("area_size", 0) / 500_000, 2)),  # API = 0.5 mm² units
             forced_entity_id=f"sensor.{_dev}_{_m}room_{area_id}_area",
+            map_id=map_id or None,
         ),
         RobEyeRoomSensor(
             coordinator=coordinator,
@@ -870,10 +944,11 @@ def _build_room_sensors(
             display_name=f"{room_name} Avg Clean Time",
             native_unit=UnitOfTime.MINUTES,
             icon="mdi:timer-outline",
-            value_fn=lambda c: round(
+            value_fn=_vfn or (lambda c: round(
                 _stats(c).get("average_cleaning_time", 0) / 60_000, 1
-            ),
+            )),
             forced_entity_id=f"sensor.{_dev}_{_m}room_{area_id}_avg_clean_time",
+            map_id=map_id or None,
         ),
         RobEyeRoomSensor(
             coordinator=coordinator,
@@ -882,8 +957,9 @@ def _build_room_sensors(
             unique_suffix=f"{_m}last_cleaned",
             display_name=f"{room_name} Last Cleaned",
             icon="mdi:calendar-clock",
-            value_fn=lambda c: _format_date(_stats(c).get("last_cleaned", {})),
+            value_fn=_vfn or (lambda c: _format_date(_stats(c).get("last_cleaned", {}))),
             forced_entity_id=f"sensor.{_dev}_{_m}room_{area_id}_last_cleaned",
+            map_id=map_id or None,
         ),
     ]
 

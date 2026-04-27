@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -29,6 +30,71 @@ def _parse_room_entity_uid(unique_id: str) -> tuple[str, str] | None:
     if m:
         return m.group(2), m.group(1)
     return None
+
+
+@dataclass(frozen=True)
+class RoomRegistryRecord:
+    """A per-room registry entry parsed from its unique_id."""
+
+    map_id: str
+    area_id: str
+    unique_id: str
+    entity_id: str
+    original_name: str | None
+
+
+def find_room_registry_records(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    platform: str,
+) -> list[RoomRegistryRecord]:
+    """Return room-entity registry records for this config entry on a platform."""
+    ent_reg = er.async_get(hass)
+    records: list[RoomRegistryRecord] = []
+    for entry in er.async_entries_for_config_entry(ent_reg, config_entry.entry_id):
+        if entry.domain != platform:
+            continue
+        parsed = _parse_room_entity_uid(entry.unique_id)
+        if parsed is None:
+            continue
+        area_id_str, map_id_str = parsed
+        records.append(
+            RoomRegistryRecord(
+                map_id=map_id_str,
+                area_id=area_id_str,
+                unique_id=entry.unique_id,
+                entity_id=entry.entity_id,
+                original_name=entry.original_name,
+            )
+        )
+    return records
+
+
+def strip_known_suffix(name: str, suffixes: tuple[str, ...]) -> str:
+    """Return ``name`` with the first matching suffix stripped, else ``""``."""
+    for suffix in suffixes:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return ""
+
+
+def pick_room_name_from_records(
+    records: list[RoomRegistryRecord],
+    suffixes: tuple[str, ...],
+) -> str:
+    """Return the room name recovered from any record with a known suffix.
+
+    Falls back to the first record's ``original_name`` (without stripping)
+    when none of them have a recognisable suffix — handles entries where
+    the user has customised the name in the registry.
+    """
+    for rec in records:
+        stripped = strip_known_suffix(rec.original_name or "", suffixes)
+        if stripped:
+            return stripped
+    if records and records[0].original_name:
+        return records[0].original_name
+    return ""
 
 
 def async_remove_stale_room_entities(
