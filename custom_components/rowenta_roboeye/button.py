@@ -91,7 +91,7 @@ async def async_setup_entry(
         map_entities = known_entities_by_map.setdefault(active_map, {})
 
         current_ids: set = {
-            area_id
+            str(area_id)
             for area in coordinator.areas
             if (area_id := area.get("id")) is not None
             and area.get("area_meta_data", "")
@@ -214,7 +214,10 @@ def _build_room_button_entities(
         return new_entities, new_ids
     for area in areas:
         area_id = area.get("id")
-        if area_id is None or area_id in already_known:
+        if area_id is None:
+            continue
+        area_id = str(area_id)
+        if area_id in already_known:
             continue
         room_name = _parse_area_name(area)
         if not room_name:
@@ -226,7 +229,7 @@ def _build_room_button_entities(
             RobEyeRoomCleanButton(
                 coordinator=coordinator,
                 config_entry=config_entry,
-                area_id=str(area_id),
+                area_id=area_id,
                 room_name=room_name,
             )
         )

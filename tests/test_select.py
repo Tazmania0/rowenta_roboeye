@@ -985,7 +985,7 @@ def test_build_room_selects_skips_already_known():
     coord = _make_select_coordinator()
     entry = MagicMock()
     entry.entry_id = "test"
-    already_known = {3}  # Bedroom already registered (plain area_id)
+    already_known = {"3"}  # Bedroom already registered (string-normalised)
     entities, ids = _build_room_select_entities(coord, entry, coord.areas, already_known)
     # Only Kitchen → 1 fan speed + 1 strategy = 2
     assert len(entities) == 2
