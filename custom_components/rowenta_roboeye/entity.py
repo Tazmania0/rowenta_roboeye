@@ -97,6 +97,46 @@ def pick_room_name_from_records(
     return ""
 
 
+def async_remove_entities_for_deleted_maps(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    platform: str,
+    deleted_map_ids: set[str],
+) -> set[tuple[str, str]]:
+    """Remove entity registry entries for maps that no longer exist on the device.
+
+    When the user deletes a floor map from the robot's native app, all HA
+    entities stamped with that map_id become permanent orphans.  This function
+    removes them from the registry outright so they disappear from the UI.
+
+    Returns the set of ``(map_id, area_id_str)`` tuples that were removed so
+    callers can evict them from their ``known_ids`` closures.
+    """
+    if not deleted_map_ids:
+        return set()
+
+    ent_reg = er.async_get(hass)
+    removed: set = set()
+
+    for entry in list(er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)):
+        if entry.domain != platform:
+            continue
+        parsed = _parse_room_entity_uid(entry.unique_id)
+        if parsed is None:
+            continue
+        area_id_str, entity_map_id = parsed
+        if entity_map_id in deleted_map_ids:
+            LOGGER.info(
+                "RobEye: removing entity %s — map %s was deleted from device",
+                entry.entity_id,
+                entity_map_id,
+            )
+            ent_reg.async_remove(entry.entity_id)
+            removed.add((entity_map_id, area_id_str))
+
+    return removed
+
+
 def async_remove_stale_room_entities(
     hass: HomeAssistant,
     config_entry: ConfigEntry,

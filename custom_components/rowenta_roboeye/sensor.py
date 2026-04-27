@@ -58,11 +58,14 @@ from .const import (
     SCHEDULE_DAYS,
     SCHEDULE_DAYS_FULL,
     SIGNAL_AREAS_UPDATED,
+    SIGNAL_MAPS_UPDATED,
     room_selection_entity_id,
 )
 from .coordinator import RobEyeCoordinator
 from .entity import (
     RobEyeEntity,
+    async_remove_entities_for_deleted_maps,
+    async_remove_stale_room_entities,
     find_room_registry_records,
     pick_room_name_from_records,
 )
@@ -391,6 +394,17 @@ async def async_setup_entry(
     known_sensors_by_map: dict[str, dict] = {}
     _active = coordinator.active_map_id
     if coordinator.areas_map_id == _active:
+        # Purge registry entries for areas that no longer exist on the active
+        # map (e.g. areas changed while HA was offline).
+        current_area_ids: set = {
+            a.get("id")
+            for a in coordinator.areas
+            if a.get("id") is not None and _parse_sensor_area_name(a)
+        }
+        async_remove_stale_room_entities(
+            hass, config_entry, coordinator, "sensor", current_area_ids
+        )
+
         initial_sensors, initial_by_area = _build_room_sensor_entities(
             coordinator, config_entry, coordinator.areas, set()
         )
@@ -424,14 +438,17 @@ async def async_setup_entry(
             and _parse_sensor_area_name(area)
         }
 
-        # Only remove entities for areas deleted from this specific map.
-        # Entities for inactive maps are left alive; map_available_for() makes
-        # them unavailable while their map is not selected.
+        # Remove stale area entities from both memory and entity registry so
+        # they are fully gone (not recreated as stubs on next HA restart).
         stale_ids = set(map_sensors.keys()) - current_ids
         for area_id in stale_ids:
             for entity in map_sensors.pop(area_id):
                 LOGGER.debug("sensor: removing deleted-area sensor area_id=%s", area_id)
-                hass.async_create_task(entity.async_remove())
+                if entity.registry_entry:
+                    from homeassistant.helpers import entity_registry as er
+                    er.async_get(hass).async_remove(entity.entity_id)
+                else:
+                    hass.async_create_task(entity.async_remove())
 
         new_entities, new_by_area = _build_room_sensor_entities(
             coordinator, config_entry, coordinator.areas, set(map_sensors.keys())
@@ -441,11 +458,29 @@ async def async_setup_entry(
             map_sensors.update(new_by_area)
             async_add_entities(new_entities)
 
+    @callback
+    def _async_on_maps_updated(deleted_map_ids: set[str]) -> None:
+        """Called when maps are deleted from the device."""
+        removed = async_remove_entities_for_deleted_maps(
+            hass, config_entry, "sensor", deleted_map_ids
+        )
+        for map_id, area_id in removed:
+            known_sensors_by_map.get(map_id, {}).pop(area_id, None)
+        for map_id in deleted_map_ids:
+            known_sensors_by_map.pop(map_id, None)
+
     config_entry.async_on_unload(
         async_dispatcher_connect(
             hass,
             f"{SIGNAL_AREAS_UPDATED}_{config_entry.entry_id}",
             _async_on_areas_updated,
+        )
+    )
+    config_entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            f"{SIGNAL_MAPS_UPDATED}_{config_entry.entry_id}",
+            _async_on_maps_updated,
         )
     )
 

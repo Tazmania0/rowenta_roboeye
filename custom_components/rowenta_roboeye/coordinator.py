@@ -71,6 +71,7 @@ from .const import (
     SCAN_INTERVAL_ROBOT_INFO,
     SCAN_INTERVAL_STATISTICS,
     SIGNAL_AREAS_UPDATED,
+    SIGNAL_MAPS_UPDATED,
     STRATEGY_DEFAULT,
     UPDATE_INTERVAL,
     UPDATE_INTERVAL_CLEANING,
@@ -127,6 +128,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Track known area IDs so we can detect additions/removals without reload
         self._known_area_ids: set = set()
+        # Track known permanent map IDs so we can detect when a map is deleted
+        self._known_map_ids: set = set()
         # Which map_id was active when DATA_AREAS was last fetched.
         # Compared by platforms before creating entities to avoid stale-signal races.
         self._areas_fetched_for_map_id: str | None = None
@@ -638,6 +641,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 try:
                     data[DATA_MAPS] = await self.client.get_maps()
+                    self._check_for_deleted_maps(data[DATA_MAPS])
                 except CannotConnect:
                     LOGGER.debug("get_maps unavailable, skipping")
 
@@ -857,6 +861,50 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._known_area_ids = current_ids
             self._areas_ready = True
             self.hass.loop.call_soon(async_dispatcher_send, self.hass, signal)
+
+    def _check_for_deleted_maps(self, maps_blob: dict) -> None:
+        """Detect permanent maps that have been deleted from the device.
+
+        Fires SIGNAL_MAPS_UPDATED with the set of deleted map_id strings so
+        platform listeners can purge entities that belong to those maps from
+        both the entity registry and the in-memory tracking dict.
+
+        A guard prevents false positives: if the API returns an empty list the
+        deletion is skipped — that is more likely a transient network error than
+        a real wipe of all maps.
+        """
+        maps_list = (
+            maps_blob.get("maps", []) if isinstance(maps_blob, dict) else []
+        )
+        current_ids: set[str] = {
+            str(m["map_id"])
+            for m in maps_list
+            if isinstance(m, dict) and m.get("map_id") is not None and m.get("permanent")
+        }
+
+        if not current_ids:
+            # Empty result — transient API error; do nothing.
+            return
+
+        if not self._known_map_ids:
+            self._known_map_ids = current_ids
+            return
+
+        deleted_ids = self._known_map_ids - current_ids
+        if deleted_ids:
+            LOGGER.info(
+                "RobEye: maps deleted from device — %s, signalling platforms",
+                deleted_ids,
+            )
+            self._known_map_ids = current_ids
+            self.hass.loop.call_soon(
+                async_dispatcher_send,
+                self.hass,
+                f"{SIGNAL_MAPS_UPDATED}_{self.config_entry.entry_id}",
+                deleted_ids,
+            )
+        else:
+            self._known_map_ids = current_ids
 
     # ── Convenience properties ────────────────────────────────────────
 
