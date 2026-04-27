@@ -362,6 +362,64 @@ async def test_room_switch_seeded_normal_stays_off():
     assert sw._last_robot_strategy == "normal"
 
 
+@pytest.mark.asyncio
+async def test_room_switch_restore_detects_offline_native_app_change():
+    """Native app turned off deep while HA was offline → first poll syncs it.
+
+    If the restored HA state (ON) differs from the current robot value ("normal"),
+    _last_robot_strategy must be left None so _handle_coordinator_update detects
+    the change and turns the switch OFF on the first areas refresh.
+    """
+    coord = _make_coordinator()
+    coord.areas = [{"id": 3, "strategy_mode": "normal"}]  # robot says normal now
+    sw = _make_room_switch(coord=coord, area_id="3")
+
+    last_state = MagicMock()
+    last_state.state = "on"  # HA last remembered deep=ON
+    sw.async_get_last_state = AsyncMock(return_value=last_state)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await sw.async_added_to_hass()
+
+    # Baseline must be None so the first poll will detect the mismatch
+    assert sw._last_robot_strategy is None
+    assert sw._is_on is True  # restored, not yet synced
+
+    # First coordinator update syncs from robot
+    sw._handle_coordinator_update()
+    assert sw._is_on is False
+    assert sw._last_robot_strategy == "normal"
+
+
+@pytest.mark.asyncio
+async def test_room_switch_restore_baseline_set_when_matching():
+    """When restored HA state matches robot, baseline is set immediately.
+
+    No unnecessary update fires on the first areas refresh.
+    """
+    coord = _make_coordinator()
+    coord.areas = [{"id": 3, "strategy_mode": "deep"}]
+    sw = _make_room_switch(coord=coord, area_id="3")
+
+    last_state = MagicMock()
+    last_state.state = "on"
+    sw.async_get_last_state = AsyncMock(return_value=last_state)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await sw.async_added_to_hass()
+
+    assert sw._last_robot_strategy == "deep"
+    assert sw._is_on is True
+
+    # First coordinator update: robot still says "deep" → no change
+    sw._handle_coordinator_update()
+    assert sw._is_on is True
+
+
 def test_room_switch_coordinator_update_syncs_deep():
     """Native app sets deep → switch turns ON on next areas refresh."""
     coord = _make_coordinator()
@@ -377,12 +435,11 @@ def test_room_switch_coordinator_update_syncs_deep():
     assert sw._last_robot_strategy == "deep"
 
 
-def test_room_switch_coordinator_update_normal_does_not_clear_switch():
-    """Robot reporting 'normal' never turns the switch OFF.
+def test_room_switch_coordinator_update_normal_clears_switch():
+    """Native app turns off deep → switch turns OFF on next areas refresh.
 
-    All non-deep strategies read back as 'normal' from the robot, so we
-    cannot tell whether the native app turned off deep or the mode was
-    always non-deep.  The HA switch is the sole authority for turning OFF.
+    When _last_robot_strategy was "deep" and the robot now reports "normal",
+    this is an unambiguous change — the switch must reflect it.
     """
     coord = _make_coordinator()
     coord.areas = [{"id": 3, "strategy_mode": "deep"}]
@@ -390,12 +447,10 @@ def test_room_switch_coordinator_update_normal_does_not_clear_switch():
     sw._last_robot_strategy = "deep"
     sw._is_on = True
 
-    # Robot now reports "normal" (e.g. native app changed, or HA wrote "normal")
     coord.areas = [{"id": 3, "strategy_mode": "normal"}]
     sw._handle_coordinator_update()
 
-    # Switch must stay ON — "normal" is ambiguous, HA is authoritative for OFF
-    assert sw._is_on is True
+    assert sw._is_on is False
     assert sw._last_robot_strategy == "normal"
 
 
