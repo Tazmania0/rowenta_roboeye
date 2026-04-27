@@ -1602,6 +1602,42 @@ async def test_modify_area_bypasses_queue(coordinator, mock_client):
 
 
 @pytest.mark.asyncio
+async def test_modify_area_invalidates_areas_cache(coordinator, mock_client):
+    """modify_area calls invalidate_areas_cache so the next refresh re-fetches areas."""
+    coordinator.async_request_refresh = AsyncMock()
+    mock_client.modify_area.return_value = {"cmd_id": 99, "error_code": 0}
+    mock_client.modify_area.__name__ = "modify_area"
+
+    from datetime import datetime
+    coordinator._last_areas = datetime.now()  # simulate a warm cache
+
+    await coordinator.async_send_command(
+        mock_client.modify_area,
+        map_id="3", area_id="10", cleaning_parameter_set="2", strategy_mode="deep",
+    )
+
+    assert coordinator._last_areas is None, "_last_areas must be cleared after modify_area"
+
+
+@pytest.mark.asyncio
+async def test_set_fan_speed_does_not_invalidate_areas_cache(coordinator, mock_client):
+    """set_fan_speed must NOT clear the areas cache — only modify_area should."""
+    coordinator.async_request_refresh = AsyncMock()
+    mock_client.set_fan_speed.return_value = {"cmd_id": 100, "error_code": 0}
+    mock_client.set_fan_speed.__name__ = "set_fan_speed"
+
+    from datetime import datetime
+    ts = datetime.now()
+    coordinator._last_areas = ts
+
+    await coordinator.async_send_command(
+        mock_client.set_fan_speed, cleaning_parameter_set="3"
+    )
+
+    assert coordinator._last_areas is ts, "_last_areas must NOT be cleared after set_fan_speed"
+
+
+@pytest.mark.asyncio
 async def test_set_fan_speed_bypasses_queue(coordinator, mock_client):
     """set_fan_speed fires immediately, never enters the serial command queue."""
     coordinator.async_request_refresh = AsyncMock()

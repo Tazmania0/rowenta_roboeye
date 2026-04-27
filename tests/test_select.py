@@ -655,8 +655,13 @@ async def test_room_fan_speed_prior_state_wins_over_robot():
 
 @pytest.mark.asyncio
 async def test_room_fan_speed_write_back_calls_modify_area():
-    """Selecting a fan speed persists it to the robot via async_send_command."""
+    """Selecting a fan speed persists it to the robot via async_send_command.
+
+    Both cleaning_parameter_set AND strategy_mode must be included so the
+    firmware never resets the omitted parameter to a default value.
+    """
     coord = _make_room_coordinator()
+    coord.hass.states.get.return_value = None  # no deep-clean switch state → "normal"
     entity = _room_fan_entity(coord=coord, area_id="3")
 
     await entity.async_select_option("eco")
@@ -666,6 +671,7 @@ async def test_room_fan_speed_write_back_calls_modify_area():
         map_id=coord.active_map_id,
         area_id="3",
         cleaning_parameter_set="2",  # eco → "2"
+        strategy_mode="normal",
     )
 
 
@@ -673,6 +679,7 @@ async def test_room_fan_speed_write_back_calls_modify_area():
 async def test_room_fan_speed_write_back_high():
     """'high' maps to cleaning_parameter_set='3' in modify_area."""
     coord = _make_room_coordinator()
+    coord.hass.states.get.return_value = None
     entity = _room_fan_entity(coord=coord, area_id="5")
 
     await entity.async_select_option("high")
@@ -682,6 +689,27 @@ async def test_room_fan_speed_write_back_high():
         map_id=coord.active_map_id,
         area_id="5",
         cleaning_parameter_set="3",
+        strategy_mode="normal",
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_fan_speed_preserves_deep_strategy():
+    """When the per-room deep-clean switch is ON, strategy_mode='deep' is preserved."""
+    coord = _make_room_coordinator()
+    switch_state = MagicMock()
+    switch_state.state = "on"
+    coord.hass.states.get.return_value = switch_state
+    entity = _room_fan_entity(coord=coord, area_id="3")
+
+    await entity.async_select_option("high")
+
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id=coord.active_map_id,
+        area_id="3",
+        cleaning_parameter_set="3",
+        strategy_mode="deep",  # preserved from switch state
     )
 
 
@@ -890,8 +918,12 @@ async def test_room_strategy_prior_state_wins_over_robot():
 
 @pytest.mark.asyncio
 async def test_room_strategy_write_back_sends_normal():
-    """Selecting 'Normal' sends strategy_mode='normal' to firmware."""
+    """Selecting 'Normal' sends strategy_mode='normal' to firmware.
+
+    cleaning_parameter_set is also included (fallback to '1' when areas is empty).
+    """
     coord = _make_room_coordinator()
+    coord.hass.states.get.return_value = None  # fan speed select not found → fallback
     entity = _room_strategy_entity(coord=coord, area_id="3")
 
     await entity.async_select_option(STRATEGY_LABELS[STRATEGY_NORMAL])
@@ -900,6 +932,7 @@ async def test_room_strategy_write_back_sends_normal():
         coord.client.modify_area,
         map_id=coord.active_map_id,
         area_id="3",
+        cleaning_parameter_set="1",  # fallback when no fan-speed select state
         strategy_mode="normal",
     )
 
@@ -908,6 +941,7 @@ async def test_room_strategy_write_back_sends_normal():
 async def test_room_strategy_walls_corners_sends_normal():
     """'Walls & Corners' also sends 'normal' — robot can't store it distinctly."""
     coord = _make_room_coordinator()
+    coord.hass.states.get.return_value = None
     entity = _room_strategy_entity(coord=coord, area_id="3")
 
     await entity.async_select_option(STRATEGY_LABELS[STRATEGY_WALLS_CORNERS])
@@ -917,6 +951,7 @@ async def test_room_strategy_walls_corners_sends_normal():
         coord.client.modify_area,
         map_id=coord.active_map_id,
         area_id="3",
+        cleaning_parameter_set="1",
         strategy_mode="normal",
     )
 
@@ -925,6 +960,7 @@ async def test_room_strategy_walls_corners_sends_normal():
 async def test_room_strategy_default_sends_normal():
     """'Default' also sends 'normal' to firmware."""
     coord = _make_room_coordinator()
+    coord.hass.states.get.return_value = None
     entity = _room_strategy_entity(coord=coord, area_id="3")
 
     await entity.async_select_option(STRATEGY_LABELS[STRATEGY_DEFAULT])
@@ -933,6 +969,27 @@ async def test_room_strategy_default_sends_normal():
         coord.client.modify_area,
         map_id=coord.active_map_id,
         area_id="3",
+        cleaning_parameter_set="1",
+        strategy_mode="normal",
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_strategy_preserves_fan_speed_from_select_state():
+    """Fan speed from the per-room select entity's HA state is preserved."""
+    coord = _make_room_coordinator()
+    fan_state = MagicMock()
+    fan_state.state = "high"
+    coord.hass.states.get.return_value = fan_state
+    entity = _room_strategy_entity(coord=coord, area_id="3")
+
+    await entity.async_select_option(STRATEGY_LABELS[STRATEGY_NORMAL])
+
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id=coord.active_map_id,
+        area_id="3",
+        cleaning_parameter_set="3",  # "high" → "3"
         strategy_mode="normal",
     )
 

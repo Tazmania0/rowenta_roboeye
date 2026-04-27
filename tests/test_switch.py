@@ -192,7 +192,13 @@ def test_room_switch_is_off_by_default():
 
 @pytest.mark.asyncio
 async def test_room_switch_turn_on():
+    """Turning ON sends strategy_mode='deep' plus cleaning_parameter_set.
+
+    Both parameters are always included so the firmware never resets the
+    omitted one to a default value.
+    """
     coord = _make_coordinator()
+    coord.hass.states.get.return_value = None  # no fan-speed select state → fallback "1"
     sw = _make_room_switch(coord=coord, area_id="3")
     await sw.async_turn_on()
     assert sw.is_on is True
@@ -201,6 +207,7 @@ async def test_room_switch_turn_on():
         coord.client.modify_area,
         map_id=coord.active_map_id,
         area_id="3",
+        cleaning_parameter_set="1",  # fallback when fan-speed select not found
         strategy_mode="deep",
     )
 
@@ -208,6 +215,7 @@ async def test_room_switch_turn_on():
 @pytest.mark.asyncio
 async def test_room_switch_turn_off():
     coord = _make_coordinator()
+    coord.hass.states.get.return_value = None
     sw = _make_room_switch(coord=coord, area_id="3")
     sw._is_on = True
     await sw.async_turn_off()
@@ -217,7 +225,43 @@ async def test_room_switch_turn_off():
         coord.client.modify_area,
         map_id=coord.active_map_id,
         area_id="3",
+        cleaning_parameter_set="1",
         strategy_mode="normal",
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_switch_turn_on_preserves_fan_speed():
+    """Fan speed from the per-room fan-speed select HA state is preserved on toggle."""
+    coord = _make_coordinator()
+    fan_state = MagicMock()
+    fan_state.state = "eco"
+    coord.hass.states.get.return_value = fan_state
+    sw = _make_room_switch(coord=coord, area_id="3")
+    await sw.async_turn_on()
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id=coord.active_map_id,
+        area_id="3",
+        cleaning_parameter_set="2",  # "eco" → "2"
+        strategy_mode="deep",
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_switch_turn_on_preserves_fan_speed_from_areas():
+    """When fan-speed select has no HA state, falls back to coordinator.areas."""
+    coord = _make_coordinator()
+    coord.hass.states.get.return_value = None  # no HA state
+    coord.areas = [{"id": 3, "cleaning_parameter_set": 3, "strategy_mode": "normal"}]
+    sw = _make_room_switch(coord=coord, area_id="3")
+    await sw.async_turn_on()
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id=coord.active_map_id,
+        area_id="3",
+        cleaning_parameter_set="3",  # from coordinator.areas
+        strategy_mode="deep",
     )
 
 
