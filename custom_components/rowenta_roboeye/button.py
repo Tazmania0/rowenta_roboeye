@@ -28,7 +28,7 @@ from .const import (
     room_selection_entity_id,
 )
 from .coordinator import RobEyeCoordinator
-from .entity import RobEyeEntity
+from .entity import RobEyeEntity, find_room_registry_records
 
 
 async def async_setup_entry(
@@ -55,6 +55,13 @@ async def async_setup_entry(
         if initial_ids:
             known_entities_by_map[_active] = dict(zip(initial_ids, initial_buttons))
         entities.extend(initial_buttons)
+
+    entities.extend(
+        _register_stub_room_buttons_from_registry(
+            hass, config_entry, coordinator, known_entities_by_map
+        )
+    )
+
     async_add_entities(entities)
 
     # Dynamic listener
@@ -110,6 +117,51 @@ def _parse_area_name(area: dict) -> str:
     except (json.JSONDecodeError, TypeError):
         return ""
     return meta.get("name", "").strip()
+
+
+_BUTTON_NAME_PREFIX = "Clean "
+
+
+def _register_stub_room_buttons_from_registry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    coordinator: RobEyeCoordinator,
+    known_entities_by_map: dict[str, dict],
+) -> list:
+    """Re-claim button registry entries belonging to inactive maps.
+
+    Mutates ``known_entities_by_map`` in place so the SIGNAL_AREAS_UPDATED
+    listener treats stubs as already-tracked when the user switches back.
+    """
+    records = find_room_registry_records(hass, config_entry, "button")
+    if not records:
+        return []
+
+    stubs: list = []
+    for rec in records:
+        if rec.area_id in known_entities_by_map.get(rec.map_id, {}):
+            continue
+        room_name = ""
+        if rec.original_name and rec.original_name.startswith(_BUTTON_NAME_PREFIX):
+            room_name = rec.original_name[len(_BUTTON_NAME_PREFIX):]
+        if not room_name:
+            room_name = f"Room {rec.area_id}"
+        button = RobEyeRoomCleanButton(
+            coordinator=coordinator,
+            config_entry=config_entry,
+            area_id=rec.area_id,
+            room_name=room_name,
+            map_id=rec.map_id,
+        )
+        stubs.append(button)
+        known_entities_by_map.setdefault(rec.map_id, {})[rec.area_id] = button
+
+    if stubs:
+        LOGGER.debug(
+            "button: re-claiming %d stub buttons for inactive maps from registry",
+            len(stubs),
+        )
+    return stubs
 
 
 def _build_room_button_entities(
@@ -290,10 +342,11 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
         config_entry: ConfigEntry,
         area_id: str,
         room_name: str,
+        map_id: str | None = None,
     ) -> None:
         super().__init__(coordinator)
         self._area_id = area_id
-        _map = coordinator.active_map_id
+        _map = map_id if map_id is not None else coordinator.active_map_id
         self._map_id = _map
         self._attr_unique_id = f"clean_room_map{_map}_{area_id}_{coordinator.device_id}"
         self._attr_name = f"Clean {room_name}"
