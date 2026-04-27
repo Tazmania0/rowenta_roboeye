@@ -360,13 +360,15 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         if (last_state := await self.async_get_last_state()) is not None:
             if last_state.state in FAN_SPEEDS:
                 self._selected = last_state.state
-                # Still record the robot's current value so _handle_coordinator_update
-                # knows the baseline and won't overwrite the restored state until the
-                # robot actually changes.
+                # Only record the robot's current value as baseline when it
+                # matches the restored HA state.  If they differ (native app
+                # changed the setting while HA was offline), leave
+                # _last_robot_raw as None so _handle_coordinator_update syncs
+                # from the robot on the first poll.
                 for area in self.coordinator.areas:
                     if str(area.get("id", "")) == self._area_id:
                         raw = area.get("cleaning_parameter_set")
-                        if raw is not None:
+                        if raw is not None and FAN_SPEED_MAP.get(str(raw)) == last_state.state:
                             self._last_robot_raw = str(raw)
                         break
                 return

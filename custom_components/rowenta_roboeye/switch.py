@@ -365,12 +365,16 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         await super().async_added_to_hass()
         if (last := await self.async_get_last_state()) is not None:
             self._is_on = last.state == "on"
-            # Record the robot's current strategy as baseline so
-            # _handle_coordinator_update knows not to overwrite the restored
-            # state until the robot actually changes.
+            # Only record the robot's current strategy as baseline when it
+            # matches the restored HA state.  If they differ (native app changed
+            # the setting while HA was offline), leave _last_robot_strategy as
+            # None so _handle_coordinator_update syncs from the robot on the
+            # first poll instead of ignoring the mismatch.
             for area in self.coordinator.areas:
                 if str(area.get("id", "")) == self._area_id:
-                    self._last_robot_strategy = str(area.get("strategy_mode", "") or "")
+                    robot_val = str(area.get("strategy_mode", "") or "").lower()
+                    if (robot_val == "deep") == self._is_on:
+                        self._last_robot_strategy = robot_val
                     break
             return
         # Seed from robot's stored strategy_mode on first run (no prior HA state).
@@ -387,27 +391,25 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
     def _handle_coordinator_update(self) -> None:
         """Sync deep-clean state from robot on every areas refresh.
 
-        Only "deep" is acted on — when the robot reports "deep" and the switch
-        is currently OFF, the switch is turned ON.  When the robot reports
-        "normal" the switch is never touched: all non-deep strategies read back
-        as "normal" from the robot, so we cannot distinguish "native app turned
-        off deep" from "was always non-deep".  The HA switch is the sole
-        authority for turning deep clean OFF.
+        Both "deep" and "normal" are acted on — when the robot's stored
+        strategy_mode changes, _is_on is updated to match.  This means native
+        app changes (both enabling and disabling deep clean) are reflected in HA
+        within 300 s (the areas poll interval).
 
-        _last_robot_strategy prevents redundant work between polls.
+        _last_robot_strategy prevents redundant state writes between polls.
         """
         for area in self.coordinator.areas:
             if str(area.get("id", "")) == self._area_id:
                 robot_val = str(area.get("strategy_mode", "") or "").lower()
                 if robot_val != self._last_robot_strategy:
                     self._last_robot_strategy = robot_val
-                    if robot_val == "deep" and not self._is_on:
-                        self._is_on = True
+                    new_is_on = robot_val == "deep"
+                    if new_is_on != self._is_on:
+                        self._is_on = new_is_on
                         LOGGER.debug(
-                            "Room %s deep clean synced ON from robot",
-                            self._area_id,
+                            "Room %s deep clean synced %s from robot",
+                            self._area_id, "ON" if new_is_on else "OFF",
                         )
-                    # "normal" → leave _is_on unchanged
                 break
         self.async_write_ha_state()
 

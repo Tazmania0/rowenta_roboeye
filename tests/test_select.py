@@ -654,6 +654,57 @@ async def test_room_fan_speed_prior_state_wins_over_robot():
 
 
 @pytest.mark.asyncio
+async def test_room_fan_speed_restore_detects_offline_native_app_change():
+    """Native app changed fan speed while HA was offline → first poll syncs it.
+
+    When the restored HA state ("eco") differs from the current robot value
+    ("high"), _last_robot_raw must be left None so _handle_coordinator_update
+    detects the change and updates _selected on the first areas refresh.
+    """
+    coord = _make_room_coordinator(areas=[_CONFIRMED_AREA_SPALNYA])  # robot says "high" (raw "3")
+    entity = _room_fan_entity(coord=coord, area_id="3")
+    last_state = MagicMock()
+    last_state.state = "eco"
+    entity.async_get_last_state = AsyncMock(return_value=last_state)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await entity.async_added_to_hass()
+
+    # Baseline must be None so first poll can detect the mismatch
+    assert entity._last_robot_raw is None
+    assert entity._selected == "eco"  # restored, not yet synced
+
+    # First coordinator update syncs from robot
+    entity._handle_coordinator_update()
+    assert entity._selected == "high"
+    assert entity._last_robot_raw == "3"
+
+
+@pytest.mark.asyncio
+async def test_room_fan_speed_restore_baseline_set_when_matching():
+    """When restored HA state matches robot, baseline is set and no spurious update fires."""
+    coord = _make_room_coordinator(areas=[_CONFIRMED_AREA_SPALNYA])  # robot says "high" (raw "3")
+    entity = _room_fan_entity(coord=coord, area_id="3")
+    last_state = MagicMock()
+    last_state.state = "high"  # matches robot
+    entity.async_get_last_state = AsyncMock(return_value=last_state)
+
+    from homeassistant.helpers.restore_state import RestoreEntity
+    RestoreEntity.async_added_to_hass = AsyncMock()
+
+    await entity.async_added_to_hass()
+
+    assert entity._last_robot_raw == "3"
+    assert entity._selected == "high"
+
+    # First coordinator update: robot still says "high" → no change
+    entity._handle_coordinator_update()
+    assert entity._selected == "high"
+
+
+@pytest.mark.asyncio
 async def test_room_fan_speed_write_back_calls_modify_area():
     """Selecting a fan speed persists it to the robot via async_send_command.
 
