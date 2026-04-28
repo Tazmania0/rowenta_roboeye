@@ -289,6 +289,7 @@ def test_active_map_sensor_exists():
 def test_active_map_sensor_shows_map_name():
     coord = _make_coordinator()
     coord.active_map_id = "3"
+    coord.active_map_id_for_display = "3"
     coord.available_maps = [
         {"map_id": "3", "display_name": "Ground Floor"},
         {"map_id": "4", "display_name": "First Floor"},
@@ -300,6 +301,7 @@ def test_active_map_sensor_shows_map_name():
 def test_active_map_sensor_falls_back_when_no_name():
     coord = _make_coordinator()
     coord.active_map_id = "4"
+    coord.active_map_id_for_display = "4"
     coord.available_maps = []
     result = _resolve_active_map_name(coord)
     assert result == "Map 4"
@@ -308,8 +310,21 @@ def test_active_map_sensor_falls_back_when_no_name():
 def test_active_map_sensor_none_when_empty_id():
     coord = _make_coordinator()
     coord.active_map_id = ""
+    coord.active_map_id_for_display = ""
     result = _resolve_active_map_name(coord)
     assert result is None
+
+
+def test_active_map_sensor_holds_during_transition():
+    """Active Map sensor keeps old map name while _prev_committed_map_id is set."""
+    coord = _make_coordinator()
+    coord.active_map_id_for_display = "3"
+    coord.available_maps = [
+        {"map_id": "3", "display_name": "Ground Floor"},
+        {"map_id": "4", "display_name": "First Floor"},
+    ]
+    result = _resolve_active_map_name(coord)
+    assert result == "Ground Floor"
 
 
 # ── Map-prefixed room sensors ────────────────────────────────────────
