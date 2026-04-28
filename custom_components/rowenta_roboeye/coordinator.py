@@ -141,6 +141,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Which map_id was active when DATA_AREAS was last fetched.
         # Compared by platforms before creating entities to avoid stale-signal races.
         self._areas_fetched_for_map_id: str | None = None
+        # Map_id for which DATA_AREAS was last successfully committed to self.data.
+        # Unlike _areas_fetched_for_map_id this is never reset by async_set_active_map —
+        # it tracks what is actually in coordinator.data so stale areas can be cleared
+        # at the start of _async_update_data when the active map changes.
+        self._areas_committed_map_id: str | None = None
+        # Set of map_ids that have had areas committed at least once this session.
+        # Used by async_set_active_map to skip the _prev_committed_map_id grace period
+        # when switching BACK to a map whose entities already exist in HA.
+        self._maps_with_committed_areas: set[str] = set()
 
         # Cleaning strategy — set by strategy select or deep-clean switch; read by all clean operations
         self.cleaning_strategy: str = STRATEGY_DEFAULT
@@ -357,11 +366,19 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_active_map_id = map_id
         self._last_areas = None
         self._last_map_geometry = None
-        # Save the last committed map_id BEFORE clearing.  Per-map entities
-        # check this via map_available_for() so they remain available during
-        # the transition window (while new-map areas are being fetched) and
-        # only go unavailable once the new map's areas are committed.
-        self._prev_committed_map_id = self._areas_fetched_for_map_id
+        # Grace period: keep old-map entities available during the transition
+        # window (while new-map areas are being fetched) so the UI never flashes
+        # "unavailable" while we wait for the first HTTP response.
+        #
+        # Exception: if the destination map already has committed areas in this
+        # session its entities already exist in HA and become available immediately
+        # via active_map_id — no grace period is needed.  Keeping the old map's
+        # entities alive in that case causes a fast map1→map2→map1 round-trip to
+        # leave map2 entities visible as "available" while map1 is selected.
+        if map_id in self._maps_with_committed_areas:
+            self._prev_committed_map_id = None
+        else:
+            self._prev_committed_map_id = self._areas_fetched_for_map_id
         self._areas_fetched_for_map_id = None  # invalidate until refresh fetches new areas
         self._known_area_ids = set()
         self._robot_path = []
@@ -417,6 +434,23 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._areas_fetched_for_map_id,
             )
             self._prev_committed_map_id = None
+
+        # Clear stale DATA_AREAS when the active map has changed since the last
+        # commit.  Without this, coordinator.areas returns the old map's room list
+        # between a user-initiated async_set_active_map call and the coordinator
+        # completing its first tick for the new map — causing a map1→map2→map1
+        # fast-switch to leave map2 areas visible while "map1" is selected.
+        if (
+            self._areas_committed_map_id is not None
+            and self._areas_committed_map_id != _current_active
+            and DATA_AREAS in data
+        ):
+            LOGGER.debug(
+                "RobEye: clearing stale DATA_AREAS (was map %s, active now %s)",
+                self._areas_committed_map_id,
+                _current_active,
+            )
+            data.pop(DATA_AREAS)
 
         try:
             # ── Every 15 s: status ───────────────────────────────────
@@ -717,6 +751,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if _areas_list:
                         # Non-empty response: commit the areas data.
                         self._areas_fetched_for_map_id = _fetched_for
+                        self._areas_committed_map_id = _fetched_for
+                        self._maps_with_committed_areas.add(_fetched_for)
                         # NOTE: _prev_committed_map_id is intentionally NOT
                         # cleared here.  async_update_listeners() runs
                         # synchronously right after _async_update_data returns
