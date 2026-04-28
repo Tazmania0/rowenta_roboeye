@@ -13,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .api import CannotConnect, RobEyeApiClient
-from .const import CONF_HOSTNAME, CONF_NAME, DEFAULT_DEVICE_NAME, DOMAIN, LOGGER
+from .const import CONF_HOSTNAME, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DOMAIN, LOGGER
 
 
 class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -48,6 +48,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                 LOGGER.exception("Unexpected error during connection test")
                 errors["base"] = "unknown"
             else:
+                serial = await self._fetch_serial(host)
                 # Use IP as unique_id for manual setup
                 await self.async_set_unique_id(host)
                 self._abort_if_unique_id_configured()
@@ -57,6 +58,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_HOST: host,
                         CONF_HOSTNAME: host,
                         CONF_NAME: name,
+                        CONF_SERIAL: serial,
                     },
                 )
 
@@ -122,12 +124,14 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                 ),
             )
         name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
+        serial = await self._fetch_serial(self._host)
         return self.async_create_entry(
             title=f"{name} ({self._host})",
             data={
                 CONF_HOST: self._host,
                 CONF_HOSTNAME: self._hostname,
                 CONF_NAME: name,
+                CONF_SERIAL: serial,
             },
         )
 
@@ -146,8 +150,24 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
     # ------------------------------------------------------------------
 
     async def _test_connection(self, host: str) -> None:
+        """Verify connectivity; raises CannotConnect on failure."""
         client = RobEyeApiClient(host=host)
         await client.test_connection()
+
+    async def _fetch_serial(self, host: str) -> str:
+        """Return normalised serial number from robot, empty string on any failure."""
+        try:
+            client = RobEyeApiClient(host=host)
+            data = await client.get_robot_id()
+            raw = (
+                data.get("serial_number")
+                or data.get("robot_id")
+                or data.get("id")
+                or ""
+            )
+            return str(raw).lower().replace("-", "_").replace(" ", "_") if raw else ""
+        except Exception:  # noqa: BLE001
+            return ""
 
 
 class RobEyeOptionsFlow(OptionsFlow):
@@ -183,6 +203,9 @@ class RobEyeOptionsFlow(OptionsFlow):
                         CONF_HOST: host,
                         CONF_HOSTNAME: self._config_entry.data.get(CONF_HOSTNAME, host),
                         CONF_NAME: name,
+                        # Preserve stable identifiers so entity unique_ids never change
+                        CONF_SERIAL: self._config_entry.data.get(CONF_SERIAL, ""),
+                        "_device_id": self._config_entry.data.get("_device_id", ""),
                     },
                 )
 

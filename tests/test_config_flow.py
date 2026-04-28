@@ -34,14 +34,29 @@ def _make_flow():
 async def test_user_step_success():
     flow = _make_flow()
 
-    with patch.object(flow, "_test_connection", new=AsyncMock()):
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="sn_abc123")):
         result = await flow.async_step_user(
             {"host": "192.168.1.50"}
         )
 
     assert result["type"] == "create_entry"
     assert result["data"]["host"] == "192.168.1.50"
+    assert result["data"]["serial"] == "sn_abc123"
     assert "map_id" not in result["data"]
+
+
+@pytest.mark.asyncio
+async def test_user_step_serial_fetch_failure_still_creates_entry():
+    """Serial fetch failure is non-fatal; entry is created with empty serial."""
+    flow = _make_flow()
+
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="")):
+        result = await flow.async_step_user({"host": "192.168.1.50"})
+
+    assert result["type"] == "create_entry"
+    assert result["data"]["serial"] == ""
 
 
 @pytest.mark.asyncio
@@ -116,11 +131,13 @@ async def test_zeroconf_confirm_creates_entry():
     flow._host = "192.168.1.100"
     flow._hostname = "xplorer120.local."
 
-    result = await flow.async_step_zeroconf_confirm(user_input={})
+    with patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="sn_xyz")):
+        result = await flow.async_step_zeroconf_confirm(user_input={})
 
     assert result["type"] == "create_entry"
     assert result["data"]["host"] == "192.168.1.100"
     assert result["data"]["hostname"] == "xplorer120.local."
+    assert result["data"]["serial"] == "sn_xyz"
     assert "map_id" not in result["data"]
 
 
@@ -153,9 +170,9 @@ async def test_zeroconf_updates_ip_for_existing_hostname():
 
 # ── Options flow ──────────────────────────────────────────────────────
 
-def _make_options_flow(host="192.168.1.100"):
+def _make_options_flow(host="192.168.1.100", serial="sn_persisted"):
     entry = MagicMock()
-    entry.data = {"host": host, "hostname": "xplorer120.local."}
+    entry.data = {"host": host, "hostname": "xplorer120.local.", "serial": serial}
     flow = object.__new__(RobEyeOptionsFlow)
     object.__setattr__(flow, "_config_entry", entry)
     object.__setattr__(flow, "hass", MagicMock())
@@ -170,7 +187,7 @@ def _make_options_flow(host="192.168.1.100"):
 
 @pytest.mark.asyncio
 async def test_options_flow_happy_path():
-    flow = _make_options_flow()
+    flow = _make_options_flow(serial="sn_persisted")
 
     with patch(
         "custom_components.rowenta_roboeye.config_flow.RobEyeApiClient"
@@ -180,6 +197,8 @@ async def test_options_flow_happy_path():
 
     assert result["type"] == "create_entry"
     assert result["data"]["host"] == "192.168.1.101"
+    # Serial must be preserved so entity unique_ids don't change after IP update
+    assert result["data"]["serial"] == "sn_persisted"
     assert "map_id" not in result["data"]
 
 

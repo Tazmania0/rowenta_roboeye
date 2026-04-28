@@ -29,6 +29,7 @@ from .const import (
     CHARGING_CHARGING,
     CMD_POLL_INTERVAL_S,
     CMD_POLL_TIMEOUT_S,
+    CONF_SERIAL,
     DATA_AREAS,
     DATA_SENSOR_VALUES,
     DATA_AREAS_SAVED_MAP,
@@ -117,6 +118,13 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.client = client
         self.map_id = map_id
+
+        # Stable device identifier — loaded from config entry at startup so
+        # entity unique_ids are identical on every HA restart.  Set once from
+        # CONF_SERIAL (stored during config-flow); falls back to live robot_info
+        # on the first successful poll, then to entry_id as a last resort.
+        # Once assigned it never changes within or across sessions.
+        self._stable_device_id: str = config_entry.data.get(CONF_SERIAL, "")
 
         self._last_statistics: datetime | None = None
         self._last_areas: datetime | None = None
@@ -243,7 +251,17 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def device_id(self) -> str:
-        """Stable device identifier (serial or entry_id fallback)."""
+        """Stable device identifier — never changes once resolved.
+
+        Resolution order (first non-empty wins):
+        1. ``_stable_device_id`` — loaded from CONF_SERIAL at startup or set
+           on the first successful robot_info poll within a session.
+        2. Live ``robot_info`` — used to populate _stable_device_id the first
+           time it becomes available (then cached).
+        3. ``entry_id`` — last resort when the robot has never responded.
+        """
+        if self._stable_device_id:
+            return self._stable_device_id
         robot_id_data = self.robot_info.get("robot_id", {})
         serial = (
             robot_id_data.get("serial_number")
@@ -251,7 +269,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or robot_id_data.get("id")
         )
         if serial:
-            return str(serial).lower().replace("-", "_").replace(" ", "_")
+            resolved = str(serial).lower().replace("-", "_").replace(" ", "_")
+            self._stable_device_id = resolved
+            return resolved
         return self.config_entry.entry_id.lower()
 
     # ── Active map tracking ─────────────────────────────────────────────
@@ -799,6 +819,19 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         LOGGER.debug("%s unavailable, skipping", key)
                 data[DATA_ROBOT_INFO] = robot_info
                 self._last_robot_info = now
+                # Cache serial immediately so device_id is stable for the rest
+                # of this session even before async_setup_entry can persist it.
+                if not self._stable_device_id:
+                    _rid = robot_info.get("robot_id", {})
+                    _raw = (
+                        _rid.get("serial_number")
+                        or _rid.get("robot_id")
+                        or _rid.get("id")
+                    )
+                    if _raw:
+                        self._stable_device_id = (
+                            str(_raw).lower().replace("-", "_").replace(" ", "_")
+                        )
 
             self._consecutive_failures = 0
             return data

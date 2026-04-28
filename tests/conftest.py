@@ -187,5 +187,7 @@ def mock_config_entry():
         "host": "192.168.1.100",
         "hostname": "xplorer120.local.",
         "map_id": "3",
+        # Normalised serial — matches MOCK_ROBOT_ID["serial_number"].lower()
+        "serial": "sn123456789",
     }
     return entry
