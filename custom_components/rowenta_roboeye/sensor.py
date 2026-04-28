@@ -949,8 +949,9 @@ def _build_room_sensors(
     """
 
     def _stats(c: RobEyeCoordinator) -> dict[str, Any]:
+        _aid = str(area_id)
         for a in c.areas:
-            if a.get("id") == area_id:
+            if str(a.get("id", "")) == _aid:
                 return a.get("statistics", {})
         return {}
 
