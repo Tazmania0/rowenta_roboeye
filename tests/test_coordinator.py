@@ -1790,6 +1790,133 @@ def test_map_available_for_no_prev_during_first_load(coordinator):
 
 
 @pytest.mark.asyncio
+async def test_stale_data_areas_cleared_on_map_switch(coordinator, mock_client):
+    """When the active map changes, DATA_AREAS committed for the old map is
+    removed from the data copy at the start of _async_update_data so that
+    coordinator.areas never returns rooms from the wrong map."""
+    map2_areas = {"areas": [{"id": 99, "area_meta_data": '{"name":"Map2Room"}'}]}
+    coordinator.data = {
+        DATA_STATUS: MOCK_STATUS,
+        DATA_STATISTICS: MOCK_STATISTICS,
+        DATA_AREAS: map2_areas,
+    }
+    coordinator._last_areas = datetime.utcnow()   # don't re-fetch areas this tick
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+    # Simulate having already committed areas for map "2", but now switched to "3"
+    coordinator._areas_committed_map_id = "2"
+    coordinator._manual_map_id = "3"             # user switched to map 3
+
+    result = await coordinator._async_update_data()
+
+    assert DATA_AREAS not in result, (
+        "DATA_AREAS for old map must be cleared when active map has changed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_areas_committed_map_id_set_when_areas_committed(coordinator, mock_client):
+    """_areas_committed_map_id and _maps_with_committed_areas are updated when
+    areas are successfully committed so the stale-clear logic works correctly."""
+    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
+    coordinator._last_areas = None
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+    coordinator._known_area_ids = set()
+    coordinator._areas_fetched_for_map_id = None
+    coordinator._areas_committed_map_id = None
+    coordinator._manual_map_id = "3"
+
+    mock_client.get_areas.return_value = MOCK_AREAS
+
+    await coordinator._async_update_data()
+
+    assert coordinator._areas_committed_map_id == "3", (
+        "_areas_committed_map_id must be set to the fetched map_id on commit"
+    )
+    assert "3" in coordinator._maps_with_committed_areas, (
+        "_maps_with_committed_areas must include the committed map_id"
+    )
+
+
+@pytest.mark.asyncio
+async def test_map1_map2_map1_fast_switch_no_stale_rooms(coordinator, mock_client):
+    """Fast map1→map2→map1 round-trip must not leave map2 entities available
+    and must not leave map2 areas in coordinator.data after switching back.
+
+    This exercises the two-part fix:
+    - _prev_committed_map_id=None when switching back to a known map (Fix 2)
+    - DATA_AREAS cleared for old map at start of next tick (Fix 1)
+    """
+    map1_areas = {"areas": [{"id": 1, "area_meta_data": '{"name":"LivingRoom"}'}]}
+    map2_areas = {"areas": [{"id": 99, "area_meta_data": '{"name":"Map2Room"}'}]}
+
+    # Starting state: map1 committed
+    coordinator._areas_committed_map_id = "1"
+    coordinator._areas_fetched_for_map_id = "1"
+    coordinator._maps_with_committed_areas = {"1"}
+    coordinator._manual_map_id = "1"
+    coordinator._prev_committed_map_id = None
+    coordinator.data = {
+        DATA_STATUS: MOCK_STATUS,
+        DATA_STATISTICS: MOCK_STATISTICS,
+        DATA_AREAS: map1_areas,
+    }
+    coordinator.async_request_refresh = AsyncMock()
+
+    # Step 1: switch to map2 (new map — grace period applies)
+    coordinator._areas_fetched_for_map_id = "1"
+    await coordinator.async_set_active_map("2")
+
+    assert coordinator._prev_committed_map_id == "1", "grace period for new map2"
+    assert coordinator._areas_fetched_for_map_id is None
+
+    # Simulate coordinator committing map2 areas (as if refresh ran successfully)
+    coordinator._areas_fetched_for_map_id = "2"
+    coordinator._areas_committed_map_id = "2"
+    coordinator._maps_with_committed_areas.add("2")
+    coordinator.data = {**coordinator.data, DATA_AREAS: map2_areas}
+
+    # Step 2: switch BACK to map1 (known map — no grace period)
+    coordinator._areas_fetched_for_map_id = "2"
+    await coordinator.async_set_active_map("1")
+
+    # Fix 2: no grace period because map1 is in _maps_with_committed_areas
+    assert coordinator._prev_committed_map_id is None, (
+        "no grace period when switching back to map1 (already known)"
+    )
+    # Fix 2: map2 entities immediately unavailable
+    assert coordinator.map_available_for("2") is False, (
+        "map2 entities must be unavailable immediately after switching back to map1"
+    )
+    assert coordinator.map_available_for("1") is True, (
+        "map1 entities must be available since map1 is now active"
+    )
+
+    # Step 3: simulate the coordinator tick that runs after the second switch
+    coordinator._last_areas = None
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+    coordinator._known_area_ids = set()
+    coordinator._areas_ready = False
+    coordinator._areas_fetched_for_map_id = None
+    mock_client.get_areas.return_value = map1_areas
+
+    result = await coordinator._async_update_data()
+
+    # Fix 1: DATA_AREAS for map2 must be cleared at the start of the tick
+    # and then re-populated with map1's areas by the areas-fetch within the tick
+    areas_blob = result.get(DATA_AREAS, {})
+    area_ids = [a.get("id") for a in areas_blob.get("areas", [])]
+    assert 99 not in area_ids, "map2 room must not appear in coordinator.areas after map1 tick"
+    assert 1 in area_ids, "map1 room must appear in coordinator.areas"
+    assert coordinator._areas_committed_map_id == "1"
+
+
+@pytest.mark.asyncio
 async def test_async_set_active_map_saves_prev_committed(coordinator):
     """async_set_active_map saves _areas_fetched_for_map_id into
     _prev_committed_map_id before clearing it, so per-map entities for
@@ -1808,6 +1935,31 @@ async def test_async_set_active_map_saves_prev_committed(coordinator):
         "_areas_fetched_for_map_id must be cleared to start fresh fetch"
     )
     assert coordinator._manual_map_id == "3"
+
+
+@pytest.mark.asyncio
+async def test_async_set_active_map_no_grace_when_switching_back_to_known_map(coordinator):
+    """When switching to a map that already has committed areas in this session,
+    _prev_committed_map_id is set to None instead of the old map_id.
+
+    Rationale: the destination map's entities already exist in HA and become
+    available immediately via active_map_id.  Keeping the old map's entities
+    alive via _prev_committed_map_id would cause a map1→map2→map1 round-trip
+    to leave map2 entities visible as 'available' while map1 is selected."""
+    coordinator.data = {}
+    coordinator._areas_fetched_for_map_id = "2"  # was on map 2
+    coordinator._prev_committed_map_id = None
+    coordinator._maps_with_committed_areas = {"1", "3"}  # map1 and map3 known
+    coordinator.async_request_refresh = AsyncMock()
+
+    # Switching back to a known map — no grace period needed
+    await coordinator.async_set_active_map("1")
+
+    assert coordinator._prev_committed_map_id is None, (
+        "_prev_committed_map_id must be None when destination map already has committed areas"
+    )
+    assert coordinator._areas_fetched_for_map_id is None
+    assert coordinator._manual_map_id == "1"
 
 
 @pytest.mark.asyncio
