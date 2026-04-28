@@ -170,8 +170,8 @@ def test_build_room_sensor_entities_returns_dict():
     flat, by_area = _build_room_sensor_entities(coord, config_entry, coord.areas, set())
 
     assert isinstance(by_area, dict), "by_area must be a dict"
-    assert 10 in by_area, "area_id 10 must be a key in by_area"
-    assert len(flat) == len(by_area[10]), "flat list must equal the sensors for area 10"
+    assert "10" in by_area, "area_id 10 must be a key in by_area"
+    assert len(flat) == len(by_area["10"]), "flat list must equal the sensors for area 10"
     assert len(flat) > 0, "should produce at least one sensor"
 
 
@@ -185,11 +185,11 @@ def test_build_room_sensor_entities_skips_known():
     config_entry = MagicMock()
     config_entry.entry_id = "test_entry"
 
-    # Pre-populate already_known with area 10
-    flat, by_area = _build_room_sensor_entities(coord, config_entry, coord.areas, {10})
+    # Pre-populate already_known with area 10 (string, as produced by the function)
+    flat, by_area = _build_room_sensor_entities(coord, config_entry, coord.areas, {"10"})
 
-    assert 10 not in by_area, "area 10 must be skipped (already known)"
-    assert 12 in by_area, "area 12 must be included (new)"
+    assert "10" not in by_area, "area 10 must be skipped (already known)"
+    assert "12" in by_area, "area 12 must be included (new)"
 
 
 # ── _build_room_button_entities return type ───────────────────────────
@@ -208,7 +208,7 @@ def test_build_room_button_entities_returns_list():
 
     assert isinstance(ids, list), "ids must be a list (ordered)"
     assert len(entities) == len(ids), "entities and ids must have same length"
-    assert set(ids) == {10, 12}
+    assert set(ids) == {"10", "12"}
 
 
 def test_build_room_button_entities_skips_blocking():
@@ -226,8 +226,8 @@ def test_build_room_button_entities_skips_blocking():
 
     entities, ids = _build_room_button_entities(coord, config_entry, coord.areas, set())
 
-    assert 10 in ids
-    assert 12 not in ids, "blocking area must be skipped"
+    assert "10" in ids
+    assert "12" not in ids, "blocking area must be skipped"
 
 
 # ── async_remove_duplicate_room_entities ─────────────────────────────────

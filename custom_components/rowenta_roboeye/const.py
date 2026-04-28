@@ -42,6 +42,7 @@ QUEUE_POST_DOCK_DELAY_S = 8.0  # short settle delay after dock before next queue
 CONF_MAP_ID = "map_id"
 CONF_HOSTNAME = "hostname"
 CONF_NAME = "name"
+CONF_SERIAL = "serial"  # device serial number; fetched at config-flow time, never changes
 DEFAULT_DEVICE_NAME = "Rowenta Xplorer 120"
 
 # ── API transport ─────────────────────────────────────────────────────

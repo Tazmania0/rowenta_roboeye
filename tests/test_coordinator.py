@@ -1875,3 +1875,51 @@ async def test_empty_areas_does_not_clear_prev_committed_map_id(coordinator, moc
         "_prev_committed_map_id must be preserved while areas retry is pending"
     )
     assert coordinator._areas_fetched_for_map_id is None
+
+
+# ── Stable device_id (CONF_SERIAL) ───────────────────────────────────
+
+def test_device_id_uses_conf_serial_immediately(mock_client, mock_config_entry):
+    """device_id returns CONF_SERIAL from config entry without any API call."""
+    hass = MagicMock()
+    coord = RobEyeCoordinator(hass=hass, config_entry=mock_config_entry,
+                              client=mock_client, map_id="3")
+    # mock_config_entry has serial="sn123456789" — must be used instantly
+    assert coord.device_id == "sn123456789"
+    assert coord._stable_device_id == "sn123456789"
+
+
+def test_device_id_falls_back_to_robot_info_when_no_conf_serial(mock_client, mock_config_entry):
+    """Without CONF_SERIAL, device_id is resolved from live robot_info."""
+    hass = MagicMock()
+    mock_config_entry.data = {"host": "192.168.1.100", "map_id": "3"}  # no serial
+    coord = RobEyeCoordinator(hass=hass, config_entry=mock_config_entry,
+                              client=mock_client, map_id="3")
+    # Simulate robot_info having been populated by the first poll
+    coord.data = {"robot_info": {"robot_id": {"serial_number": "XYZ999"}}}
+    assert coord.device_id == "xyz999"
+    # Once resolved, _stable_device_id is cached
+    assert coord._stable_device_id == "xyz999"
+    # A second call must return the same value
+    assert coord.device_id == "xyz999"
+
+
+def test_device_id_falls_back_to_entry_id_when_no_serial_anywhere(mock_client, mock_config_entry):
+    """Last-resort fallback is entry_id (lower-cased) when serial is unknown."""
+    hass = MagicMock()
+    mock_config_entry.data = {"host": "192.168.1.100", "map_id": "3"}
+    mock_config_entry.entry_id = "ABC-ENTRY"
+    coord = RobEyeCoordinator(hass=hass, config_entry=mock_config_entry,
+                              client=mock_client, map_id="3")
+    coord.data = {}  # empty robot_info
+    assert coord.device_id == "abc-entry"
+
+
+@pytest.mark.asyncio
+async def test_update_caches_serial_in_stable_device_id(coordinator, mock_client):
+    """After the first successful robot_info poll, _stable_device_id is populated."""
+    coordinator.data = {}
+    coordinator._stable_device_id = ""  # pretend no serial in config entry
+    await coordinator._async_update_data()
+    # MOCK_ROBOT_ID serial_number="SN123456789" → normalised "sn123456789"
+    assert coordinator._stable_device_id == "sn123456789"

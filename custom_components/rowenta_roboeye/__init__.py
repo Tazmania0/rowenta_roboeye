@@ -10,7 +10,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
-from .const import AREA_STATE_BLOCKING, CONF_MAP_ID, CONF_NAME, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, VERSION, room_selection_entity_id
+from .const import AREA_STATE_BLOCKING, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, VERSION, room_selection_entity_id
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
@@ -153,15 +153,23 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     # Create input_boolean selection entities for all discovered rooms
     await _async_sync_room_selection_booleans(hass, coordinator)
 
-    # Persist the resolved device_id (serial-based) to config entry data so that
-    # async_remove_entry can reconstruct the correct dashboard URL path even when
-    # hass.data is empty (e.g. setup failed on a later HA restart before removal).
-    # Must be done BEFORE add_update_listener is registered to avoid a reload loop.
+    # Persist the resolved device_id to config entry data so that:
+    #  - async_remove_entry can reconstruct the correct dashboard URL path.
+    #  - CONF_SERIAL is available on the next HA restart, giving every entity
+    #    the same unique_id suffix from day one (upgrade path for installs that
+    #    pre-date the config-flow serial fetch).
+    # Must happen BEFORE add_update_listener is registered to avoid a reload loop.
     _device_id = coordinator.device_id
+    _serial = coordinator._stable_device_id  # already normalised; "" if unknown
+    _data_patch: dict = {}
     if config_entry.data.get("_device_id") != _device_id:
+        _data_patch["_device_id"] = _device_id
+    if _serial and config_entry.data.get(CONF_SERIAL) != _serial:
+        _data_patch[CONF_SERIAL] = _serial
+    if _data_patch:
         hass.config_entries.async_update_entry(
             config_entry,
-            data={**config_entry.data, "_device_id": _device_id},
+            data={**config_entry.data, **_data_patch},
         )
 
     hass.data.setdefault(DOMAIN, {})[config_entry.entry_id] = coordinator
