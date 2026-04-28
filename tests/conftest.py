@@ -169,6 +169,7 @@ def mock_client():
     client.get_localization.return_value = dict(MOCK_LOCALIZATION)
     client.get_relocalization.return_value = dict(MOCK_RELOCALIZATION)
     client.get_exploration.return_value = dict(MOCK_EXPLORATION)
+    client.get_cleaning_parameter_set.return_value = {"cleaning_parameter_set": 2}
     client.test_connection.return_value = True
     client.clean_all.return_value = None
     client.clean_map.return_value = None

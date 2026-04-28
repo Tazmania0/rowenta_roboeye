@@ -421,6 +421,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             # ── Every 15 s: status ───────────────────────────────────
             data[DATA_STATUS] = await self.client.get_status()
+            # Seed ha_fan_speed from status on the first fetch where the device
+            # reports a specific speed (values 1-4).  Value 0 means "use per-room
+            # defaults" and is intentionally ignored — the dedicated
+            # /get/cleaning_parameter_set fetch below handles that case.
+            if self.ha_fan_speed is None:
+                _cps = str(data[DATA_STATUS].get("cleaning_parameter_set", ""))
+                if _cps in ("1", "2", "3", "4"):
+                    self.ha_fan_speed = _cps
+                    LOGGER.debug("ha_fan_speed seeded from status: %s", _cps)
 
             # ── Every cycle: sensor values (GPIO, dustbin, brushes) ──
             try:
@@ -745,6 +754,33 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         data[DATA_ROBOT_FLAGS] = await self.client.get_robot_flags()
                     except CannotConnect:
                         LOGGER.debug("get_robot_flags unavailable, skipping")
+
+                    # Fallback seed for ha_fan_speed when /get/status returns 0
+                    # (per-room defaults) or omits cleaning_parameter_set entirely.
+                    # Only runs until ha_fan_speed is resolved for the session.
+                    if self.ha_fan_speed is None:
+                        try:
+                            _cps_resp = await self.client.get_cleaning_parameter_set()
+                            if isinstance(_cps_resp, dict):
+                                _cps_val = _cps_resp.get("cleaning_parameter_set")
+                                if _cps_val is not None:
+                                    _cps_str = (
+                                        str(int(_cps_val))
+                                        if isinstance(_cps_val, (int, float))
+                                        else str(_cps_val)
+                                    )
+                                    if _cps_str in ("1", "2", "3", "4"):
+                                        self.ha_fan_speed = _cps_str
+                                        LOGGER.debug(
+                                            "ha_fan_speed seeded from "
+                                            "/get/cleaning_parameter_set: %s",
+                                            _cps_str,
+                                        )
+                        except CannotConnect:
+                            LOGGER.debug(
+                                "get_cleaning_parameter_set unavailable, "
+                                "ha_fan_speed seed skipped"
+                            )
 
                     if _areas_list:
                         self._check_for_new_areas(new_areas_blob)
