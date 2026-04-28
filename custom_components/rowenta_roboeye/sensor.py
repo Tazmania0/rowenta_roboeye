@@ -106,9 +106,11 @@ def _resolve_active_map_name(coordinator: RobEyeCoordinator) -> str | None:
       non-empty map_meta_data → user name e.g. "Дружба"
       empty map_meta_data     → "Map {N}"  (1-based position in list)
 
+    Uses active_map_id_for_display so the sensor only advances to the new
+    map name once room entities for that map are fully rebuilt in HA.
     Returns None until /get/map_status has been fetched at least once.
     """
-    active_id = coordinator.active_map_id
+    active_id = coordinator.active_map_id_for_display
     if not active_id:
         return None
 

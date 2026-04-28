@@ -296,6 +296,21 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self._manual_map_id or self.map_id
 
     @property
+    def active_map_id_for_display(self) -> str:
+        """Map ID to show in status sensors (e.g. Active Map).
+
+        Returns the PREVIOUS map ID while the map-switch transition grace
+        period is active (_prev_committed_map_id is set).  The grace period
+        is cleared at the start of the coordinator tick AFTER the new map's
+        room entities have been fully initialised in the HA state machine.
+        Only then does this property advance to active_map_id, ensuring the
+        Active Map sensor and the room-view dashboard update in sync.
+        """
+        if self._prev_committed_map_id is not None:
+            return self._prev_committed_map_id
+        return self.active_map_id
+
+    @property
     def available_maps(self) -> list[dict]:
         """Normalised list of permanent floor maps from /get/maps.
 

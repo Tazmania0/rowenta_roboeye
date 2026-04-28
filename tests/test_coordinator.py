@@ -1002,6 +1002,27 @@ def test_active_map_id_no_override_uses_setup_map_id(coordinator):
     assert coordinator.active_map_id == "3"  # setup-time map_id, not map_status
 
 
+def test_active_map_id_for_display_stable_state(coordinator):
+    """active_map_id_for_display matches active_map_id when no transition is in progress."""
+    coordinator._manual_map_id = "4"
+    coordinator._prev_committed_map_id = None
+    assert coordinator.active_map_id_for_display == "4"
+
+
+def test_active_map_id_for_display_holds_during_transition(coordinator):
+    """active_map_id_for_display returns old map id while grace period is active."""
+    coordinator._manual_map_id = "4"   # user selected map 4
+    coordinator._prev_committed_map_id = "3"  # map 3 was showing before
+    assert coordinator.active_map_id_for_display == "3"
+
+
+def test_active_map_id_for_display_advances_after_grace_cleared(coordinator):
+    """Once grace period clears, active_map_id_for_display returns the new map id."""
+    coordinator._manual_map_id = "4"
+    coordinator._prev_committed_map_id = None  # grace period cleared
+    assert coordinator.active_map_id_for_display == "4"
+
+
 @pytest.mark.asyncio
 async def test_async_set_active_map_updates_state(coordinator):
     """async_set_active_map sets override, resets area/geometry timestamps."""
