@@ -238,12 +238,13 @@ async def test_restore_populates_name_to_id_before_lookup():
 # ══════════════════════════════════════════════════════════════════════
 
 
-def _make_mode_coordinator(status=None):
+def _make_mode_coordinator(status=None, ha_fan_speed=None):
     coord = MagicMock()
     coord.device_id = "dev123"
     coord.config_entry = MagicMock()
     coord.config_entry.entry_id = "test_entry"
     coord.status = dict(MOCK_STATUS if status is None else status)
+    coord.ha_fan_speed = ha_fan_speed
     coord.async_send_command = AsyncMock()
     coord.client = MagicMock()
     coord.client.set_fan_speed = AsyncMock()
@@ -286,6 +287,28 @@ def test_cleaning_mode_current_option_none_when_no_data():
     coord = _make_mode_coordinator(status={})
     entity = _mode_entity(coord)
     assert entity.current_option is None
+
+
+def test_cleaning_mode_current_option_falls_back_to_ha_fan_speed():
+    """When status lacks a valid cleaning_parameter_set, ha_fan_speed is used.
+
+    Regression: on initial setup the device is docked and /get/status may
+    return cleaning_parameter_set=0 (per-room defaults) or omit the key
+    entirely.  The coordinator seeds ha_fan_speed from /get/cleaning_parameter_set
+    instead; current_option must use that fallback rather than returning None.
+    """
+    coord = _make_mode_coordinator(status={}, ha_fan_speed="3")
+    entity = _mode_entity(coord)
+    assert entity.current_option == "high"
+
+
+def test_cleaning_mode_current_option_falls_back_when_status_returns_zero():
+    """cleaning_parameter_set=0 in status (per-room default) triggers fallback."""
+    coord = _make_mode_coordinator(
+        status={"cleaning_parameter_set": 0}, ha_fan_speed="1"
+    )
+    entity = _mode_entity(coord)
+    assert entity.current_option == "normal"
 
 
 @pytest.mark.asyncio

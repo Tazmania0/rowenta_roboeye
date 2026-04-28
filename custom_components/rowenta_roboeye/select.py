@@ -292,6 +292,12 @@ class RobEyeCleaningModeSelect(RobEyeEntity, SelectEntity, RestoreEntity):
             return self._last_known
         raw = str(self.coordinator.status.get("cleaning_parameter_set", ""))
         live = FAN_SPEED_MAP.get(raw)
+        # /get/status returns 0 when docked with per-room defaults active, or
+        # omits the key entirely — fall back to the value the coordinator seeded
+        # from /get/cleaning_parameter_set during the first 300 s areas fetch.
+        if live is None and self.coordinator.ha_fan_speed:
+            raw = self.coordinator.ha_fan_speed
+            live = FAN_SPEED_MAP.get(raw)
         if live is not None:
             self._last_known = live
             self.coordinator.ha_fan_speed = raw
