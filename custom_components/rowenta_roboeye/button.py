@@ -218,6 +218,7 @@ def _build_room_button_entities(
 ) -> tuple[list, list]:
     new_entities = []
     new_ids: list = []
+    seen_ids: set[str] = set()
     _map = coordinator.active_map_id
     # Guard: skip if areas data was fetched for a different map (stale-signal race).
     if coordinator.areas_map_id != _map:
@@ -227,7 +228,7 @@ def _build_room_button_entities(
         if area_id is None:
             continue
         area_id = str(area_id)
-        if area_id in already_known:
+        if area_id in already_known or area_id in seen_ids:
             continue
         room_name = _parse_area_name(area)
         if not room_name:
@@ -243,6 +244,7 @@ def _build_room_button_entities(
                 room_name=room_name,
             )
         )
+        seen_ids.add(area_id)
         new_ids.append(area_id)
     return new_entities, new_ids
 
@@ -557,4 +559,3 @@ class RobEyeCleanSelectedButton(RobEyeBaseButton):
             await hass.services.async_call(
                 "switch", "turn_off", {"entity_id": eid}, blocking=False
             )
-
