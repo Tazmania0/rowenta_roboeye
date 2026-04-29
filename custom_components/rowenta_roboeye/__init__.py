@@ -101,13 +101,10 @@ async def _async_sync_room_selection_booleans(
         LOGGER.debug("input_boolean component not loaded — skipping room selection setup")
         return
 
-    # Get existing selection entity IDs for this device (all maps).
-    # Keeping this map-agnostic prevents stale helpers from prior map switches
-    # from lingering as duplicates in room dashboards.
+    # Get existing selection entity IDs for this device+map
     existing_ids = {
         eid for eid in hass.states.async_entity_ids("input_boolean")
-        if eid.startswith(f"input_boolean.{device_id}_map")
-        and "_room_" in eid
+        if eid.startswith(f"input_boolean.{device_id}_map{map_id}_room_")
         and eid.endswith("_selected")
     }
 
