@@ -849,7 +849,6 @@ def _build_room_sensor_entities(
     """Return (flat entity list, area_id→entities map) for new rooms only."""
     flat: list[RobEyeRoomSensor] = []
     by_area: dict = {}
-    seen_ids: set[str] = set()
 
     _map = coordinator.active_map_id
     # Guard: skip if areas data was fetched for a different map (stale-signal race).
@@ -860,7 +859,7 @@ def _build_room_sensor_entities(
         if area_id is None:
             continue
         area_id = str(area_id)
-        if area_id in already_known or area_id in seen_ids:
+        if area_id in already_known:
             continue
         room_name = _parse_sensor_area_name(area)
         if not room_name:
@@ -874,7 +873,6 @@ def _build_room_sensor_entities(
             coordinator.device_id, map_id=_map,
         )
         flat.extend(sensors)
-        seen_ids.add(area_id)
         by_area[area_id] = sensors
 
     return flat, by_area
