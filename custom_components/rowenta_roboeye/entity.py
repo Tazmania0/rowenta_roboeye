@@ -97,6 +97,22 @@ def pick_room_name_from_records(
     return ""
 
 
+
+
+def async_remove_entity_if_attached(hass: HomeAssistant, entity: object) -> bool:
+    """Schedule entity removal only while it is still attached to a running hass.
+
+    Returns True when a removal task was scheduled, False when skipped because
+    the entity was already detached (common during reload/shutdown races).
+    """
+    entity_hass = getattr(entity, "hass", None)
+    if entity_hass is None or getattr(entity_hass, "loop", None) is None:
+        LOGGER.debug("RobEye: skipping async_remove for detached entity %s", getattr(entity, "entity_id", "<unknown>"))
+        return False
+
+    hass.async_create_task(entity.async_remove())
+    return True
+
 def async_remove_entities_for_deleted_maps(
     hass: HomeAssistant,
     config_entry: ConfigEntry,

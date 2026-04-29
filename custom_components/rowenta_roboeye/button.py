@@ -32,6 +32,7 @@ from .coordinator import RobEyeCoordinator
 from .entity import (
     RobEyeEntity,
     async_remove_duplicate_room_entities,
+    async_remove_entity_if_attached,
     async_remove_entities_for_deleted_maps,
     async_remove_stale_room_entities,
     find_room_registry_records,
@@ -115,7 +116,7 @@ async def async_setup_entry(
                 from homeassistant.helpers import entity_registry as er
                 er.async_get(hass).async_remove(entity.entity_id)
             else:
-                hass.async_create_task(entity.async_remove())
+                async_remove_entity_if_attached(hass, entity)
 
         new_entities, new_area_ids = _build_room_button_entities(
             coordinator, config_entry, coordinator.areas, set(map_entities.keys())
