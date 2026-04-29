@@ -243,33 +243,6 @@ async def test_async_update_still_respects_areas_ready_guard():
 
 
 @pytest.mark.asyncio
-async def test_async_update_skips_when_areas_map_mismatches_requested_map():
-    """Avoid saving a mixed dashboard (rooms from map A, IDs for map B)."""
-    hass = _make_hass_with_states(set())
-    coord = MagicMock(
-        device_id="dev",
-        _areas_ready=True,
-        active_map_id="3",
-        areas_map_id="9",
-    )
-    hass.data = {"rowenta_roboeye": {"entry1": coord}}
-
-    manager = RobEyeDashboardManager(device_id="dev", friendly_name="Test")
-    _fast_poll(manager)
-    manager._async_get_lovelace_store = AsyncMock()
-
-    result = await manager.async_update(
-        hass=hass,
-        areas=[{"id": 5, "area_meta_data": '{"name": "Kitchen"}'}],
-        device_id="dev",
-        active_map_id="3",
-    )
-
-    assert result is False
-    manager._async_get_lovelace_store.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_async_update_aborts_when_active_map_changes_mid_wait():
     """If the user switches maps while we're polling for entity readiness,
     abort cleanly so an intermediate map's config is never saved."""

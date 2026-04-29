@@ -653,18 +653,6 @@ class RobEyeDashboardManager:
                 "Dashboard update skipped — areas not ready (map switch in progress)"
             )
             return False
-        _areas_map_id = getattr(coordinator, "areas_map_id", None) if coordinator is not None else None
-        if (
-            isinstance(_areas_map_id, str)
-            and _areas_map_id
-            and _areas_map_id != active_map_id
-        ):
-            _LOGGER.debug(
-                "Dashboard update skipped — areas map (%s) != requested map (%s)",
-                _areas_map_id,
-                active_map_id,
-            )
-            return False
 
         rooms = _extract_rooms(areas)
 
