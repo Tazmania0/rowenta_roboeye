@@ -475,34 +475,6 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         opts = list(self._name_to_id.keys())
         return opts if opts else [self.coordinator.active_map_id]
 
-    def _resolve_map_id(self, value: str) -> str | None:
-        """Resolve a restored/select value to a canonical map_id string.
-
-        Accepts either:
-        - a display name (preferred entity state),
-        - a raw map ID string.
-
-        Returns None when it cannot be resolved safely. This prevents storing a
-        human display label as coordinator._manual_map_id, which would later be
-        embedded into per-room unique_ids and create duplicate entities.
-        """
-        if not value:
-            return None
-
-        resolved = self._name_to_id.get(value)
-        if resolved is not None:
-            return str(resolved)
-
-        raw = str(value).strip()
-        if not raw:
-            return None
-
-        maps = self.coordinator.available_maps
-        if any(str(m.get("map_id", "")).strip() == raw for m in maps):
-            return raw
-
-        return None
-
     @property
     def options(self) -> list[str]:
         return self._build_options()
@@ -524,13 +496,7 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         if (last_state := await self.async_get_last_state()) is not None:
             state = last_state.state
             if state not in ("unknown", "unavailable"):
-                map_id = self._resolve_map_id(state)
-                if map_id is None:
-                    LOGGER.debug(
-                        "Active map restore ignored: cannot resolve '%s' to map_id",
-                        state,
-                    )
-                    return
+                map_id = self._name_to_id.get(state, state)
                 if map_id != self.coordinator.active_map_id:
                     # The restored map differs from the one used during the first
                     # coordinator refresh (which ran before any entity was loaded).
@@ -547,10 +513,7 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
                     self.coordinator._manual_map_id = map_id
 
     async def async_select_option(self, option: str) -> None:
-        map_id = self._resolve_map_id(option)
-        if map_id is None:
-            LOGGER.debug("Active map option ignored: cannot resolve '%s' to map_id", option)
-            return
+        map_id = self._name_to_id.get(option, option)
         # Optimistically write the new map to the coordinator and push state to
         # HA immediately.  This eliminates the 1-2 s "flicker" where the selector
         # briefly reverts to the previous map while waiting for the next
