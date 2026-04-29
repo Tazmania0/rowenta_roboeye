@@ -233,6 +233,7 @@ def _build_room_select_entities(
 ) -> tuple[list, dict]:
     new_entities = []
     by_area: dict = {}
+    seen_ids: set[str] = set()
     _map = coordinator.active_map_id
     # Guard: skip if areas data was fetched for a different map (stale-signal race).
     if coordinator.areas_map_id != _map:
@@ -242,7 +243,7 @@ def _build_room_select_entities(
         if area_id is None:
             continue
         area_id = str(area_id)
-        if area_id in already_known:
+        if area_id in already_known or area_id in seen_ids:
             continue
         room_name = _parse_select_area_name(area)
         if not room_name:
@@ -265,6 +266,7 @@ def _build_room_select_entities(
             ),
         ]
         new_entities.extend(entities_for_area)
+        seen_ids.add(area_id)
         by_area[area_id] = entities_for_area
     return new_entities, by_area
 

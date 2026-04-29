@@ -388,3 +388,47 @@ def test_dedup_noop_when_no_canonical_uids():
     async_remove_duplicate_room_entities(hass, config_entry, "button", set())
 
     ent_reg.async_remove.assert_not_called()
+
+
+def test_build_room_entities_skip_duplicate_area_ids():
+    """Dynamic builders must ignore duplicate area rows from the API payload."""
+    from custom_components.rowenta_roboeye.button import _build_room_button_entities
+    from custom_components.rowenta_roboeye.select import _build_room_select_entities
+    from custom_components.rowenta_roboeye.sensor import _build_room_sensor_entities
+
+    areas = [
+        _make_area(10, "Kitchen"),
+        _make_area(10, "Kitchen"),
+    ]
+    coord = _make_coordinator(areas=areas)
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    btn_entities, btn_ids = _build_room_button_entities(coord, config_entry, areas, set())
+    sel_entities, sel_by_area = _build_room_select_entities(coord, config_entry, areas, set())
+    sen_entities, sen_by_area = _build_room_sensor_entities(coord, config_entry, areas, set())
+
+    assert btn_ids == ["10"]
+    assert len(btn_entities) == 1
+    assert list(sel_by_area.keys()) == ["10"]
+    assert len(sel_entities) == 2  # fan-speed + strategy
+    assert list(sen_by_area.keys()) == ["10"]
+    assert len(sen_entities) == 4  # room diagnostics set
+
+
+def test_extract_rooms_deduplicates_same_area_id():
+    """Dashboard room cards should render one row per area_id."""
+    from custom_components.rowenta_roboeye.dashboard import _extract_rooms
+
+    areas = [
+        _make_area(10, "Kitchen"),
+        _make_area(10, "Kitchen"),
+        _make_area(12, "Bedroom"),
+    ]
+
+    rooms = _extract_rooms(areas)
+
+    assert rooms == [
+        {"id": 10, "name": "Kitchen", "room_type": ""},
+        {"id": 12, "name": "Bedroom", "room_type": ""},
+    ]

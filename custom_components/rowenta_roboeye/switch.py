@@ -81,6 +81,7 @@ async def async_setup_entry(
     def _room_switches(areas: list, already_known: set) -> tuple[list, dict]:
         new_entities: list = []
         by_area: dict = {}
+        seen_ids: set[str] = set()
         _map = coordinator.active_map_id
         if coordinator.areas_map_id != _map:
             return new_entities, by_area
@@ -89,7 +90,7 @@ async def async_setup_entry(
             if area_id is None:
                 continue
             area_id = str(area_id)
-            if area_id in already_known:
+            if area_id in already_known or area_id in seen_ids:
                 continue
             room_name = _parse_switch_area_name(area)
             if not room_name:
@@ -111,6 +112,7 @@ async def async_setup_entry(
                 ),
             ]
             new_entities.extend(entities_for_area)
+            seen_ids.add(area_id)
             by_area[area_id] = entities_for_area
         return new_entities, by_area
 

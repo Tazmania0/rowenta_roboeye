@@ -1020,7 +1020,14 @@ class RobEyeDashboardManager:
 
 def _extract_rooms(areas: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rooms: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
     for area in areas:
+        area_id = area.get("id")
+        if area_id is None:
+            continue
+        area_id = str(area_id)
+        if area_id in seen_ids:
+            continue
         meta_raw = area.get("area_meta_data", "")
         if not meta_raw:
             continue
@@ -1031,6 +1038,7 @@ def _extract_rooms(areas: list[dict[str, Any]]) -> list[dict[str, Any]]:
         name = meta.get("name", "").strip()
         if not name:
             continue
+        seen_ids.add(area_id)
         rooms.append({"id": area["id"], "name": name, "room_type": area.get("room_type", "")})
     return rooms
 
