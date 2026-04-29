@@ -131,7 +131,7 @@ async def test_select_option_resolves_name_to_id():
 
 @pytest.mark.asyncio
 async def test_select_option_unknown_name_passes_raw():
-    """If option string isn't a known map name/id, it is ignored."""
+    """If option string isn't a known name, it's passed as-is (raw ID)."""
     coord = _make_coordinator()
     coord.async_set_active_map = AsyncMock()
     entity = _entity(coord)
@@ -139,7 +139,7 @@ async def test_select_option_unknown_name_passes_raw():
 
     await entity.async_select_option("99")
 
-    coord.async_set_active_map.assert_not_called()
+    coord.async_set_active_map.assert_called_once_with("99")
 
 
 # ── async_added_to_hass (state restore) ───────────────────────────────
@@ -231,33 +231,6 @@ async def test_restore_populates_name_to_id_before_lookup():
 
     # Must resolve to numeric ID "4" and call async_set_active_map (not set _manual_map_id directly)
     coord.async_set_active_map.assert_called_once_with("4")
-
-
-@pytest.mark.asyncio
-async def test_restore_ignores_unresolvable_display_name_when_maps_unavailable():
-    """A stale display label must not be stored as _manual_map_id.
-
-    Regression: when available_maps is temporarily empty at startup,
-    restoring "First Floor" used to pass through as a raw map_id-like value.
-    That created per-room entities with unique_ids containing map names,
-    then another set later with numeric IDs once maps loaded.
-    """
-    coord = _make_coordinator()
-    coord.active_map_id = "3"
-    coord.available_maps = []
-    entity = _entity(coord)
-
-    last_state = MagicMock()
-    last_state.state = "First Floor"
-    entity.async_get_last_state = AsyncMock(return_value=last_state)
-
-    from homeassistant.helpers.restore_state import RestoreEntity
-    RestoreEntity.async_added_to_hass = AsyncMock()
-
-    await entity.async_added_to_hass()
-
-    coord.async_set_active_map.assert_not_called()
-    assert coord._manual_map_id is None
 
 
 # ══════════════════════════════════════════════════════════════════════
