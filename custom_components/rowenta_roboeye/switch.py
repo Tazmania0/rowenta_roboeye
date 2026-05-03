@@ -178,13 +178,22 @@ async def async_setup_entry(
             and _parse_switch_area_name(area)
         }
 
+        # Purge registry entries for area_ids no longer on this map.  This
+        # catches orphans whose area_ids changed between HA sessions (e.g. after
+        # a room redraw) when async_remove_stale_room_entities wasn't called at
+        # setup time because areas hadn't been fetched yet.
+        async_remove_stale_room_entities(
+            hass, config_entry, coordinator, "switch", current_ids
+        )
+
         stale_ids = set(map_entities.keys()) - current_ids
+        from homeassistant.helpers import entity_registry as er
+        _ent_reg = er.async_get(hass)
         for area_id in stale_ids:
             for entity in map_entities.pop(area_id):
                 LOGGER.debug("switch: removing deleted-area switch area_id=%s", area_id)
-                if entity.registry_entry:
-                    from homeassistant.helpers import entity_registry as er
-                    er.async_get(hass).async_remove(entity.entity_id)
+                if entity.registry_entry and _ent_reg.async_get(entity.entity_id):
+                    _ent_reg.async_remove(entity.entity_id)
                 else:
                     hass.async_create_task(entity.async_remove())
 
