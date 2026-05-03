@@ -639,22 +639,42 @@ class RobEyeDashboardManager:
         schedule_entries: list[dict[str, Any]] | None,
     ) -> bool:
         # Locate the matching coordinator (if any) so we can detect a
-        # mid-wait map switch and respect _areas_ready.
+        # mid-wait map switch and validate that areas belong to active_map_id.
         coordinator = None
         for entry_data in hass.data.get(DOMAIN, {}).values():
             if getattr(entry_data, "device_id", None) == device_id:
                 coordinator = entry_data
                 break
 
-        # Guard: skip rebuild while a map switch is in progress (areas
-        # being refetched).  The next caller after areas commit will run.
-        if coordinator is not None and not getattr(coordinator, "_areas_ready", True):
-            _LOGGER.debug(
-                "Dashboard update skipped — areas not ready (map switch in progress)"
-            )
-            return False
-
         rooms = _extract_rooms(areas)
+
+        # Discard the rooms list when it does not belong to the currently
+        # active map.  Two cases trigger this:
+        #
+        #   1. areas_map_id is None — areas have not yet been committed for
+        #      the active map (e.g. user just switched, get_areas pending or
+        #      failed transiently this tick).
+        #   2. areas_map_id points at a different map — stale DATA_AREAS that
+        #      escaped the start-of-tick pop in _async_update_data (can happen
+        #      when the user's map switch races the in-flight tick after
+        #      _current_active was already latched).
+        #
+        # In either case the dashboard must NOT render the stale rooms: their
+        # area IDs would not match the active_map_id-prefixed entity IDs, so
+        # _room_entities_registered would loop until timeout and the previous
+        # save (still showing the OLD map's rooms) would persist in storage.
+        # Saving with rooms=[] actively replaces that stale dashboard with a
+        # transitional "No rooms discovered" view; the next successful commit
+        # invalidates and re-saves with the correct rooms.
+        if coordinator is not None:
+            fetched_for = getattr(coordinator, "areas_map_id", None)
+            if fetched_for != active_map_id:
+                _LOGGER.debug(
+                    "Dashboard: rooms fetched for map %s but active is %s — "
+                    "rendering transitional empty rooms",
+                    fetched_for, active_map_id,
+                )
+                rooms = []
 
         # Poll for per-room entities to appear in hass.states.  Each
         # asyncio.sleep(0) hand-off lets the platform async_add_entities
