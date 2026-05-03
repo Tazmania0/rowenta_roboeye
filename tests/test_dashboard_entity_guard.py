@@ -164,9 +164,15 @@ def _fast_poll(manager: RobEyeDashboardManager) -> None:
 async def test_async_update_defers_when_entities_missing():
     """async_update returns False without saving when room entities never appear."""
     hass = _make_hass_with_states(set())  # no entities present
-    # Coordinator reports areas as ready; the active_map_id guard is the
-    # only reason this returns False so we know the polling loop ran.
-    coord = MagicMock(device_id="dev", _areas_ready=True, active_map_id="3")
+    # Coordinator reports areas as ready and matching the active map; the
+    # active_map_id guard is the only reason this returns False so we know
+    # the polling loop ran.
+    coord = MagicMock(
+        device_id="dev",
+        _areas_ready=True,
+        active_map_id="3",
+        areas_map_id="3",
+    )
     hass.data = {"rowenta_roboeye": {"entry1": coord}}
 
     manager = RobEyeDashboardManager(device_id="dev", friendly_name="Test")
@@ -194,7 +200,12 @@ async def test_async_update_proceeds_when_entities_present():
     """async_update continues to save when every per-room entity exists."""
     eids = _all_room_eids("dev", "3", 5)
     hass = _make_hass_with_states(eids)
-    coord = MagicMock(device_id="dev", _areas_ready=True, active_map_id="3")
+    coord = MagicMock(
+        device_id="dev",
+        _areas_ready=True,
+        active_map_id="3",
+        areas_map_id="3",
+    )
     hass.data = {"rowenta_roboeye": {"entry1": coord}}
 
     manager = RobEyeDashboardManager(device_id="dev", friendly_name="Test")
@@ -221,33 +232,73 @@ async def test_async_update_proceeds_when_entities_present():
 
 
 @pytest.mark.asyncio
-async def test_async_update_still_respects_areas_ready_guard():
-    """When _areas_ready is False the earlier guard still short-circuits."""
-    hass = _make_hass_with_states(set())
-    coord = MagicMock(device_id="dev", _areas_ready=False, active_map_id="3")
+async def test_async_update_clears_rooms_when_areas_map_id_mismatches():
+    """When areas_map_id != active_map_id the dashboard saves with an empty
+    rooms list rather than rendering the previous map's stale rooms.
+
+    Regression: after a user-initiated map switch, coordinator.areas can
+    momentarily hold the old map's areas (when get_areas for the new map
+    fails this tick or when the start-of-tick pop missed due to a race).
+    Previously the dashboard returned False and the storage retained the
+    PREVIOUSLY saved dashboard, so the user kept seeing the old map's rooms
+    while the active-map dropdown already showed the new map.  The new
+    behaviour writes a transitional "No rooms discovered" config so the
+    UI clears immediately; the next successful commit refills it.
+    """
+    # Entities for OLD map A exist; NO entities exist for the active map B.
+    # Without the rooms-clearing logic the dashboard would build with map A
+    # rooms and time out waiting for the (non-existent) map B entities.
+    hass = _make_hass_with_states(_all_room_eids("dev", "A", 5))
+    coord = MagicMock(
+        device_id="dev",
+        _areas_ready=False,         # transition in progress
+        active_map_id="B",          # user just switched to B
+        areas_map_id=None,          # B's areas not yet committed
+    )
     hass.data = {"rowenta_roboeye": {"entry1": coord}}
 
     manager = RobEyeDashboardManager(device_id="dev", friendly_name="Test")
     _fast_poll(manager)
-    manager._async_get_lovelace_store = AsyncMock()
 
+    mock_store = AsyncMock()
+    saved_configs: list[dict] = []
+    async def _save(cfg):
+        saved_configs.append(cfg)
+    mock_store.async_save = _save
+    manager._async_get_lovelace_store = AsyncMock(return_value=mock_store)
+
+    # areas passed in carries the OLD map A rooms (the inconsistent snapshot).
     result = await manager.async_update(
         hass=hass,
         areas=[{"id": 5, "area_meta_data": '{"name": "Kitchen"}'}],
         device_id="dev",
-        active_map_id="3",
+        active_map_id="B",
     )
 
-    assert result is False
-    manager._async_get_lovelace_store.assert_not_called()
+    assert result is True, "save must proceed (with empty rooms) to clear stale UI"
+    assert len(saved_configs) == 1, "transitional dashboard must be written to storage"
+    # The Rooms view must NOT contain the stale "Kitchen" room card.
+    rooms_view = next(v for v in saved_configs[0]["views"] if v["title"] == "Rooms")
+    rendered_titles = [c.get("title", "") for c in rooms_view["cards"]]
+    assert "Kitchen" not in rendered_titles, (
+        "Rooms view must not render rooms whose areas were fetched for a different map"
+    )
 
 
 @pytest.mark.asyncio
 async def test_async_update_aborts_when_active_map_changes_mid_wait():
     """If the user switches maps while we're polling for entity readiness,
     abort cleanly so an intermediate map's config is never saved."""
+    # areas_map_id matches the requested active_map_id ("3") so the rooms
+    # list is preserved for the readiness poll — coordinator.active_map_id
+    # changing mid-wait to "9" is the only thing that triggers the abort.
     hass = _make_hass_with_states(set())  # entities never appear
-    coord = MagicMock(device_id="dev", _areas_ready=True, active_map_id="9")
+    coord = MagicMock(
+        device_id="dev",
+        _areas_ready=True,
+        active_map_id="9",
+        areas_map_id="3",
+    )
     hass.data = {"rowenta_roboeye": {"entry1": coord}}
 
     manager = RobEyeDashboardManager(device_id="dev", friendly_name="Test")
@@ -276,7 +327,12 @@ async def test_async_update_serializes_concurrent_callers():
 
     eids = _all_room_eids("dev", "3", 5)
     hass = _make_hass_with_states(eids)
-    coord = MagicMock(device_id="dev", _areas_ready=True, active_map_id="3")
+    coord = MagicMock(
+        device_id="dev",
+        _areas_ready=True,
+        active_map_id="3",
+        areas_map_id="3",
+    )
     hass.data = {"rowenta_roboeye": {"entry1": coord}}
 
     manager = RobEyeDashboardManager(device_id="dev", friendly_name="Test")
