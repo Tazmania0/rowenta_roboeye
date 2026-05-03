@@ -25,13 +25,13 @@ rowenta_roboeye/
 │   ├── const.py             # Constants, API endpoint paths, timing values, data keys
 │   ├── coordinator.py       # DataUpdateCoordinator — multi-endpoint polling hub
 │   ├── dashboard.py         # Auto-generates Lovelace dashboard; RobEyeDashboardManager
-│   ├── entity.py            # Shared base entity (coordinator binding, device_info)
+│   ├── entity.py            # Shared base entity + entity-registry housekeeping helpers
 │   ├── vacuum.py            # StateVacuumEntity — main control entity
 │   ├── sensor.py            # Static + dynamic per-room sensor entities + live_map sensor
 │   ├── binary_sensor.py     # side_brush_left_stuck, side_brush_right_stuck, dustbin flags
 │   ├── button.py            # Clean All, Stop, Return Home, per-room clean buttons
-│   ├── select.py            # Global + per-room fan speed selectors
-│   ├── switch.py            # Global + per-room deep clean toggles
+│   ├── select.py            # Global + per-room fan speed, strategy, active-map selectors
+│   ├── switch.py            # Global/per-room deep clean, per-room selection, schedule switches
 │   ├── manifest.json        # Integration metadata, HA version floor, dependencies
 │   ├── strings.json         # UI label definitions
 │   ├── services.yaml        # Service schema for clean_room
@@ -51,13 +51,22 @@ rowenta_roboeye/
 │   ├── test_button.py       # Button entity tests
 │   ├── test_config_flow.py  # Config/options flow tests
 │   ├── test_coordinator.py  # Coordinator data-merge and polling tests
+│   ├── test_dashboard_entity_guard.py  # Dashboard entity-readiness guard tests
 │   ├── test_select.py       # Select entity tests
 │   ├── test_sensor.py       # Sensor entity tests
+│   ├── test_stale_entity_removal.py    # Stale/orphaned entity removal tests
 │   ├── test_switch.py       # Switch entity tests
 │   └── test_vacuum.py       # Vacuum entity tests
 ├── conftest.py              # Root-level pytest stub for homeassistant package
+├── pytest.ini               # asyncio_default_fixture_loop_scope = function
+├── requirements-test.txt    # Test dependencies: aiohttp, pytest, pytest-asyncio
 ├── .github/workflows/
-│   └── release.yml          # CI/CD: GitHub Release creation on tag
+│   ├── release.yml          # CI/CD: GitHub Release creation on tag push or main push
+│   └── validate.yml         # CI: runs pytest + hassfest on every push/PR
+├── CHANGELOG.md             # Version history
+├── brand/                   # Root-level brand assets (icon.png, logo.png)
+├── icon.png                 # Root icon (HACS detection)
+├── logo.png                 # Root logo (HACS detection)
 ├── hacs.json                # HACS metadata
 ├── README.md                # End-user documentation
 └── LICENSE                  # MIT
@@ -94,27 +103,46 @@ Robot Vacuum (LAN:8080)
 
 2. **Adaptive poll interval**: The base coordinator interval is 5 s during active cleaning, 15 s when idle. This is set dynamically inside `_async_update_data` based on the current mode.
 
-3. **Dynamic entity discovery**: Room-based entities (per-room sensor, button, select, switch) are created at runtime. The coordinator compares `_known_area_ids` after each `/get/areas` call and fires `f"{SIGNAL_AREAS_UPDATED}_{entry_id}"` when the room set changes. Platform listeners add new entities without a full integration reload.
+3. **Dynamic entity discovery**: Room-based entities (per-room sensor, button, select, switch) are created at runtime. The coordinator compares `_known_area_ids` after each `/get/areas` call and fires `f"{SIGNAL_AREAS_UPDATED}_{entry_id}"` when the room set changes. Platform listeners add new entities without a full integration reload. Map deletion fires `f"{SIGNAL_MAPS_UPDATED}_{entry_id}"` with the deleted map ID set.
 
-4. **Live map pipeline**: During cleaning the coordinator polls `/get/rob_pose`, `/get/seen_polygon`, and `/get/cleaning_grid_map` at 5 s. It accumulates a path list (up to 2000 points, de-duplicated by 5-unit distance threshold) and builds a `DATA_LIVE_MAP` payload for the SVG card. Between sessions, the last completed grid + path is frozen and replayed.
+4. **Per-map entity tracking**: All dynamic room entities are stored in a `known_entities_by_map: dict[str, dict]` closure keyed by `map_id → {area_id → entities}`. Entities for inactive maps stay registered in HA but show as unavailable. This avoids the async_remove/async_add race that caused duplicate entity ID errors when switching maps.
 
-5. **Session lifecycle tracking**: The coordinator detects cleaning start (mode transitions to `cleaning`) and end (mode leaves `cleaning`/`go_home` while not active). On session end it freezes the grid, path, and outline for replay.
+5. **Stable device ID**: `coordinator.device_id` resolves from `CONF_SERIAL` (stored at config-flow time) → live `robot_info.serial_number` → `entry_id` fallback. Once resolved it never changes, ensuring `unique_id` stability across restarts. Room entity unique_ids embed both `map_id` and `device_id`.
 
-6. **Dashboard auto-generation**: On entry setup, `__init__.py` launches `_async_initial_dashboard` in the background. It retries up to 5 times with delays `(0, 2, 5, 15, 30)` s. On failure it fires a persistent notification asking the user to restart. `RobEyeDashboardManager` holds the hash and dashboard reference; `async_create_dashboard` is a no-op when config hasn't changed (SHA-256 dedup). The dashboard is hidden (sidebar disabled) when the entry is disabled, and shown again when it is re-enabled.
+6. **Live map pipeline**: During cleaning the coordinator polls `/get/rob_pose`, `/get/seen_polygon`, and `/get/cleaning_grid_map` at 5 s. It accumulates a path list (up to 2000 points, de-duplicated by 5-unit distance threshold) and builds a `DATA_LIVE_MAP` payload for the SVG card. Between sessions, the last completed grid + path is frozen and replayed.
 
-7. **Frontend JS resource**: `rowenta-map-card.js` is served as a static file and registered as a Lovelace resource via `JSModuleRegistration`. Version-based cache-busting ensures clients reload on update.
+7. **Session lifecycle tracking**: The coordinator detects cleaning start (mode transitions to `cleaning`) and end (mode leaves `cleaning`/`go_home` while not active). On session end it freezes the grid, path, and outline for replay.
 
-8. **Persistent brush notifications**: When sensor_values reports a side brush as stuck (`active`), the coordinator fires a `persistent_notification`. It clears the notified flag when the brush returns to normal to avoid duplicate alerts.
+8. **Dashboard auto-generation**: On entry setup, `__init__.py` launches `_async_initial_dashboard` in the background. It retries up to 5 times with delays `(0, 2, 5, 15, 30)` s. On failure it fires a persistent notification asking the user to restart. `RobEyeDashboardManager` holds the hash and dashboard reference; `async_create_dashboard` is a no-op when config hasn't changed (SHA-256 dedup). The dashboard is hidden (sidebar disabled) when the entry is disabled, and shown again when it is re-enabled. A `_room_entities_registered()` guard defers the save until all 9 per-room entity types (4 sensors, 1 button, 2 selects, 1 deep-clean switch, 1 selection switch) exist in `hass.states` — prevents "unavailable" cards on map switch.
 
-9. **Force-close HTTP connections**: `RobEyeApiClient._get()` creates a new `aiohttp.TCPConnector(force_close=True)` for every request. This prevents HA from holding a keep-alive connection that would block the Rowenta mobile app from reaching the robot's embedded HTTP server.
+9. **Frontend JS resource**: `rowenta-map-card.js` is served as a static file and registered as a Lovelace resource via `JSModuleRegistration`. Version-based cache-busting ensures clients reload on update.
 
-10. **Serial command queue**: All robot commands are dispatched through an `asyncio.PriorityQueue` (`_command_queue`) serialised by a background worker (`_command_queue_worker`). Priority 0 = immediate (stop/go_home/resume); priority 1 = normal. The worker captures `cmd_id` from each `/set/` response and polls `/get/command_result` to confirm completion before dispatching the next item. This prevents command collisions when multiple entities issue requests in quick succession.
+10. **Persistent brush notifications**: When sensor_values reports a side brush as stuck (`active`), the coordinator fires a `persistent_notification`. It clears the notified flag when the brush returns to normal to avoid duplicate alerts.
 
-11. **Pause/resume lifecycle**: When `stop()` is called mid-clean the coordinator sets `_is_paused = True`, drains pending queue jobs into `_paused_jobs`, and snapshots the interrupted command as `_paused_clean_command`. On `clean_start_or_continue()` the paused jobs are re-enqueued and the snapshot is cleared. `go_home()` discards the snapshot entirely.
+11. **Force-close HTTP connections**: `RobEyeApiClient._get()` creates a new `aiohttp.TCPConnector(force_close=True)` for every request. This prevents HA from holding a keep-alive connection that would block the Rowenta mobile app from reaching the robot's embedded HTTP server.
 
-12. **Multi-map support**: `active_map_id` resolves the runtime map ID as: manual HA selection (`_manual_map_id`) → setup-time `CONF_MAP_ID`. The device's own `/get/map_status` is intentionally ignored so HA does not silently follow native-app floor switches. `/get/maps` (polled every 300 s) provides the full map list for user-facing selectors.
+12. **Serial command queue**: All robot commands are dispatched through an `asyncio.PriorityQueue` (`_command_queue`) serialised by a background worker (`_command_queue_worker`). Priority 0 = immediate (stop/go_home/resume); priority 1 = normal. The worker captures `cmd_id` from each `/set/` response and polls `/get/command_result` to confirm completion before dispatching the next item. This prevents command collisions when multiple entities issue requests in quick succession. `IMMEDIATE_COMMAND_NAMES = frozenset({"modify_area", "set_fan_speed"})` bypasses the queue entirely — these write settings to the saved map and must not be delayed by pending clean jobs.
 
-13. **Incremental event log**: `/get/event_log` is polled every 30 s with a cursor (`_last_event_log_id`). The first fetch seeds the cursor without surfacing historical entries. Subsequent fetches deliver only new events; `_process_new_events` maps them to HA logbook entries and persistent notifications using the `EVENT_TYPE_*` constants in `const.py`.
+13. **Pause/resume lifecycle**: When `stop()` is called mid-clean the coordinator sets `_is_paused = True`, drains pending queue jobs into `_paused_jobs`, and snapshots the interrupted command as `_paused_clean_command`. On `clean_start_or_continue()` the paused jobs are re-enqueued and the snapshot is cleared. `go_home()` discards the snapshot entirely.
+
+14. **Multi-map support**: `active_map_id` resolves as: manual HA selection (`_manual_map_id`) → setup-time `CONF_MAP_ID`. The device's own `/get/map_status` is intentionally ignored so HA does not silently follow native-app floor switches. `/get/maps` (polled every 300 s) provides the full map list for `RobEyeActiveMapSelect`. `available_maps` returns normalised permanent-only map entries.
+
+15. **Map-switch grace period**: When `async_set_active_map()` is called, `_prev_committed_map_id` is set to the previous map's ID. `map_available_for(entity_map_id)` returns `True` for this ID until the next coordinator tick clears `_prev_committed_map_id`. This prevents a flash of "unavailable" entities while new-map areas are being fetched. The grace period is skipped when switching back to a map that already has committed areas in this session (`_maps_with_committed_areas`).
+
+16. **Entity registry housekeeping** (entity.py): Three cleanup functions keep the registry clean:
+    - `async_remove_stale_room_entities()`: Removes entities for area IDs that no longer exist on the active map (e.g. after room redraw). Guards against empty area lists (transient network failures).
+    - `async_remove_entities_for_deleted_maps()`: Removes entities for maps that were deleted from the device. Called when `SIGNAL_MAPS_UPDATED` fires.
+    - `async_remove_duplicate_room_entities()`: Removes orphaned registry entries with old `device_id`-based unique_ids when `CONF_SERIAL` becomes available after a first-boot fallback to `entry_id`.
+
+17. **Room selection toggles**: Per-room `RobEyeRoomSelectSwitch` entities (in switch.py) allow the user to select/deselect rooms for the "Clean Selected Rooms" command. Each entity ID follows the pattern `switch.{device_id}_map{map_id}_room_{area_id}_selected` (generated by `room_selection_entity_id()` in const.py). `SIGNAL_ROOM_SELECTION_CHANGED` is fired on every toggle so `RobEyeCleanSelectedButton` can update its availability immediately.
+
+18. **Cleaning strategy**: Global `RobEyeStrategySelect` (4 modes: Default/Normal/Walls & Corners/Deep). Per-room `RobEyeRoomStrategySelect` stores desired strategy per room (no Deep option — use per-room deep-clean switch). Global `RobEyeDeepCleanSwitch` is kept for backwards compatibility. `coordinator.cleaning_strategy` and `coordinator.last_non_deep_strategy` track state. The firmware only accepts `"normal"` or `"deep"` for `strategy_mode`; Default/Walls & Corners map to `"normal"` in API calls.
+
+19. **Incremental event log**: `/get/event_log` is polled every 30 s with a cursor (`_last_event_log_id`). The first fetch seeds the cursor without surfacing historical entries. Subsequent fetches deliver only new events; `_process_new_events` maps them to HA logbook entries and persistent notifications using the `EVENT_TYPE_*` constants in `const.py`.
+
+20. **Recharge-and-continue**: During firmware-initiated recharge cycles (mode=`cleaning` + charging=`charging`), the command worker waits up to `MODE_RECHARGE_CONTINUE_WAIT_S` (3 hours) polling every `MODE_RECHARGE_CONTINUE_POLL_S` (30 s) before giving up. This prevents the queue from treating a mid-clean charge as a stalled command.
+
+21. **Schedule enable/disable**: `RobEyeScheduleSwitch` entities bypass the serial command queue — `api.set_schedule_enabled()` is called directly (GET /set/modify_scheduled_task), followed by `async_request_refresh()`. Settings writes must not be delayed by pending motion commands.
 
 ---
 
@@ -141,10 +169,10 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 
 | File | Why |
 |------|-----|
-| `const.py` | All API endpoints, timing constants, data keys, mode/charging/fan-speed strings |
+| `const.py` | All API endpoints, timing constants, data keys, mode/charging/fan-speed/strategy strings |
 | `coordinator.py` | The heart of the integration — understand before touching any entity |
 | `api.py` | Network layer — all HTTP calls go here; `CannotConnect` exception |
-| `entity.py` | Base class all entities inherit from; device_info is set here |
+| `entity.py` | Base class all entities inherit from; entity-registry housekeeping helpers |
 | `tests/conftest.py` | Mock payloads and HA stub used by all tests |
 
 ---
@@ -162,8 +190,9 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 ### Entity Conventions
 
 - All entities inherit `RobEyeEntity` from `entity.py`.
-- `unique_id` must be stable and globally unique: `f"{entry.entry_id}_{SUFFIX}"`.
+- `unique_id` must be stable and globally unique: `f"{suffix}_{coordinator.device_id}"` for global entities; room entities embed both `map_id` and `device_id` (e.g. `f"room_fan_speed_map{map_id}_{area_id}_{device_id}"`).
 - `device_info` is set on the base class (`RobEyeEntity.__init__`) — do not override it per-entity.
+- Per-map entities must override `available` to call `coordinator.map_available_for(self._map_id)` so they go unavailable when a different map is active.
 - Use `coordinator.data.get(KEY)` defensively; data keys may be absent if an API call failed on a particular cycle.
 - `available` property must return `False` when coordinator data is stale (inherits from `CoordinatorEntity`).
 
@@ -173,6 +202,8 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 - Use `self._get(endpoint, params=...)` — it creates a fresh connection per request, handles timeouts, JSON parsing, and raises `CannotConnect` on errors.
 - Never call `aiohttp` directly in coordinator or entity code.
 - `CannotConnect` is caught by the coordinator; methods should let it propagate (do not return `None` from `_get`-based methods unless you handle the exception yourself in the method body).
+- `/get/rooms` is a dead endpoint on Xplorer 120 firmware — `get_rooms()` raises `NotImplementedError`. Use `/get/areas` exclusively.
+- Schedule changes use `set_schedule_enabled(task_id, enabled)` — do NOT route through `coordinator.async_send_command()`; call directly and then call `async_request_refresh()`.
 
 ### Coordinator (`coordinator.py`)
 
@@ -180,8 +211,11 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 - Wrap optional/diagnostic endpoints in `try/except CannotConnect` so one missing endpoint does not fail the whole update.
 - When adding new data keys, add a matching constant to `const.py` in the `DATA_*` section and document what it contains with a comment.
 - Room discovery is tracked in `self._known_area_ids`; fire `f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}"` when the set changes.
+- Map deletion fires `f"{SIGNAL_MAPS_UPDATED}_{self.config_entry.entry_id}"` with the deleted map ID set.
 - After `MAX_POLL_FAILURES` consecutive failures the coordinator logs a warning; it raises `UpdateFailed` on every failure regardless.
-- Convenience properties (`status`, `statistics`, `areas`, `robot_info`, etc.) on the coordinator are the preferred way for entities to read frequently-accessed sub-keys.
+- Convenience properties (`status`, `statistics`, `areas`, `robot_info`, `available_maps`, etc.) on the coordinator are the preferred way for entities to read frequently-accessed sub-keys.
+- `coordinator.device_id` is always stable; use it for all `unique_id` construction.
+- `coordinator.active_map_id` is the HA-selected map; `coordinator.areas_map_id` is the map for which `DATA_AREAS` was last fetched — compare them in entity builders to guard against stale-signal races.
 
 ### Adding a New Entity Platform
 
@@ -196,7 +230,7 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 - All user-facing strings must reference keys from `strings.json` — never hardcode UI text.
 - Validate connection via `api.test_connection()` (calls `get_status()`) before accepting the config entry.
 - Options flow must allow updating `host` and `map_id` without full re-setup.
-- Config entry stores `CONF_HOST` (IP string) and `CONF_HOSTNAME` (mDNS hostname or same IP as fallback) plus `CONF_MAP_ID`.
+- Config entry stores `CONF_HOST` (IP string), `CONF_HOSTNAME` (mDNS hostname or same IP as fallback), `CONF_MAP_ID`, and `CONF_SERIAL` (fetched from robot at setup time; used to build stable `device_id`). `CONF_NAME` stores the user-provided friendly name.
 
 ---
 
@@ -210,7 +244,7 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 | `DATA_STATISTICS` | `"statistics"` | `/get/statistics` | Lifetime totals |
 | `DATA_PERMANENT_STATISTICS` | `"permanent_statistics"` | `/get/permanent_statistics` | Alternate lifetime stats |
 | `DATA_AREAS` | `"areas"` | `/get/areas?map_id=X` | Room list; triggers dynamic entity discovery |
-| `DATA_ROOMS` | `"rooms"` | `/get/rooms` | Room list with geometry |
+| `DATA_ROOMS` | `"rooms"` | `/get/rooms` | Dead endpoint on Xplorer 120 — not polled; use `DATA_AREAS` |
 | `DATA_ROBOT_INFO` | `"robot_info"` | `/get/robot_id` + `/get/wifi_status` + `/get/protocol_version` | Dict of dicts |
 | `DATA_SENSOR_STATUS` | `"sensor_status"` | `/get/sensor_status` | Cliff/bump/wheel-drop health |
 | `DATA_ROBOT_FLAGS` | `"robot_flags"` | `/get/robot_flags` | Capability bitmask |
@@ -233,13 +267,100 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 
 ---
 
+## Key Constants (from `const.py`)
+
+### Cleaning Strategy
+
+```python
+STRATEGY_DEFAULT       = "4"   # robot chooses automatically
+STRATEGY_NORMAL        = "1"
+STRATEGY_WALLS_CORNERS = "2"
+STRATEGY_DEEP          = "3"   # double/triple pass
+
+STRATEGY_LABELS        # dict: API value → display label
+STRATEGY_REVERSE_MAP   # dict: display label → API value
+STRATEGY_OPTIONS       # list of human labels (excludes Deep — Deep is via the switch)
+```
+
+The firmware only accepts `"normal"` or `"deep"` for the `strategy_mode` parameter in `/set/modify_area`. Default and Walls & Corners both map to `"normal"` in API calls.
+
+### Fan Speed
+
+```python
+FAN_SPEED_MAP          # {"1": "normal", "2": "eco", "3": "high", "4": "silent"}
+FAN_SPEED_REVERSE_MAP  # inverse of FAN_SPEED_MAP
+FAN_SPEEDS             # list of human labels
+FAN_SPEED_LABELS       # {0: "default", 1: "normal", ...}  — 0 = per-room default
+```
+
+### Area / Room State
+
+```python
+AREA_STATE_CLEAN    = "clean"
+AREA_STATE_INACTIVE = "inactive"
+AREA_STATE_BLOCKING = "blocking"   # disabled for cleaning in RobEye app — skip entity creation
+AREA_TYPE_ROOM      = "room"
+AREA_TYPE_AVOIDANCE = "to_be_cleaned"
+```
+
+Skip entity creation for areas where `area.get("area_state") == AREA_STATE_BLOCKING`.
+
+### Event Types
+
+`EVENT_TYPE_*` integer constants map to robot event type_ids (e.g. `EVENT_TYPE_CLEAN_MAP_STARTED = 1110`). `EVENT_TYPE_LABELS` provides human-readable strings for logbook entries.
+
+### Signals
+
+```python
+SIGNAL_AREAS_UPDATED         # f"{DOMAIN}_areas_updated"  — fired when room set changes
+SIGNAL_MAPS_UPDATED          # f"{DOMAIN}_maps_updated"   — fired with deleted_map_ids set
+SIGNAL_ROOM_SELECTION_CHANGED  # f"{DOMAIN}_room_selection_changed" — fired on selection toggle
+```
+
+All signals are scoped per config entry: `f"{SIGNAL_AREAS_UPDATED}_{entry_id}"`.
+
+### Room Selection
+
+```python
+def room_selection_entity_id(device_id: str, map_id: str, area_id: str) -> str:
+    """Returns: switch.{device_id}_map{map_id}_room_{area_id}_selected"""
+```
+
+Used by `RobEyeRoomSelectSwitch`, `RobEyeCleanSelectedButton`, and the dashboard.
+
+### Command Queue Bypass
+
+```python
+IMMEDIATE_COMMAND_NAMES = frozenset({"modify_area", "set_fan_speed"})
+```
+
+Commands in this set are dispatched immediately without waiting in the serial queue.
+
+---
+
+## Entity Registry Helpers (entity.py)
+
+These functions keep the HA entity registry clean:
+
+| Function | When to call |
+|---|---|
+| `async_remove_stale_room_entities(hass, entry, coordinator, platform, current_ids)` | In `_async_on_areas_updated` when `areas_map_id == active_map_id`. Guards against empty `current_ids` (transient failures). |
+| `async_remove_entities_for_deleted_maps(hass, entry, platform, deleted_map_ids)` | In `_async_on_maps_updated` handler. Returns removed `(map_id, area_id)` tuples. |
+| `async_remove_duplicate_room_entities(hass, entry, platform, canonical_uids)` | At platform setup time, after the initial entities are built. Removes orphaned registry entries from prior runs with a different `device_id`. |
+| `find_room_registry_records(hass, entry, platform)` | To re-claim inactive-map entities from the registry at setup (builds stub entities for maps not currently active). |
+| `pick_room_name_from_records(records, suffixes)` | Recovers room name from registry `original_name` when areas data is unavailable. |
+
+---
+
 ## Testing
 
 ### Running Tests
 
 ```bash
-# Install test dependencies (one-time)
-pip install pytest pytest-asyncio pytest-homeassistant-custom-component
+# Install test dependencies
+pip install -r requirements-test.txt
+# or manually:
+pip install pytest pytest-asyncio aiohttp
 
 # Run all tests
 pytest tests/ -v
@@ -254,6 +375,8 @@ pytest tests/ -k "test_api" -v
 ### Test Architecture
 
 The root `conftest.py` stubs out the entire `homeassistant` package so tests run without a full HA installation. Do not import real Home Assistant classes in tests — use the stubs provided.
+
+`pytest.ini` sets `asyncio_default_fixture_loop_scope = function` — every async test gets a fresh event loop.
 
 Mock API payloads are defined in `tests/conftest.py` as module-level dicts (not pytest fixtures):
 - `MOCK_STATUS` — `/get/status` response
@@ -276,6 +399,14 @@ Reuse these; do not invent new payload structures in individual test files.
 - Mock `RobEyeApiClient` methods using `unittest.mock.AsyncMock`.
 - Test error paths: `CannotConnect` raised from API methods, missing keys in coordinator data, `UpdateFailed` exceptions.
 - Dynamic entity tests should simulate the `f"{SIGNAL_AREAS_UPDATED}_{entry_id}"` dispatch.
+- Entity registry tests should mock `er.async_get` and `er.async_entries_for_config_entry` (see `test_stale_entity_removal.py`).
+- Dashboard tests should set `manager._ENTITY_POLL_INTERVAL_S` / `manager._ENTITY_POLL_TIMEOUT_S` to millisecond values so entity-readiness polls don't block real time (see `test_dashboard_entity_guard.py`).
+
+### CI
+
+Two workflows run on every push/PR:
+- **validate.yml**: `pytest tests/` (Python 3.12) + `hassfest` integration validation.
+- **release.yml**: Creates a git tag and GitHub Release zip when a new version is pushed to `main`.
 
 ---
 
@@ -285,7 +416,7 @@ Releases are automated via `.github/workflows/release.yml`:
 
 1. Update `"version"` in `custom_components/rowenta_roboeye/manifest.json` (also update `VERSION` in `const.py` to keep them in sync).
 2. Commit and push to `main`.
-3. The workflow creates a git tag (`v<version>`) and a GitHub Release with a zip of `custom_components/`.
+3. The workflow reads the version, creates a git tag (`v<version>`), and publishes a GitHub Release with a zip of `custom_components/`. If the tag already exists it skips release creation (idempotent).
 
 Do not manually create tags or releases — let CI handle it.
 
@@ -305,8 +436,8 @@ Do not manually create tags or releases — let CI handle it.
 ### Adding a New API Command
 
 1. Add the method to `api.py` using `self._get(endpoint, params=...)`.
-2. Call it from the appropriate entity's `async_<action>` method.
-3. After issuing a command, call `await self.coordinator.async_request_refresh()` to update state immediately.
+2. For **motion commands** (clean, stop, go_home): call via `coordinator.async_send_command()`. After issuing, the coordinator's queue worker polls `/get/command_result` and calls `async_request_refresh()` when done.
+3. For **settings writes** (fan speed, schedule, modify_area): if listed in `IMMEDIATE_COMMAND_NAMES`, also use `async_send_command()` — it bypasses the queue. For truly one-shot writes (schedule enable/disable), call `api.set_schedule_enabled()` directly, then call `await coordinator.async_request_refresh()`.
 
 ### Working with Robot Position
 
@@ -315,6 +446,21 @@ Do not manually create tags or releases — let CI handle it.
 - `valid: false` means the robot has no position fix. `is_tentative: true` means the position is a rough estimate.
 - `timestamp` is a monotonic uptime counter; an unchanged timestamp during cleaning means the position is stale.
 - Do NOT use `/debug/localization` or `/debug/relocalization` for live tracking — `/get/rob_pose` supersedes both.
+
+### Working with Cleaning Strategy
+
+- Global strategy: read `coordinator.cleaning_strategy`; write via `RobEyeStrategySelect` or `RobEyeDeepCleanSwitch`.
+- Per-room strategy: stored in `RobEyeRoomStrategySelect._selected` (restored via `RestoreEntity`). When a clean is launched for a room, read from the strategy select entity's HA state rather than `coordinator.areas` cache to get the user's latest choice.
+- The firmware's `strategy_mode` parameter accepts only `"normal"` or `"deep"`. Map: Default/Normal/Walls & Corners → `"normal"`, Deep → `"deep"`.
+- Always include both `cleaning_parameter_set` and `strategy_mode` in `/set/modify_area` calls — omitting one resets the other to firmware default.
+
+### Working with Maps
+
+- `coordinator.active_map_id` — the map HA is using (user-selected). Never read `DATA_MAP_STATUS` to determine active map.
+- `coordinator.areas_map_id` — the map for which `DATA_AREAS` was last fetched. Compare to `active_map_id` in platform listeners to guard against stale signals.
+- `coordinator.available_maps` — list of permanent maps with display names (position-based `"Map N"` if unnamed).
+- `coordinator.map_available_for(map_id)` — returns `True` if a per-map entity should be available. Handles grace period during map switches.
+- To switch maps programmatically: call `coordinator.async_set_active_map(map_id)`.
 
 ### Debugging a Robot Integration
 
@@ -330,8 +476,12 @@ Do not manually create tags or releases — let CI handle it.
 - **Do not** use synchronous I/O (`requests`, `time.sleep`) anywhere in integration code.
 - **Do not** hardcode entity IDs, device names, or area names — all are dynamic.
 - **Do not** modify the Lovelace dashboard structure in `dashboard.py` without verifying SHA-256 hash invalidation still works.
-- **Do not** skip `available` property updates — entities must go unavailable when coordinator fails.
+- **Do not** skip `available` property updates — entities must go unavailable when coordinator fails or when their map is not active.
 - **Do not** add Python packages to `manifest.json` `requirements` without confirming the package is not already bundled with Home Assistant.
 - **Do not** push to `main` directly — open a PR or use the feature branch workflow.
 - **Do not** call `/debug/localization`, `/debug/relocalization`, or `/debug/exploration` for runtime position tracking — use `/get/rob_pose` instead.
+- **Do not** call `/get/rooms` — it returns `unknown_request` on Xplorer 120 firmware; `get_rooms()` raises `NotImplementedError`.
 - **Do not** hold persistent `aiohttp` sessions — `_get()` creates and closes a fresh connection per request intentionally.
+- **Do not** route schedule enable/disable through `coordinator.async_send_command()` — call `api.set_schedule_enabled()` directly.
+- **Do not** pass only `strategy_mode` (or only `cleaning_parameter_set`) to `/set/modify_area` — always include both to prevent the firmware from resetting the omitted parameter.
+- **Do not** call `async_remove_stale_room_entities()` with an empty `current_area_ids` set — this is guarded internally but the guard exists to prevent wiping all entities on transient API failures.
