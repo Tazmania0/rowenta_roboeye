@@ -472,49 +472,6 @@ def _make_room_registry_entry(unique_id, original_name, entity_id="sensor.dev_x"
     return e
 
 
-def test_inactive_map_sensor_entities_removed_on_map_switch():
-    """async_remove_room_entities_for_other_maps removes registry entries for
-    maps other than the active map, preventing duplicate room names in the UI."""
-    from custom_components.rowenta_roboeye.entity import (
-        async_remove_room_entities_for_other_maps,
-    )
-    from homeassistant.helpers import entity_registry as _er_mod
-
-    config_entry = MagicMock()
-    config_entry.entry_id = "entry1"
-    hass = MagicMock()
-
-    # Registry has sensor entries for map4 (inactive) and map3 (active).
-    active_entry = _make_room_registry_entry(
-        unique_id="room_5_map3_cleanings_dev",
-        original_name="Bedroom Cleanings",
-        entity_id="sensor.dev_map3_room_5_cleanings",
-    )
-    inactive_entry = _make_room_registry_entry(
-        unique_id="room_5_map4_cleanings_dev",
-        original_name="Bedroom Cleanings",
-        entity_id="sensor.dev_map4_room_5_cleanings",
-    )
-    mock_ent_reg = MagicMock()
-
-    # Map IDs are numeric strings like "3" (same as coordinator.active_map_id).
-    known: dict[str, dict] = {"3": {"5": [MagicMock()]}, "4": {"5": [MagicMock()]}}
-    with patch.object(_er_mod, "async_get", return_value=mock_ent_reg), \
-         patch.object(_er_mod, "async_entries_for_config_entry",
-                      return_value=[active_entry, inactive_entry]):
-        async_remove_room_entities_for_other_maps(
-            hass, config_entry, "sensor", "3", known
-        )
-
-    # Inactive map4 entry should be removed; active map3 entry left alone.
-    removed_ids = {call.args[0] for call in mock_ent_reg.async_remove.call_args_list}
-    assert "sensor.dev_map4_room_5_cleanings" in removed_ids
-    assert "sensor.dev_map3_room_5_cleanings" not in removed_ids
-    # In-memory tracking for map4 should be evicted.
-    assert "4" not in known
-    assert "3" in known
-
-
 # ── Schedule sensor tests ─────────────────────────────────────────────
 
 CONFIRMED_SCHEDULE = {

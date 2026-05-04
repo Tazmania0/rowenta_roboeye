@@ -66,7 +66,6 @@ from .entity import (
     RobEyeEntity,
     async_remove_duplicate_room_entities,
     async_remove_entities_for_deleted_maps,
-    async_remove_room_entities_for_other_maps,
     async_remove_stale_room_entities,
 )
 
@@ -419,11 +418,6 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
-    # Remove any inactive-map registry entries left over from previous sessions.
-    async_remove_room_entities_for_other_maps(
-        hass, config_entry, "sensor", _active, known_sensors_by_map
-    )
-
     # ── Dynamic listener: add/remove entities when area set changes ───
     @callback
     def _async_on_areas_updated() -> None:
@@ -470,12 +464,6 @@ async def async_setup_entry(
             LOGGER.debug("sensor: adding %d new room entities", len(new_entities))
             map_sensors.update(new_by_area)
             async_add_entities(new_entities)
-
-        # Remove entities for all other maps so the same room name doesn't
-        # appear twice in the entity list after a map switch.
-        async_remove_room_entities_for_other_maps(
-            hass, config_entry, "sensor", active_map, known_sensors_by_map
-        )
 
     @callback
     def _async_on_maps_updated(deleted_map_ids: set[str]) -> None:
