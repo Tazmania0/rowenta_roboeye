@@ -182,6 +182,68 @@ def async_remove_duplicate_room_entities(
             ent_reg.async_remove(entry.entity_id)
 
 
+def async_enable_room_entities_for_map(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    platform: str,
+    map_id: str,
+) -> None:
+    """Re-enable registry entries for rooms on ``map_id`` that the integration disabled.
+
+    Called before adding new entity objects for a map that becomes active.  Ensures
+    the registry entry is enabled so that HA's async_add_entities call links the new
+    object to the existing entry (rather than treating it as still-disabled).
+    """
+    if not map_id:
+        return
+    ent_reg = er.async_get(hass)
+    for entry in list(er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)):
+        if entry.domain != platform:
+            continue
+        parsed = _parse_room_entity_uid(entry.unique_id)
+        if parsed is None:
+            continue
+        _, entity_map_id = parsed
+        if (
+            entity_map_id == map_id
+            and entry.disabled_by == er.RegistryEntryDisabler.INTEGRATION
+        ):
+            ent_reg.async_update_entity(entry.entity_id, disabled_by=None)
+
+
+def async_disable_room_entities_for_other_maps(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    platform: str,
+    active_map_id: str,
+) -> None:
+    """Disable registry entries for rooms that do NOT belong to ``active_map_id``.
+
+    Inactive-map entities are disabled rather than deleted so they can be cheaply
+    re-enabled when the user switches back.  Disabled entities show as '—' in the
+    HA entity list (which the user explicitly expects) rather than '!' (the
+    enabled-but-unavailable state that appears as a duplicate).
+
+    Only entries whose ``disabled_by`` is currently ``None`` are changed — we never
+    override entries disabled by the user or by another HA mechanism.
+    """
+    if not active_map_id:
+        return
+    ent_reg = er.async_get(hass)
+    for entry in list(er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)):
+        if entry.domain != platform:
+            continue
+        parsed = _parse_room_entity_uid(entry.unique_id)
+        if parsed is None:
+            continue
+        _, entity_map_id = parsed
+        if entity_map_id != active_map_id and entry.disabled_by is None:
+            ent_reg.async_update_entity(
+                entry.entity_id,
+                disabled_by=er.RegistryEntryDisabler.INTEGRATION,
+            )
+
+
 def async_remove_stale_room_entities(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
