@@ -41,9 +41,8 @@ from .entity import (
     RobEyeEntity,
     async_remove_duplicate_room_entities,
     async_remove_entities_for_deleted_maps,
+    async_remove_room_entities_for_other_maps,
     async_remove_stale_room_entities,
-    find_room_registry_records,
-    pick_room_name_from_records,
 )
 
 
@@ -84,11 +83,6 @@ async def async_setup_entry(
             known_entities_by_map[_active] = initial_by_area
         entities.extend(initial_selects)
 
-    stub_selects = _register_stub_room_selects_from_registry(
-        hass, config_entry, coordinator, known_entities_by_map
-    )
-    entities.extend(stub_selects)
-
     room_uids = {
         e._attr_unique_id
         for e in entities
@@ -98,6 +92,11 @@ async def async_setup_entry(
     async_remove_duplicate_room_entities(hass, config_entry, "select", room_uids)
 
     async_add_entities(entities)
+
+    # Remove any inactive-map registry entries left over from previous sessions.
+    async_remove_room_entities_for_other_maps(
+        hass, config_entry, "select", _active, known_entities_by_map
+    )
 
     @callback
     def _async_on_areas_updated() -> None:
@@ -142,6 +141,12 @@ async def async_setup_entry(
             map_entities.update(new_by_area)
             async_add_entities(new_entities)
 
+        # Remove entities for all other maps so inactive-map entities don't
+        # appear as unavailable duplicates after a map switch.
+        async_remove_room_entities_for_other_maps(
+            hass, config_entry, "select", active_map, known_entities_by_map
+        )
+
     @callback
     def _async_on_maps_updated(deleted_map_ids: set[str]) -> None:
         removed = async_remove_entities_for_deleted_maps(
@@ -178,59 +183,6 @@ def _parse_select_area_name(area: dict) -> str:
     except (json.JSONDecodeError, TypeError):
         return ""
     return meta.get("name", "").strip()
-
-
-_ROOM_SELECT_NAME_SUFFIXES = (" Fan Speed", " Strategy")
-
-
-def _register_stub_room_selects_from_registry(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    coordinator: RobEyeCoordinator,
-    known_entities_by_map: dict[str, dict],
-) -> list:
-    """Re-claim select registry entries belonging to inactive maps."""
-    records = find_room_registry_records(hass, config_entry, "select")
-    if not records:
-        return []
-
-    by_room: dict[tuple[str, str], list] = {}
-    for rec in records:
-        if rec.area_id in known_entities_by_map.get(rec.map_id, {}):
-            continue
-        by_room.setdefault((rec.map_id, rec.area_id), []).append(rec)
-
-    stubs: list = []
-    for (map_id, area_id), recs in by_room.items():
-        room_name = (
-            pick_room_name_from_records(recs, _ROOM_SELECT_NAME_SUFFIXES)
-            or f"Room {area_id}"
-        )
-        pair = [
-            RobEyeRoomFanSpeedSelect(
-                coordinator=coordinator,
-                config_entry=config_entry,
-                area_id=area_id,
-                room_name=room_name,
-                map_id=map_id,
-            ),
-            RobEyeRoomStrategySelect(
-                coordinator=coordinator,
-                config_entry=config_entry,
-                area_id=area_id,
-                room_name=room_name,
-                map_id=map_id,
-            ),
-        ]
-        stubs.extend(pair)
-        known_entities_by_map.setdefault(map_id, {})[area_id] = pair
-
-    if stubs:
-        LOGGER.debug(
-            "select: re-claiming %d stub selects for inactive maps from registry",
-            len(stubs),
-        )
-    return stubs
 
 
 def _build_room_select_entities(

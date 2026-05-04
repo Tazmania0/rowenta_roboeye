@@ -49,9 +49,8 @@ from .entity import (
     RobEyeEntity,
     async_remove_duplicate_room_entities,
     async_remove_entities_for_deleted_maps,
+    async_remove_room_entities_for_other_maps,
     async_remove_stale_room_entities,
-    find_room_registry_records,
-    pick_room_name_from_records,
 )
 
 
@@ -143,11 +142,6 @@ async def async_setup_entry(
             known_entities_by_map[_active] = initial_by_area
         entities.extend(initial_switches)
 
-    stub_switches = _register_stub_room_switches_from_registry(
-        hass, config_entry, coordinator, known_entities_by_map
-    )
-    entities.extend(stub_switches)
-
     room_uids = {
         e._attr_unique_id
         for e in entities
@@ -161,6 +155,11 @@ async def async_setup_entry(
     known_task_ids.update(new_task_ids)
 
     async_add_entities(entities)
+
+    # Remove any inactive-map registry entries left over from previous sessions.
+    async_remove_room_entities_for_other_maps(
+        hass, config_entry, "switch", _active, known_entities_by_map
+    )
 
     @callback
     def _on_areas_updated() -> None:
@@ -202,6 +201,12 @@ async def async_setup_entry(
             map_entities.update(new_by_area)
             async_add_entities(new_entities)
 
+        # Remove entities for all other maps so inactive-map entities don't
+        # appear as unavailable duplicates after a map switch.
+        async_remove_room_entities_for_other_maps(
+            hass, config_entry, "switch", active_map, known_entities_by_map
+        )
+
     @callback
     def _on_coordinator_updated() -> None:
         new_entities, new_task_ids = _schedule_switches(known_task_ids)
@@ -234,63 +239,6 @@ async def async_setup_entry(
         )
     )
     config_entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_updated))
-
-
-_ROOM_SWITCH_NAME_SUFFIXES = (" Deep Clean", " Selected")
-
-
-def _register_stub_room_switches_from_registry(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    coordinator: RobEyeCoordinator,
-    known_entities_by_map: dict[str, dict],
-) -> list:
-    """Re-claim per-room switch registry entries belonging to inactive maps.
-
-    Schedule switches have a different unique_id format and are skipped by
-    ``find_room_registry_records``' regex.
-    """
-    records = find_room_registry_records(hass, config_entry, "switch")
-    if not records:
-        return []
-
-    by_room: dict[tuple[str, str], list] = {}
-    for rec in records:
-        if rec.area_id in known_entities_by_map.get(rec.map_id, {}):
-            continue
-        by_room.setdefault((rec.map_id, rec.area_id), []).append(rec)
-
-    stubs: list = []
-    for (map_id, area_id), recs in by_room.items():
-        room_name = (
-            pick_room_name_from_records(recs, _ROOM_SWITCH_NAME_SUFFIXES)
-            or f"Room {area_id}"
-        )
-        pair = [
-            RobEyeRoomDeepCleanSwitch(
-                coordinator=coordinator,
-                config_entry=config_entry,
-                area_id=area_id,
-                room_name=room_name,
-                map_id=map_id,
-            ),
-            RobEyeRoomSelectSwitch(
-                coordinator=coordinator,
-                config_entry=config_entry,
-                area_id=area_id,
-                room_name=room_name,
-                map_id=map_id,
-            ),
-        ]
-        stubs.extend(pair)
-        known_entities_by_map.setdefault(map_id, {})[area_id] = pair
-
-    if stubs:
-        LOGGER.debug(
-            "switch: re-claiming %d stub switches for inactive maps from registry",
-            len(stubs),
-        )
-    return stubs
 
 
 class RobEyeDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
