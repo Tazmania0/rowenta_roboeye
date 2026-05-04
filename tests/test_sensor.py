@@ -472,98 +472,47 @@ def _make_room_registry_entry(unique_id, original_name, entity_id="sensor.dev_x"
     return e
 
 
-def test_stub_sensors_rebuilt_for_inactive_map_from_registry():
-    from custom_components.rowenta_roboeye.sensor import (
-        _register_stub_room_sensors_from_registry,
+def test_inactive_map_sensor_entities_removed_on_map_switch():
+    """async_remove_room_entities_for_other_maps removes registry entries for
+    maps other than the active map, preventing duplicate room names in the UI."""
+    from custom_components.rowenta_roboeye.entity import (
+        async_remove_room_entities_for_other_maps,
     )
+    from homeassistant.helpers import entity_registry as _er_mod
 
-    coord = _make_coordinator()
-    coord.active_map_id = "3"
-    coord.device_id = "dev"
     config_entry = MagicMock()
     config_entry.entry_id = "entry1"
     hass = MagicMock()
 
-    entries = [
-        _make_room_registry_entry(
-            unique_id="room_5_map4_cleanings_dev",
-            original_name="Bedroom Cleanings",
-            entity_id="sensor.dev_map4_room_5_cleanings",
-        ),
-        _make_room_registry_entry(
-            unique_id="room_5_map4_area_dev",
-            original_name="Bedroom Area",
-            entity_id="sensor.dev_map4_room_5_area",
-        ),
-        _make_room_registry_entry(
-            unique_id="room_5_map4_avg_time_dev",
-            original_name="Bedroom Avg Clean Time",
-            entity_id="sensor.dev_map4_room_5_avg_clean_time",
-        ),
-        _make_room_registry_entry(
-            unique_id="room_5_map4_last_cleaned_dev",
-            original_name="Bedroom Last Cleaned",
-            entity_id="sensor.dev_map4_room_5_last_cleaned",
-        ),
-    ]
-
-    mock_ent_reg = MagicMock()
-    known: dict[str, dict] = {}
-    with patch.object(_er, "async_get", return_value=mock_ent_reg), \
-         patch.object(_er, "async_entries_for_config_entry", return_value=entries):
-        stubs = _register_stub_room_sensors_from_registry(
-            hass, config_entry, coord, known
-        )
-
-    assert len(stubs) == 4
-    assert all(s._map_id == "4" for s in stubs)
-    assert "4" in known and "5" in known["4"]
-    # Stubs now use real value functions so they show correct data when their
-    # map becomes active.  Verify by giving the coordinator matching area data.
-    coord.areas = [
-        {
-            "id": 5,
-            "statistics": {
-                "cleaning_counter": 9,
-                "area_size": 2_000_000,
-                "average_cleaning_time": 180_000,
-                "last_cleaned": {"year": 2026, "month": 4, "day": 1},
-            },
-        }
-    ]
-    cleanings_stub = next(s for s in stubs if "cleanings" in (s._attr_unique_id or ""))
-    assert cleanings_stub._value_fn(coord) == 9
-
-
-def test_stub_sensors_skip_already_claimed_areas():
-    from custom_components.rowenta_roboeye.sensor import (
-        _register_stub_room_sensors_from_registry,
+    # Registry has sensor entries for map4 (inactive) and map3 (active).
+    active_entry = _make_room_registry_entry(
+        unique_id="room_5_map3_cleanings_dev",
+        original_name="Bedroom Cleanings",
+        entity_id="sensor.dev_map3_room_5_cleanings",
     )
-
-    coord = _make_coordinator()
-    coord.active_map_id = "3"
-    coord.device_id = "dev"
-    config_entry = MagicMock()
-    config_entry.entry_id = "entry1"
-    hass = MagicMock()
-
-    entries = [
-        _make_room_registry_entry(
-            unique_id="room_5_map3_map3_cleanings_dev",
-            original_name="Bedroom Cleanings",
-        ),
-    ]
-    # Active map's area 5 is already tracked from the live build path.
-    known = {"3": {"5": [MagicMock()]}}
-
+    inactive_entry = _make_room_registry_entry(
+        unique_id="room_5_map4_cleanings_dev",
+        original_name="Bedroom Cleanings",
+        entity_id="sensor.dev_map4_room_5_cleanings",
+    )
     mock_ent_reg = MagicMock()
-    with patch.object(_er, "async_get", return_value=mock_ent_reg), \
-         patch.object(_er, "async_entries_for_config_entry", return_value=entries):
-        stubs = _register_stub_room_sensors_from_registry(
-            hass, config_entry, coord, known
+
+    # Map IDs are numeric strings like "3" (same as coordinator.active_map_id).
+    known: dict[str, dict] = {"3": {"5": [MagicMock()]}, "4": {"5": [MagicMock()]}}
+    with patch.object(_er_mod, "async_get", return_value=mock_ent_reg), \
+         patch.object(_er_mod, "async_entries_for_config_entry",
+                      return_value=[active_entry, inactive_entry]):
+        async_remove_room_entities_for_other_maps(
+            hass, config_entry, "sensor", "3", known
         )
 
-    assert stubs == []
+    # Inactive map4 entry should be removed; active map3 entry left alone.
+    removed_ids = {call.args[0] for call in mock_ent_reg.async_remove.call_args_list}
+    assert "sensor.dev_map4_room_5_cleanings" in removed_ids
+    assert "sensor.dev_map3_room_5_cleanings" not in removed_ids
+    # In-memory tracking for map4 should be evicted.
+    assert "4" not in known
+    assert "3" in known
 
 
 # ── Schedule sensor tests ─────────────────────────────────────────────

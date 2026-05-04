@@ -33,8 +33,8 @@ from .entity import (
     RobEyeEntity,
     async_remove_duplicate_room_entities,
     async_remove_entities_for_deleted_maps,
+    async_remove_room_entities_for_other_maps,
     async_remove_stale_room_entities,
-    find_room_registry_records,
 )
 
 
@@ -73,13 +73,6 @@ async def async_setup_entry(
             known_entities_by_map[_active] = dict(zip(initial_ids, initial_buttons))
         entities.extend(initial_buttons)
 
-    stub_buttons = _register_stub_room_buttons_from_registry(
-        hass, config_entry, coordinator, known_entities_by_map
-    )
-    entities.extend(stub_buttons)
-
-    # Remove old registry entries whose (map_id, area_id) is now covered by a
-    # freshly-created entity with the current device_id unique_id format.
     room_uids = {
         e._attr_unique_id
         for e in entities
@@ -88,6 +81,11 @@ async def async_setup_entry(
     async_remove_duplicate_room_entities(hass, config_entry, "button", room_uids)
 
     async_add_entities(entities)
+
+    # Remove any inactive-map registry entries left over from previous sessions.
+    async_remove_room_entities_for_other_maps(
+        hass, config_entry, "button", _active, known_entities_by_map
+    )
 
     # Dynamic listener
     @callback
@@ -135,6 +133,12 @@ async def async_setup_entry(
                 map_entities[area_id] = entity
             async_add_entities(new_entities)
 
+        # Remove entities for all other maps so inactive-map entities don't
+        # appear as unavailable duplicates after a map switch.
+        async_remove_room_entities_for_other_maps(
+            hass, config_entry, "button", active_map, known_entities_by_map
+        )
+
     @callback
     def _async_on_maps_updated(deleted_map_ids: set[str]) -> None:
         removed = async_remove_entities_for_deleted_maps(
@@ -171,51 +175,6 @@ def _parse_area_name(area: dict) -> str:
     except (json.JSONDecodeError, TypeError):
         return ""
     return meta.get("name", "").strip()
-
-
-_BUTTON_NAME_PREFIX = "Clean "
-
-
-def _register_stub_room_buttons_from_registry(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    coordinator: RobEyeCoordinator,
-    known_entities_by_map: dict[str, dict],
-) -> list:
-    """Re-claim button registry entries belonging to inactive maps.
-
-    Mutates ``known_entities_by_map`` in place so the SIGNAL_AREAS_UPDATED
-    listener treats stubs as already-tracked when the user switches back.
-    """
-    records = find_room_registry_records(hass, config_entry, "button")
-    if not records:
-        return []
-
-    stubs: list = []
-    for rec in records:
-        if rec.area_id in known_entities_by_map.get(rec.map_id, {}):
-            continue
-        room_name = ""
-        if rec.original_name and rec.original_name.startswith(_BUTTON_NAME_PREFIX):
-            room_name = rec.original_name[len(_BUTTON_NAME_PREFIX):]
-        if not room_name:
-            room_name = f"Room {rec.area_id}"
-        button = RobEyeRoomCleanButton(
-            coordinator=coordinator,
-            config_entry=config_entry,
-            area_id=rec.area_id,
-            room_name=room_name,
-            map_id=rec.map_id,
-        )
-        stubs.append(button)
-        known_entities_by_map.setdefault(rec.map_id, {})[rec.area_id] = button
-
-    if stubs:
-        LOGGER.debug(
-            "button: re-claiming %d stub buttons for inactive maps from registry",
-            len(stubs),
-        )
-    return stubs
 
 
 def _build_room_button_entities(
