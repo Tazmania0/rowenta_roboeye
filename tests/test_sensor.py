@@ -486,22 +486,22 @@ def test_stub_sensors_rebuilt_for_inactive_map_from_registry():
 
     entries = [
         _make_room_registry_entry(
-            unique_id="room_5_map4_map4_cleanings_dev",
+            unique_id="room_5_map4_cleanings_dev",
             original_name="Bedroom Cleanings",
             entity_id="sensor.dev_map4_room_5_cleanings",
         ),
         _make_room_registry_entry(
-            unique_id="room_5_map4_map4_area_dev",
+            unique_id="room_5_map4_area_dev",
             original_name="Bedroom Area",
             entity_id="sensor.dev_map4_room_5_area",
         ),
         _make_room_registry_entry(
-            unique_id="room_5_map4_map4_avg_time_dev",
+            unique_id="room_5_map4_avg_time_dev",
             original_name="Bedroom Avg Clean Time",
             entity_id="sensor.dev_map4_room_5_avg_clean_time",
         ),
         _make_room_registry_entry(
-            unique_id="room_5_map4_map4_last_cleaned_dev",
+            unique_id="room_5_map4_last_cleaned_dev",
             original_name="Bedroom Last Cleaned",
             entity_id="sensor.dev_map4_room_5_last_cleaned",
         ),
@@ -518,8 +518,21 @@ def test_stub_sensors_rebuilt_for_inactive_map_from_registry():
     assert len(stubs) == 4
     assert all(s._map_id == "4" for s in stubs)
     assert "4" in known and "5" in known["4"]
-    # Stubs read no live data — would otherwise show the active map's stats.
-    assert all(s._value_fn(coord) is None for s in stubs)
+    # Stubs now use real value functions so they show correct data when their
+    # map becomes active.  Verify by giving the coordinator matching area data.
+    coord.areas = [
+        {
+            "id": 5,
+            "statistics": {
+                "cleaning_counter": 9,
+                "area_size": 2_000_000,
+                "average_cleaning_time": 180_000,
+                "last_cleaned": {"year": 2026, "month": 4, "day": 1},
+            },
+        }
+    ]
+    cleanings_stub = next(s for s in stubs if "cleanings" in (s._attr_unique_id or ""))
+    assert cleanings_stub._value_fn(coord) == 9
 
 
 def test_stub_sensors_skip_already_claimed_areas():
