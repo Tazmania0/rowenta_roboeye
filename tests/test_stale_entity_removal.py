@@ -388,3 +388,289 @@ def test_dedup_noop_when_no_canonical_uids():
     async_remove_duplicate_room_entities(hass, config_entry, "button", set())
 
     ent_reg.async_remove.assert_not_called()
+
+
+# ── async_enable_room_entities_for_map ───────────────────────────────
+
+def _make_reg_entry_with_disabled(unique_id, entity_id, domain="button", disabled_by=None):
+    entry = MagicMock()
+    entry.unique_id = unique_id
+    entry.entity_id = entity_id
+    entry.domain = domain
+    entry.disabled_by = disabled_by
+    return entry
+
+
+def test_enable_reenables_integration_disabled_entry_for_target_map():
+    """async_enable_room_entities_for_map sets disabled_by=None for INTEGRATION-disabled entries on the target map."""
+    from custom_components.rowenta_roboeye.entity import async_enable_room_entities_for_map
+    import homeassistant.helpers.entity_registry as er_stub
+
+    INTEGRATION = er_stub.RegistryEntryDisabler.INTEGRATION
+
+    entry = _make_reg_entry_with_disabled(
+        "clean_room_map3_10_device123",
+        "button.robot_map3_clean_room_10",
+        domain="button",
+        disabled_by=INTEGRATION,
+    )
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[entry],
+        ),
+    ):
+        async_enable_room_entities_for_map(hass, config_entry, "button", "3")
+
+    ent_reg.async_update_entity.assert_called_once_with(entry.entity_id, disabled_by=None)
+
+
+def test_enable_does_not_touch_user_disabled_entry():
+    """async_enable_room_entities_for_map only re-enables INTEGRATION-disabled entries, not user-disabled ones."""
+    from custom_components.rowenta_roboeye.entity import async_enable_room_entities_for_map
+
+    user_disabled = MagicMock()  # simulates RegistryEntryDisabler.USER
+    entry = _make_reg_entry_with_disabled(
+        "clean_room_map3_10_device123",
+        "button.robot_map3_clean_room_10",
+        domain="button",
+        disabled_by=user_disabled,
+    )
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[entry],
+        ),
+    ):
+        async_enable_room_entities_for_map(hass, config_entry, "button", "3")
+
+    ent_reg.async_update_entity.assert_not_called()
+
+
+def test_enable_does_not_touch_entries_for_other_maps():
+    """async_enable_room_entities_for_map only touches entries whose map_id matches."""
+    from custom_components.rowenta_roboeye.entity import async_enable_room_entities_for_map
+    import homeassistant.helpers.entity_registry as er_stub
+
+    INTEGRATION = er_stub.RegistryEntryDisabler.INTEGRATION
+
+    # Entry for map 5 — should NOT be re-enabled when target is map 3
+    entry = _make_reg_entry_with_disabled(
+        "clean_room_map5_10_device123",
+        "button.robot_map5_clean_room_10",
+        domain="button",
+        disabled_by=INTEGRATION,
+    )
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[entry],
+        ),
+    ):
+        async_enable_room_entities_for_map(hass, config_entry, "button", "3")
+
+    ent_reg.async_update_entity.assert_not_called()
+
+
+def test_enable_noop_for_empty_map_id():
+    """async_enable_room_entities_for_map is a no-op when map_id is empty."""
+    from custom_components.rowenta_roboeye.entity import async_enable_room_entities_for_map
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+
+    async_enable_room_entities_for_map(hass, config_entry, "button", "")
+
+    ent_reg.async_update_entity.assert_not_called()
+
+
+# ── async_disable_room_entities_for_other_maps ───────────────────────
+
+def test_disable_disables_enabled_entries_for_other_maps():
+    """async_disable_room_entities_for_other_maps disables non-active-map entries that are currently enabled."""
+    from custom_components.rowenta_roboeye.entity import async_disable_room_entities_for_other_maps
+    import homeassistant.helpers.entity_registry as er_stub
+
+    INTEGRATION = er_stub.RegistryEntryDisabler.INTEGRATION
+
+    # Entry for map 5 (not active) that is currently enabled (disabled_by=None)
+    entry = _make_reg_entry_with_disabled(
+        "clean_room_map5_10_device123",
+        "button.robot_map5_clean_room_10",
+        domain="button",
+        disabled_by=None,
+    )
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[entry],
+        ),
+    ):
+        async_disable_room_entities_for_other_maps(hass, config_entry, "button", "3")
+
+    ent_reg.async_update_entity.assert_called_once_with(
+        entry.entity_id, disabled_by=INTEGRATION
+    )
+
+
+def test_disable_does_not_touch_active_map_entries():
+    """async_disable_room_entities_for_other_maps never disables entries for the active map."""
+    from custom_components.rowenta_roboeye.entity import async_disable_room_entities_for_other_maps
+
+    # Entry for map 3 (the active map) — must not be disabled
+    entry = _make_reg_entry_with_disabled(
+        "clean_room_map3_10_device123",
+        "button.robot_map3_clean_room_10",
+        domain="button",
+        disabled_by=None,
+    )
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[entry],
+        ),
+    ):
+        async_disable_room_entities_for_other_maps(hass, config_entry, "button", "3")
+
+    ent_reg.async_update_entity.assert_not_called()
+
+
+def test_disable_does_not_touch_already_disabled_entries():
+    """async_disable_room_entities_for_other_maps skips entries that are already disabled."""
+    from custom_components.rowenta_roboeye.entity import async_disable_room_entities_for_other_maps
+    import homeassistant.helpers.entity_registry as er_stub
+
+    INTEGRATION = er_stub.RegistryEntryDisabler.INTEGRATION
+
+    # Entry for map 5 already disabled — must not call async_update_entity again
+    entry = _make_reg_entry_with_disabled(
+        "clean_room_map5_10_device123",
+        "button.robot_map5_clean_room_10",
+        domain="button",
+        disabled_by=INTEGRATION,
+    )
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[entry],
+        ),
+    ):
+        async_disable_room_entities_for_other_maps(hass, config_entry, "button", "3")
+
+    ent_reg.async_update_entity.assert_not_called()
+
+
+def test_disable_noop_for_empty_active_map_id():
+    """async_disable_room_entities_for_other_maps is a no-op when active_map_id is empty."""
+    from custom_components.rowenta_roboeye.entity import async_disable_room_entities_for_other_maps
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+
+    async_disable_room_entities_for_other_maps(hass, config_entry, "button", "")
+
+    ent_reg.async_update_entity.assert_not_called()
+
+
+def test_disable_only_active_map_entries_untouched_others_disabled():
+    """Mixed scenario: active map entry stays enabled, other-map entry gets disabled."""
+    from custom_components.rowenta_roboeye.entity import async_disable_room_entities_for_other_maps
+    import homeassistant.helpers.entity_registry as er_stub
+
+    INTEGRATION = er_stub.RegistryEntryDisabler.INTEGRATION
+
+    active_entry = _make_reg_entry_with_disabled(
+        "clean_room_map3_10_device123",
+        "button.robot_map3_clean_room_10",
+        domain="button",
+        disabled_by=None,
+    )
+    other_entry = _make_reg_entry_with_disabled(
+        "clean_room_map5_20_device123",
+        "button.robot_map5_clean_room_20",
+        domain="button",
+        disabled_by=None,
+    )
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[active_entry, other_entry],
+        ),
+    ):
+        async_disable_room_entities_for_other_maps(hass, config_entry, "button", "3")
+
+    ent_reg.async_update_entity.assert_called_once_with(
+        other_entry.entity_id, disabled_by=INTEGRATION
+    )

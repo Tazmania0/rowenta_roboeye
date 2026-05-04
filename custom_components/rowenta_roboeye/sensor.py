@@ -64,6 +64,8 @@ from .const import (
 from .coordinator import RobEyeCoordinator
 from .entity import (
     RobEyeEntity,
+    async_disable_room_entities_for_other_maps,
+    async_enable_room_entities_for_map,
     async_remove_duplicate_room_entities,
     async_remove_entities_for_deleted_maps,
     async_remove_stale_room_entities,
@@ -390,6 +392,13 @@ async def async_setup_entry(
     # Per-map entity tracking: map_id -> {area_id -> [entities]}.
     known_sensors_by_map: dict[str, dict] = {}
     _active = coordinator.active_map_id
+
+    # Re-enable registry entries for the active map that were disabled when a
+    # different map was previously active.  Must happen before async_add_entities
+    # so HA links the new entity objects to the (now enabled) registry entries.
+    if _active:
+        async_enable_room_entities_for_map(hass, config_entry, "sensor", _active)
+
     if coordinator.areas_map_id == _active:
         # Purge registry entries for areas that no longer exist on the active
         # map (e.g. areas changed while HA was offline).
@@ -418,6 +427,12 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
+    # Disable registry entries for all maps other than the active one.  This
+    # prevents inactive-map room entities from appearing as enabled-unavailable
+    # (!) duplicates in the entity list; they instead show as disabled (—).
+    if _active:
+        async_disable_room_entities_for_other_maps(hass, config_entry, "sensor", _active)
+
     # ── Dynamic listener: add/remove entities when area set changes ───
     @callback
     def _async_on_areas_updated() -> None:
@@ -427,6 +442,13 @@ async def async_setup_entry(
             return
 
         active_map = coordinator.active_map_id
+
+        # Re-enable registry entries for the active map before building new
+        # entity objects.  On a map round-trip (map1→map2→map1) these entries
+        # were disabled when map2 became active; they must be enabled before
+        # async_add_entities so HA links the fresh objects to the existing entries.
+        async_enable_room_entities_for_map(hass, config_entry, "sensor", active_map)
+
         map_sensors = known_sensors_by_map.setdefault(active_map, {})
 
         current_ids: set = {
@@ -464,6 +486,16 @@ async def async_setup_entry(
             LOGGER.debug("sensor: adding %d new room entities", len(new_entities))
             map_sensors.update(new_by_area)
             async_add_entities(new_entities)
+
+        # Disable all registry entries that belong to maps other than active_map.
+        # The in-memory tracking dicts for those maps are also cleared so entity
+        # objects are recreated fresh (from coordinator areas) the next time that
+        # map becomes active — the stale objects from this session are no longer
+        # usable after being disabled (HA removes them from the state machine).
+        async_disable_room_entities_for_other_maps(hass, config_entry, "sensor", active_map)
+        for _map_id in list(known_sensors_by_map.keys()):
+            if _map_id != active_map:
+                known_sensors_by_map.pop(_map_id)
 
     @callback
     def _async_on_maps_updated(deleted_map_ids: set[str]) -> None:
