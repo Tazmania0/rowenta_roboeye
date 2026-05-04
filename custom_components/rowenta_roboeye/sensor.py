@@ -928,7 +928,6 @@ def _register_stub_room_sensors_from_registry(
             room_name=room_name,
             device_id=coordinator.device_id,
             map_id=map_id,
-            stub_value_fn=lambda _c: None,
         )
         stubs.extend(sensors)
         known_sensors_by_map.setdefault(map_id, {})[area_id] = sensors
@@ -972,7 +971,7 @@ def _build_room_sensors(
             coordinator=coordinator,
             config_entry=config_entry,
             area_id=area_id,
-            unique_suffix=f"{_m}cleanings",
+            unique_suffix="cleanings",
             display_name=f"{room_name} Cleanings",
             icon="mdi:counter",
             value_fn=_vfn or (lambda c: _stats(c).get("cleaning_counter")),
@@ -983,7 +982,7 @@ def _build_room_sensors(
             coordinator=coordinator,
             config_entry=config_entry,
             area_id=area_id,
-            unique_suffix=f"{_m}area",
+            unique_suffix="area",
             display_name=f"{room_name} Area",
             native_unit=UnitOfArea.SQUARE_METERS,
             icon="mdi:texture-box",
@@ -995,7 +994,7 @@ def _build_room_sensors(
             coordinator=coordinator,
             config_entry=config_entry,
             area_id=area_id,
-            unique_suffix=f"{_m}avg_time",
+            unique_suffix="avg_time",
             display_name=f"{room_name} Avg Clean Time",
             native_unit=UnitOfTime.MINUTES,
             icon="mdi:timer-outline",
@@ -1009,7 +1008,7 @@ def _build_room_sensors(
             coordinator=coordinator,
             config_entry=config_entry,
             area_id=area_id,
-            unique_suffix=f"{_m}last_cleaned",
+            unique_suffix="last_cleaned",
             display_name=f"{room_name} Last Cleaned",
             icon="mdi:calendar-clock",
             value_fn=_vfn or (lambda c: _format_date(_stats(c).get("last_cleaned", {}))),
