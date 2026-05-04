@@ -97,46 +97,6 @@ def pick_room_name_from_records(
     return ""
 
 
-def async_remove_room_entities_for_other_maps(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    platform: str,
-    active_map_id: str,
-    known_entities_by_map: dict,
-) -> None:
-    """Remove entity registry entries for all maps except active_map_id.
-
-    Called after new-map entities are confirmed so inactive-map entities don't
-    linger as unavailable duplicates alongside the active map's entities.
-    Also evicts the removed maps from the known_entities_by_map closure so the
-    SIGNAL_AREAS_UPDATED listener will recreate entities on the next switch.
-    """
-    if not active_map_id:
-        return
-
-    # Evict non-active maps from in-memory closure first.
-    for other_map_id in list(known_entities_by_map.keys()):
-        if other_map_id != active_map_id:
-            del known_entities_by_map[other_map_id]
-
-    # Remove any registry entries (live or orphaned) for non-active maps.
-    ent_reg = er.async_get(hass)
-    for entry in list(er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)):
-        if entry.domain != platform:
-            continue
-        parsed = _parse_room_entity_uid(entry.unique_id)
-        if parsed is None:
-            continue
-        _, entity_map_id = parsed
-        if entity_map_id and entity_map_id != active_map_id:
-            LOGGER.info(
-                "RobEye: removing inactive-map entity %s (map=%s)",
-                entry.entity_id,
-                entity_map_id,
-            )
-            ent_reg.async_remove(entry.entity_id)
-
-
 def async_remove_entities_for_deleted_maps(
     hass: HomeAssistant,
     config_entry: ConfigEntry,

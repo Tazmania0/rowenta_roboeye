@@ -41,7 +41,6 @@ from .entity import (
     RobEyeEntity,
     async_remove_duplicate_room_entities,
     async_remove_entities_for_deleted_maps,
-    async_remove_room_entities_for_other_maps,
     async_remove_stale_room_entities,
 )
 
@@ -93,11 +92,6 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
-    # Remove any inactive-map registry entries left over from previous sessions.
-    async_remove_room_entities_for_other_maps(
-        hass, config_entry, "select", _active, known_entities_by_map
-    )
-
     @callback
     def _async_on_areas_updated() -> None:
         if coordinator.areas_map_id != coordinator.active_map_id:
@@ -140,12 +134,6 @@ async def async_setup_entry(
             LOGGER.debug("select: adding %d new room selects", len(new_entities))
             map_entities.update(new_by_area)
             async_add_entities(new_entities)
-
-        # Remove entities for all other maps so inactive-map entities don't
-        # appear as unavailable duplicates after a map switch.
-        async_remove_room_entities_for_other_maps(
-            hass, config_entry, "select", active_map, known_entities_by_map
-        )
 
     @callback
     def _async_on_maps_updated(deleted_map_ids: set[str]) -> None:
