@@ -107,6 +107,9 @@ async def async_setup_entry(
 
     @callback
     def _async_on_areas_updated() -> None:
+        # Time-machine guard: capture the generation at handler entry.
+        _generation = coordinator.areas_commit_generation
+
         if coordinator.areas_map_id != coordinator.active_map_id:
             LOGGER.debug("select: areas fetched for wrong map, skipping update")
             return
@@ -151,6 +154,24 @@ async def async_setup_entry(
             LOGGER.debug("select: adding %d new room selects", len(new_entities))
             map_entities.update(new_by_area)
             async_add_entities(new_entities)
+
+        # Remove stale duplicates for the current active map (and across all maps).
+        canonical_uids: set[str] = {
+            e._attr_unique_id
+            for entity_list in map_entities.values()
+            for e in entity_list
+            if hasattr(e, "_attr_unique_id") and e._attr_unique_id
+        }
+        if canonical_uids:
+            async_remove_duplicate_room_entities(hass, config_entry, "select", canonical_uids)
+
+        if coordinator.areas_commit_generation != _generation:
+            LOGGER.warning(
+                "select: areas_commit_generation advanced during handler "
+                "(was %d, now %d) — handler ran on stale data",
+                _generation,
+                coordinator.areas_commit_generation,
+            )
 
         # Disable all registry entries that belong to maps other than active_map.
         async_disable_room_entities_for_other_maps(hass, config_entry, "select", active_map)

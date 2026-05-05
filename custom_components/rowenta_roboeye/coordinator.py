@@ -141,6 +141,12 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Which map_id was active when DATA_AREAS was last fetched.
         # Compared by platforms before creating entities to avoid stale-signal races.
         self._areas_fetched_for_map_id: str | None = None
+        # Monotonically-increasing counter incremented each time a non-empty areas
+        # blob is committed.  Platform signal handlers capture this at handler entry
+        # (the "time machine" guard) and warn if the coordinator advanced further
+        # while they were processing — providing a diagnostic trail and a clear hook
+        # for future async-safety if handlers ever become coroutines.
+        self._areas_commit_generation: int = 0
         # Map_id for which DATA_AREAS was last successfully committed to self.data.
         # Unlike _areas_fetched_for_map_id this is never reset by async_set_active_map —
         # it tracks what is actually in coordinator.data so stale areas can be cleared
@@ -339,6 +345,18 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return result
 
     # ── Active map switching ──────────────────────────────────────────
+
+    @property
+    def areas_commit_generation(self) -> int:
+        """Monotonic counter that increments on every successful areas commit.
+
+        Platform ``_async_on_areas_updated`` handlers capture this at entry as a
+        "time machine" guard.  Because the handlers are synchronous ``@callback``
+        functions the counter cannot change mid-handler, but capturing it creates
+        a clear diagnostic trail and future-proofs the code if handlers ever become
+        coroutines.
+        """
+        return self._areas_commit_generation
 
     @property
     def areas_map_id(self) -> str | None:
@@ -768,6 +786,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         self._areas_fetched_for_map_id = _fetched_for
                         self._areas_committed_map_id = _fetched_for
                         self._maps_with_committed_areas.add(_fetched_for)
+                        self._areas_commit_generation += 1
                         # NOTE: _prev_committed_map_id is intentionally NOT
                         # cleared here.  async_update_listeners() runs
                         # synchronously right after _async_update_data returns

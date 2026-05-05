@@ -437,6 +437,9 @@ async def async_setup_entry(
     @callback
     def _async_on_areas_updated() -> None:
         """Called by the coordinator when the area set changes."""
+        # Time-machine guard: capture the generation at handler entry.
+        _generation = coordinator.areas_commit_generation
+
         if coordinator.areas_map_id != coordinator.active_map_id:
             LOGGER.debug("sensor: areas fetched for wrong map, skipping update")
             return
@@ -486,6 +489,24 @@ async def async_setup_entry(
             LOGGER.debug("sensor: adding %d new room entities", len(new_entities))
             map_sensors.update(new_by_area)
             async_add_entities(new_entities)
+
+        # Remove stale duplicates for the current active map (and across all maps).
+        canonical_uids: set[str] = {
+            e._attr_unique_id
+            for entity_list in map_sensors.values()
+            for e in entity_list
+            if hasattr(e, "_attr_unique_id") and e._attr_unique_id
+        }
+        if canonical_uids:
+            async_remove_duplicate_room_entities(hass, config_entry, "sensor", canonical_uids)
+
+        if coordinator.areas_commit_generation != _generation:
+            LOGGER.warning(
+                "sensor: areas_commit_generation advanced during handler "
+                "(was %d, now %d) — handler ran on stale data",
+                _generation,
+                coordinator.areas_commit_generation,
+            )
 
         # Disable all registry entries that belong to maps other than active_map.
         # The in-memory tracking dicts for those maps are also cleared so entity

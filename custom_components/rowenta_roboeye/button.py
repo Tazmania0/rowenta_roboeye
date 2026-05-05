@@ -97,6 +97,11 @@ async def async_setup_entry(
     # Dynamic listener
     @callback
     def _async_on_areas_updated() -> None:
+        # Time-machine guard: capture the generation at handler entry.
+        # Since this is a synchronous @callback it cannot change mid-handler,
+        # but logging a mismatch (should never happen) aids diagnosis.
+        _generation = coordinator.areas_commit_generation
+
         if coordinator.areas_map_id != coordinator.active_map_id:
             LOGGER.debug("button: areas fetched for wrong map, skipping update")
             return
@@ -143,6 +148,26 @@ async def async_setup_entry(
             for entity, area_id in zip(new_entities, new_area_ids):
                 map_entities[area_id] = entity
             async_add_entities(new_entities)
+
+        # Remove stale duplicates: old-device_id registry entries for the same
+        # (area_id, map_id) pairs.  Called here (not just at setup) so that when
+        # the user switches to an inactive map the duplicate introduced by a prior
+        # device_id change is cleaned up on the first visit.
+        canonical_uids: set[str] = {
+            e._attr_unique_id
+            for e in map_entities.values()
+            if hasattr(e, "_attr_unique_id") and e._attr_unique_id
+        }
+        if canonical_uids:
+            async_remove_duplicate_room_entities(hass, config_entry, "button", canonical_uids)
+
+        if coordinator.areas_commit_generation != _generation:
+            LOGGER.warning(
+                "button: areas_commit_generation advanced during handler "
+                "(was %d, now %d) — handler ran on stale data",
+                _generation,
+                coordinator.areas_commit_generation,
+            )
 
         # Disable all registry entries that belong to maps other than active_map.
         async_disable_room_entities_for_other_maps(hass, config_entry, "button", active_map)

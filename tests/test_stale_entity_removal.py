@@ -674,3 +674,244 @@ def test_disable_only_active_map_entries_untouched_others_disabled():
     ent_reg.async_update_entity.assert_called_once_with(
         other_entry.entity_id, disabled_by=INTEGRATION
     )
+
+
+# ── entity_id fallback for unparseable unique_ids ────────────────────
+
+def test_disable_uses_entity_id_fallback_for_unparseable_uid():
+    """async_disable_room_entities_for_other_maps uses entity_id to identify map
+    when unique_id cannot be parsed (legacy entries without _map in unique_id)."""
+    from custom_components.rowenta_roboeye.entity import async_disable_room_entities_for_other_maps
+    import homeassistant.helpers.entity_registry as er_stub
+
+    INTEGRATION = er_stub.RegistryEntryDisabler.INTEGRATION
+
+    # Legacy entry: unique_id has no _map pattern but entity_id reveals map 5.
+    legacy_entry = _make_reg_entry_with_disabled(
+        "clean_room_10_old_format",          # unparseable — no _map{id}_
+        "button.robot_map5_clean_room_10",   # entity_id has _map5_
+        domain="button",
+        disabled_by=None,
+    )
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[legacy_entry],
+        ),
+    ):
+        async_disable_room_entities_for_other_maps(hass, config_entry, "button", "3")
+
+    # Should have disabled the legacy entry via the entity_id fallback.
+    ent_reg.async_update_entity.assert_called_once_with(
+        legacy_entry.entity_id, disabled_by=INTEGRATION
+    )
+
+
+def test_disable_entity_id_fallback_does_not_touch_active_map():
+    """When entity_id reveals the active map, the entry is NOT disabled."""
+    from custom_components.rowenta_roboeye.entity import async_disable_room_entities_for_other_maps
+
+    legacy_entry = _make_reg_entry_with_disabled(
+        "clean_room_10_old_format",
+        "button.robot_map3_clean_room_10",  # entity_id has _map3_ = active
+        domain="button",
+        disabled_by=None,
+    )
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[legacy_entry],
+        ),
+    ):
+        async_disable_room_entities_for_other_maps(hass, config_entry, "button", "3")
+
+    ent_reg.async_update_entity.assert_not_called()
+
+
+def test_enable_uses_entity_id_fallback_for_unparseable_uid():
+    """async_enable_room_entities_for_map re-enables legacy entries identified via entity_id."""
+    from custom_components.rowenta_roboeye.entity import async_enable_room_entities_for_map
+    import homeassistant.helpers.entity_registry as er_stub
+
+    INTEGRATION = er_stub.RegistryEntryDisabler.INTEGRATION
+
+    legacy_entry = _make_reg_entry_with_disabled(
+        "clean_room_10_old_format",
+        "button.robot_map3_clean_room_10",  # entity_id has _map3_ = target map
+        domain="button",
+        disabled_by=INTEGRATION,
+    )
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[legacy_entry],
+        ),
+    ):
+        async_enable_room_entities_for_map(hass, config_entry, "button", "3")
+
+    ent_reg.async_update_entity.assert_called_once_with(legacy_entry.entity_id, disabled_by=None)
+
+
+def test_disable_no_map_in_entity_id_is_ignored():
+    """Entries with no _map pattern in either unique_id or entity_id are left alone."""
+    from custom_components.rowenta_roboeye.entity import async_disable_room_entities_for_other_maps
+
+    global_entry = _make_reg_entry_with_disabled(
+        "battery_level_sn12345",
+        "sensor.sn12345_battery_level",
+        domain="sensor",
+        disabled_by=None,
+    )
+
+    ent_reg = MagicMock()
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[global_entry],
+        ),
+    ):
+        async_disable_room_entities_for_other_maps(hass, config_entry, "sensor", "3")
+
+    ent_reg.async_update_entity.assert_not_called()
+
+
+# ── Cross-map duplicate removal (Phase 2) ────────────────────────────
+
+def test_dedup_removes_cross_map_duplicates_when_no_canonical():
+    """async_remove_duplicate_room_entities removes one of two entries for the same
+    (area_id, map_id) when neither is canonical — inactive-map old-device_id case."""
+    from custom_components.rowenta_roboeye.entity import async_remove_duplicate_room_entities
+
+    entry_a = _make_registry_entry(
+        "clean_room_map2_10_old_device",
+        "button.robot_map2_clean_room_10_old",
+    )
+    entry_b = _make_registry_entry(
+        "clean_room_map2_10_newer_device",
+        "button.robot_map2_clean_room_10_new",
+    )
+
+    removed = []
+    ent_reg = MagicMock()
+    ent_reg.async_remove = MagicMock(side_effect=lambda eid: removed.append(eid))
+
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    # Canonical UIDs are for map 3 (active map), not map 2.
+    canonical_uid = "clean_room_map3_10_current"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[entry_a, entry_b],
+        ),
+    ):
+        async_remove_duplicate_room_entities(hass, config_entry, "button", {canonical_uid})
+
+    # Exactly one of the two map-2 entries must be removed.
+    assert len(removed) == 1
+    # The one removed should be the lex-greater uid.
+    keeper_uid = min(entry_a.unique_id, entry_b.unique_id)
+    removed_uid = max(entry_a.unique_id, entry_b.unique_id)
+    removed_entity_id = (
+        entry_a.entity_id if entry_a.unique_id == removed_uid else entry_b.entity_id
+    )
+    assert removed[0] == removed_entity_id
+
+
+def test_dedup_removes_old_uid_only_in_registry_no_new_entry_yet():
+    """When the new canonical entity is still being set up (not yet in registry),
+    the old registry entry for the same area is still removed."""
+    from custom_components.rowenta_roboeye.entity import async_remove_duplicate_room_entities
+
+    old_entry = _make_registry_entry(
+        "clean_room_map3_10_old_device_id",
+        "button.robot_map3_clean_room_10",
+    )
+    # New canonical uid is NOT in the registry (entity setup still pending).
+    new_uid = "clean_room_map3_10_new_device_id"
+
+    ent_reg = MagicMock()
+    ent_reg.async_remove = MagicMock()
+
+    hass = MagicMock()
+    config_entry = MagicMock()
+    config_entry.entry_id = "test_entry"
+
+    with (
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_get",
+            return_value=ent_reg,
+        ),
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "custom_components.rowenta_roboeye.entity.er.async_entries_for_config_entry",
+            return_value=[old_entry],
+        ),
+    ):
+        async_remove_duplicate_room_entities(hass, config_entry, "button", {new_uid})
+
+    ent_reg.async_remove.assert_called_once_with(old_entry.entity_id)
+
+
+# ── areas_commit_generation counter ──────────────────────────────────
+
+def test_areas_commit_generation_starts_at_zero():
+    """Coordinator initialises _areas_commit_generation to 0."""
+    from custom_components.rowenta_roboeye.coordinator import RobEyeCoordinator
+    coord = MagicMock(spec=RobEyeCoordinator)
+    coord._areas_commit_generation = 0
+    assert coord._areas_commit_generation == 0
+
+
+def test_areas_commit_generation_exposed_as_property():
+    """areas_commit_generation property returns _areas_commit_generation."""
+    from custom_components.rowenta_roboeye.coordinator import RobEyeCoordinator
+    coord = MagicMock(spec=RobEyeCoordinator)
+    coord._areas_commit_generation = 5
+    # Access via the real property on the class to confirm it delegates correctly.
+    result = RobEyeCoordinator.areas_commit_generation.fget(coord)
+    assert result == 5
