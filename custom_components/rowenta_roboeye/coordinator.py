@@ -399,6 +399,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_active_map_id = map_id
         self._last_areas = None
         self._last_map_geometry = None
+        self._last_live_map = None  # force SVG rebuild on next tick
         # Grace period: keep old-map entities available during the transition
         # window (while new-map areas are being fetched) so the UI never flashes
         # "unavailable" while we wait for the first HTTP response.
