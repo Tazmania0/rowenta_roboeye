@@ -20,6 +20,11 @@ from .coordinator import RobEyeCoordinator
 _RE_SENSOR_ROOM_UID = re.compile(r"^room_(\d+)_map(\w+?)_")
 _RE_OTHER_ROOM_UID = re.compile(r"_map(\w+?)_(\d+)_")
 
+# Fallback: extract map_id from entity_id when unique_id is unparseable.
+# Room entity IDs always contain _map{digits}_ (e.g. button.sn_map3_clean_room_7).
+# Global entities (battery, mode, …) never contain this pattern.
+_RE_ENTITY_ID_MAP = re.compile(r"_map(\d+)_")
+
 
 def _parse_room_entity_uid(unique_id: str) -> tuple[str, str] | None:
     """Return (area_id_str, map_id_str) from a room entity unique_id, or None."""
@@ -30,6 +35,16 @@ def _parse_room_entity_uid(unique_id: str) -> tuple[str, str] | None:
     if m:
         return m.group(2), m.group(1)
     return None
+
+
+def _entity_id_map_segment(entity_id: str) -> str | None:
+    """Return the map_id embedded in entity_id via _map{digits}_ pattern, or None.
+
+    Used as a fallback for registry entries whose unique_id cannot be parsed by
+    _parse_room_entity_uid (e.g. legacy formats from before multi-map support).
+    """
+    m = _RE_ENTITY_ID_MAP.search(entity_id)
+    return m.group(1) if m else None
 
 
 @dataclass(frozen=True)
@@ -150,36 +165,76 @@ def async_remove_duplicate_room_entities(
     new unique_id while the old registry entries linger.  Those orphans remain
     attributed to this integration and appear as unavailable duplicates in the UI.
 
-    This function removes any registry entry whose unique_id is NOT in
-    ``canonical_unique_ids`` but whose (area_id, map_id) IS represented by a
-    canonical entry — i.e. it has been superseded by a freshly-created entity.
+    This function groups ALL platform room entries by their (area_id, map_id) pair
+    — across every map, not just the active one.  For each group with more than one
+    entry it removes all non-canonical members.  When no canonical entry is supplied
+    for a given pair (e.g. an inactive map whose entities were created in a previous
+    session with a different device_id), the entry with the lowest sort order is kept
+    and the rest are removed (deterministic tie-break).
+
+    ``canonical_unique_ids`` — the set of unique_ids that are known-correct for the
+    current session.  Pass the UIDs of all entity objects that were just created /
+    are currently tracked in ``known_entities_by_map``.
     """
     if not canonical_unique_ids:
         return
 
+    # Build the set of (area_id, map_id) pairs covered by canonical UIDs.
     covered: set[tuple[str, str]] = set()
     for uid in canonical_unique_ids:
         parsed = _parse_room_entity_uid(uid)
         if parsed:
             covered.add(parsed)
 
-    if not covered:
-        return
-
     ent_reg = er.async_get(hass)
-    for entry in list(er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)):
-        if entry.domain != platform:
-            continue
-        if entry.unique_id in canonical_unique_ids:
-            continue
+    entries = [
+        e
+        for e in er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)
+        if e.domain == platform
+    ]
+
+    # Group parseable room entries by (area_id, map_id).
+    by_pair: dict[tuple[str, str], list] = {}
+    for entry in entries:
         parsed = _parse_room_entity_uid(entry.unique_id)
-        if parsed and parsed in covered:
-            LOGGER.info(
-                "RobEye: removing stale duplicate %s (uid=%s) — superseded by current entity",
-                entry.entity_id,
-                entry.unique_id,
-            )
-            ent_reg.async_remove(entry.entity_id)
+        if parsed is not None:
+            by_pair.setdefault(parsed, []).append(entry)
+
+    # Phase 1: for pairs covered by canonical UIDs, remove every non-canonical entry.
+    # This handles the common migration case where the old-device_id entry is the
+    # only entry in the registry (the new entity is still being created asynchronously)
+    # as well as the case where both old and new entries already exist in the registry.
+    for pair, pair_entries in by_pair.items():
+        if pair not in covered:
+            continue
+        for entry in pair_entries:
+            if entry.unique_id not in canonical_unique_ids:
+                LOGGER.info(
+                    "RobEye: removing stale duplicate %s (uid=%s) — superseded by canonical",
+                    entry.entity_id,
+                    entry.unique_id,
+                )
+                ent_reg.async_remove(entry.entity_id)
+
+    # Phase 2: for pairs NOT covered by canonical UIDs but with multiple entries
+    # (inactive-map duplicates created with an old device_id in a previous session),
+    # keep the lexicographically smallest entry and remove the rest.
+    for pair, pair_entries in by_pair.items():
+        if pair in covered:
+            continue  # already handled in phase 1
+        if len(pair_entries) <= 1:
+            continue
+        keeper = min(pair_entries, key=lambda e: e.unique_id)
+        for entry in pair_entries:
+            if entry.entity_id != keeper.entity_id:
+                LOGGER.info(
+                    "RobEye: removing extra duplicate %s (uid=%s) — keeping %s for %s",
+                    entry.entity_id,
+                    entry.unique_id,
+                    keeper.entity_id,
+                    pair,
+                )
+                ent_reg.async_remove(entry.entity_id)
 
 
 def async_enable_room_entities_for_map(
@@ -193,6 +248,9 @@ def async_enable_room_entities_for_map(
     Called before adding new entity objects for a map that becomes active.  Ensures
     the registry entry is enabled so that HA's async_add_entities call links the new
     object to the existing entry (rather than treating it as still-disabled).
+
+    Entries whose unique_id cannot be parsed (legacy formats without ``_map`` in the
+    unique_id) are identified via the entity_id ``_map{digits}_`` pattern instead.
     """
     if not map_id:
         return
@@ -202,8 +260,10 @@ def async_enable_room_entities_for_map(
             continue
         parsed = _parse_room_entity_uid(entry.unique_id)
         if parsed is None:
-            continue
-        _, entity_map_id = parsed
+            # Fallback: derive map_id from entity_id for legacy unique_id formats.
+            entity_map_id = _entity_id_map_segment(entry.entity_id)
+        else:
+            _, entity_map_id = parsed
         if (
             entity_map_id == map_id
             and entry.disabled_by == er.RegistryEntryDisabler.INTEGRATION
@@ -226,6 +286,10 @@ def async_disable_room_entities_for_other_maps(
 
     Only entries whose ``disabled_by`` is currently ``None`` are changed — we never
     override entries disabled by the user or by another HA mechanism.
+
+    Entries whose unique_id cannot be parsed (legacy formats without ``_map`` in the
+    unique_id) are identified via the entity_id ``_map{digits}_`` pattern so they are
+    no longer silently left enabled as persistent visible duplicates.
     """
     if not active_map_id:
         return
@@ -235,9 +299,19 @@ def async_disable_room_entities_for_other_maps(
             continue
         parsed = _parse_room_entity_uid(entry.unique_id)
         if parsed is None:
-            continue
-        _, entity_map_id = parsed
+            # Fallback: derive map_id from entity_id for legacy unique_id formats.
+            entity_map_id = _entity_id_map_segment(entry.entity_id)
+            if entity_map_id is None:
+                continue  # not a room entity — leave it alone
+        else:
+            _, entity_map_id = parsed
         if entity_map_id != active_map_id and entry.disabled_by is None:
+            LOGGER.debug(
+                "RobEye: disabling room entity %s (map %s != active %s)",
+                entry.entity_id,
+                entity_map_id,
+                active_map_id,
+            )
             ent_reg.async_update_entity(
                 entry.entity_id,
                 disabled_by=er.RegistryEntryDisabler.INTEGRATION,
