@@ -1025,10 +1025,11 @@ def test_active_map_id_for_display_advances_after_grace_cleared(coordinator):
 
 @pytest.mark.asyncio
 async def test_async_set_active_map_updates_state(coordinator):
-    """async_set_active_map sets override, resets area/geometry timestamps."""
+    """async_set_active_map sets override, resets area/geometry/live-map timestamps."""
     coordinator.data = {}
     coordinator._last_areas = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
+    coordinator._last_live_map = datetime.utcnow()
     coordinator._known_area_ids = {3, 11}
     coordinator._robot_path = [(1.0, 2.0)]
     coordinator._session_complete = True
@@ -1040,6 +1041,7 @@ async def test_async_set_active_map_updates_state(coordinator):
     assert coordinator._last_active_map_id == "57"
     assert coordinator._last_areas is None
     assert coordinator._last_map_geometry is None
+    assert coordinator._last_live_map is None
     assert coordinator._known_area_ids == set()
     assert coordinator._robot_path == []
     assert coordinator._session_complete is False
