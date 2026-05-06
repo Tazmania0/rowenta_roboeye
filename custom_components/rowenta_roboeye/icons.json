@@ -96,10 +96,6 @@
       }
     }
   },
-  "integration": {
-    "logo": "mdi:robot-vacuum",
-    "icon": "mdi:robot-vacuum"
-  },
   "services": {
     "clean_room": "mdi:robot-vacuum-variant"
   }
