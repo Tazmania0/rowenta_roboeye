@@ -88,8 +88,10 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
 
         LOGGER.debug("Zeroconf host: %s  hostname: %s", self._host, self._hostname)
 
-        # Use stable mDNS hostname as unique_id — survives DHCP IP changes
-        await self.async_set_unique_id(self._hostname)
+        # Use stable mDNS hostname as unique_id — survives DHCP IP changes.
+        # Normalize: strip trailing dot and lowercase so two announcements that
+        # differ only in case or trailing dot are treated as the same device.
+        await self.async_set_unique_id(self._hostname.rstrip(".").lower())
         self._abort_if_unique_id_configured(
             updates={CONF_HOST: self._host}  # silently update IP if hostname matches
         )

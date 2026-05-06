@@ -441,7 +441,7 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
                 current_strategy = "normal"
             await self.coordinator.async_send_command(
                 self.coordinator.client.modify_area,
-                map_id=self.coordinator.active_map_id,
+                map_id=self._map_id,
                 area_id=self._area_id,
                 cleaning_parameter_set=raw,
                 strategy_mode=current_strategy,
@@ -662,7 +662,7 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
                     break
         await self.coordinator.async_send_command(
             self.coordinator.client.modify_area,
-            map_id=self.coordinator.active_map_id,
+            map_id=self._map_id,
             area_id=self._area_id,
             cleaning_parameter_set=current_cps,
             strategy_mode="normal",
