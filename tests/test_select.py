@@ -1079,6 +1079,51 @@ async def test_room_strategy_invalid_does_not_write_back():
     coord.async_send_command.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_room_fan_speed_uses_entity_map_id_not_active():
+    """modify_area uses entity._map_id even when active_map_id has since changed.
+
+    During a map-switch grace period coordinator.map_available_for() can return
+    True for an entity whose map is no longer active.  The write must still
+    target the entity's own map, not the new active map.
+    """
+    coord = _make_room_coordinator(active_map_id="3")  # entity gets _map_id="3"
+    coord.hass.states.get.return_value = None
+    entity = _room_fan_entity(coord=coord, area_id="3")
+    coord.active_map_id = "5"                   # simulate map switch
+    coord.map_available_for = lambda mid: True  # grace period keeps entity available
+
+    await entity.async_select_option("eco")
+
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id="3",          # entity's own _map_id, not active_map_id="5"
+        area_id="3",
+        cleaning_parameter_set="2",
+        strategy_mode="normal",
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_strategy_uses_entity_map_id_not_active():
+    """modify_area uses entity._map_id even when active_map_id has since changed."""
+    coord = _make_room_coordinator(active_map_id="3")
+    coord.hass.states.get.return_value = None
+    entity = _room_strategy_entity(coord=coord, area_id="3")
+    coord.active_map_id = "5"
+    coord.map_available_for = lambda mid: True
+
+    await entity.async_select_option(STRATEGY_LABELS[STRATEGY_NORMAL])
+
+    coord.async_send_command.assert_called_once_with(
+        coord.client.modify_area,
+        map_id="3",          # entity's own _map_id, not active_map_id="5"
+        area_id="3",
+        cleaning_parameter_set="1",
+        strategy_mode="normal",
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════
 # _build_room_select_entities
 # ══════════════════════════════════════════════════════════════════════

@@ -152,6 +152,33 @@ async def test_zeroconf_confirm_shows_form_without_input():
 
 
 @pytest.mark.asyncio
+async def test_zeroconf_unique_id_strips_trailing_dot():
+    """Trailing dot is stripped from hostname before setting unique_id."""
+    flow = _make_flow()
+    with patch.object(flow, "_test_connection", new=AsyncMock()):
+        await flow.async_step_zeroconf(_mock_zeroconf_info(hostname="xplorer120.local."))
+    flow.async_set_unique_id.assert_called_once_with("xplorer120.local")
+
+
+@pytest.mark.asyncio
+async def test_zeroconf_unique_id_lowercased():
+    """Hostname is lowercased so case variants produce the same unique_id."""
+    flow = _make_flow()
+    with patch.object(flow, "_test_connection", new=AsyncMock()):
+        await flow.async_step_zeroconf(_mock_zeroconf_info(hostname="Xplorer120.Local."))
+    flow.async_set_unique_id.assert_called_once_with("xplorer120.local")
+
+
+@pytest.mark.asyncio
+async def test_zeroconf_unique_id_no_trailing_dot_passthrough():
+    """Hostname without trailing dot is still normalised to lowercase."""
+    flow = _make_flow()
+    with patch.object(flow, "_test_connection", new=AsyncMock()):
+        await flow.async_step_zeroconf(_mock_zeroconf_info(hostname="xplorer120.local"))
+    flow.async_set_unique_id.assert_called_once_with("xplorer120.local")
+
+
+@pytest.mark.asyncio
 async def test_zeroconf_updates_ip_for_existing_hostname():
     """If mDNS re-announces same hostname with new IP, entry IP is updated silently."""
     flow = _make_flow()
