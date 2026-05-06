@@ -10,8 +10,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pytest pytest-homeassistant-custom-component
+      - run: pip install -r requirements-test.txt
       - run: pytest tests/
 
   hassfest:
-    uses: home-assistant/actions/.github/workflows/hassfest.yaml@main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
