@@ -970,8 +970,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         areas = (
             areas_blob.get("areas", []) if isinstance(areas_blob, dict) else []
         )
-        current_ids: set = {
-            a.get("id") for a in areas if a.get("id") is not None
+        # Normalize IDs to strings to avoid false-positive churn when firmware
+        # alternates between numeric and string JSON types for the same room ID.
+        current_ids: set[str] = {
+            str(a.get("id")) for a in areas if a.get("id") is not None
         }
 
         signal = f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}"
