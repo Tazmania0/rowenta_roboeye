@@ -204,7 +204,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         schedule_entries = _schedule_for_map(
             coordinator.schedule.get("schedule"),
             coordinator.active_map_id,
-        )
+        ) or []
         signature = (
             coordinator.active_map_id,
             coordinator.areas_commit_generation,
