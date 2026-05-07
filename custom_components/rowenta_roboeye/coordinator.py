@@ -973,11 +973,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         current_ids: set = {
             a.get("id") for a in areas if a.get("id") is not None
         }
-        # Compare using string-normalized IDs to avoid false-positive churn
-        # when firmware alternates between numeric and string JSON types for
-        # the same logical room ID.
-        current_ids_norm = {str(x) for x in current_ids}
-        known_ids_norm = {str(x) for x in self._known_area_ids}
 
         signal = f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}"
 
@@ -995,9 +990,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.hass.loop.call_soon(async_dispatcher_send, self.hass, signal)
             return
 
-        if current_ids_norm != known_ids_norm:
-            new_ids = current_ids_norm - known_ids_norm
-            removed_ids = known_ids_norm - current_ids_norm
+        if current_ids != self._known_area_ids:
+            new_ids = current_ids - self._known_area_ids
+            removed_ids = self._known_area_ids - current_ids
             LOGGER.info(
                 "RobEye: area set changed — new=%s removed=%s, signalling platforms",
                 new_ids,
