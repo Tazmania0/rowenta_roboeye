@@ -193,13 +193,33 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         eager_start=False,
     )
 
-    # Regenerate dashboard on every coordinator update.
-    # The dashboard manager serializes saves on its own asyncio.Lock and
-    # internally polls for per-room entities to appear in hass.states, so
-    # callers do not need to debounce or stagger.  Hash-based dedup makes
-    # repeated calls cheap when nothing has changed.
+    # Regenerate dashboard only when structure-driving inputs change.
+    # Rebuilding on every coordinator tick (5/15s) can cause visible card
+    # flicker in room views when transient entity availability changes.
+    _last_dashboard_signature: tuple | None = None
+
     @callback
     def _schedule_dashboard_regen(*_args: object) -> None:
+        nonlocal _last_dashboard_signature
+        schedule_entries = _schedule_for_map(
+            coordinator.schedule.get("schedule"),
+            coordinator.active_map_id,
+        ) or []
+        signature = (
+            coordinator.active_map_id,
+            coordinator.areas_commit_generation,
+            tuple(sorted(m.get("map_id", "") for m in coordinator.available_maps)),
+            tuple(
+                sorted(
+                    (str(it.get("task_id", "")), bool(it.get("enabled", False)))
+                    for it in schedule_entries
+                    if isinstance(it, dict)
+                )
+            ),
+        )
+        if signature == _last_dashboard_signature:
+            return
+        _last_dashboard_signature = signature
         hass.async_create_task(
             async_create_dashboard(
                 hass,
@@ -210,16 +230,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 active_map_id=coordinator.active_map_id,
                 friendly_name=friendly_name,
                 available_maps=coordinator.available_maps,
-                schedule_entries=_schedule_for_map(
-                    coordinator.schedule.get("schedule"),
-                    coordinator.active_map_id,
-                ),
+                schedule_entries=schedule_entries,
             )
         )
 
-    config_entry.async_on_unload(
-        coordinator.async_add_listener(_schedule_dashboard_regen)
-    )
+    config_entry.async_on_unload(coordinator.async_add_listener(_schedule_dashboard_regen))
 
     # When the room set changes, invalidate the cached hash so the next
     # save actually writes (instead of being deduped) and schedule one
