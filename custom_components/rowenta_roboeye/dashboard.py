@@ -152,6 +152,7 @@ def _build_config(
     available_maps: list[dict[str, Any]] | None = None,
     schedule_entries: list[dict[str, Any]] | None = None,
     device_info_entities: list[dict[str, Any]] | None = None,
+    live_entities: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     has_maps = bool(available_maps)
     _d = device_id
@@ -181,10 +182,12 @@ def _build_config(
     e_cleaning_queue    = f"sensor.{_d}_cleaning_queue"
     e_queue_eta         = f"sensor.{_d}_queue_eta"
 
-    live_entities = [
-        {"entity": e_area_cleaned,  "name": "Area Cleaned"},
-        {"entity": e_cleaning_time, "name": "Time Elapsed"},
-    ]
+    # live_entities is pre-filtered by _async_update_locked to exclude disabled sensors
+    if live_entities is None:
+        live_entities = [
+            {"entity": e_area_cleaned,  "name": "Area Cleaned"},
+            {"entity": e_cleaning_time, "name": "Time Elapsed"},
+        ]
 
     live_map_entities = [
         {"entity": e_live_map, "name": "Live Map Data"}
@@ -658,10 +661,9 @@ class RobEyeDashboardManager:
                 )
                 rooms = []
 
-        # Build the device-info entity list from the entity registry (stable
-        # between coordinator ticks) rather than hass.states (volatile during
-        # startup and after transient failures).  This keeps _build_config
-        # output deterministic and prevents spurious hash changes.
+        # Build entity lists from the entity registry (stable between ticks)
+        # rather than hass.states (volatile during startup and transient failures).
+        # This keeps _build_config output deterministic and prevents spurious hash changes.
         _ent_reg = er.async_get(hass)
         _INFO_LABELS = [
             (f"sensor.{device_id}_serial_number",        "Serial Number"),
@@ -673,6 +675,18 @@ class RobEyeDashboardManager:
             {"entity": eid, "name": label}
             for eid, label in _INFO_LABELS
             if (_e := _ent_reg.async_get(eid)) is not None and not _e.disabled
+        ]
+
+        # current_area_cleaned and current_cleaning_time are disabled by default;
+        # only include them in the status card when the user has enabled them.
+        _LIVE_LABELS = [
+            (f"sensor.{device_id}_current_area_cleaned", "Area Cleaned"),
+            (f"sensor.{device_id}_current_cleaning_time", "Time Elapsed"),
+        ]
+        _live_entities = [
+            {"entity": eid, "name": label}
+            for eid, label in _LIVE_LABELS
+            if (_e := _ent_reg.async_get(eid)) is None or not _e.disabled
         ]
 
         # Poll for per-room entities to appear in hass.states.  Each
@@ -709,7 +723,7 @@ class RobEyeDashboardManager:
             return False
 
         title = friendly_name or self._title
-        config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title, available_maps=available_maps, schedule_entries=schedule_entries, device_info_entities=_device_info_entities)
+        config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title, available_maps=available_maps, schedule_entries=schedule_entries, device_info_entities=_device_info_entities, live_entities=_live_entities)
         new_hash = _config_hash(config)
 
         _LOGGER.debug(
@@ -896,14 +910,22 @@ class RobEyeDashboardManager:
                     self._url_path,
                 )
 
-        # Step 3 — Unregister the frontend panel so the sidebar entry disappears
+        # Step 3 — Unregister the frontend panel so the sidebar entry disappears.
+        # Guard against "Removing unknown panel" warnings when setup failed before
+        # the panel was ever registered (e.g. first-time add that timed out).
         try:
             from homeassistant.components import frontend as _frontend
-            _frontend.async_remove_panel(hass, self._url_path)
-            _LOGGER.info(
-                "RobEye dashboard: frontend panel '%s' unregistered",
-                self._url_path,
-            )
+            if self._url_path in hass.data.get("frontend_panels", {}):
+                _frontend.async_remove_panel(hass, self._url_path)
+                _LOGGER.info(
+                    "RobEye dashboard: frontend panel '%s' unregistered",
+                    self._url_path,
+                )
+            else:
+                _LOGGER.debug(
+                    "RobEye dashboard: panel '%s' was not registered — skipping removal",
+                    self._url_path,
+                )
         except Exception as err:
             _LOGGER.debug("RobEye dashboard: panel removal skipped: %s", err)
 
