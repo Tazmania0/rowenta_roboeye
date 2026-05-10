@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -384,6 +385,10 @@ class RobEyeEntity(CoordinatorEntity[RobEyeCoordinator]):
     """
 
     _attr_has_entity_name = True
+    # Exclude all extra attributes from recorder history; core metadata
+    # (state_class, unit_of_measurement, device_class, friendly_name) is
+    # always kept by HA and long-term statistics continue to function normally.
+    _unrecorded_attributes = frozenset({MATCH_ALL})
 
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
