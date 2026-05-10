@@ -289,45 +289,20 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             hass.async_create_task(
                 _async_sync_room_selection_booleans(hass, coordinator)
             )
-            # Retry the dashboard save when _room_entities_registered times out.
-            # After a map switch, platform signal handlers call async_add_entities
-            # which schedules entity setup tasks; those tasks can still be running
-            # when the first attempt polls.  The 8-second entity-readiness window
-            # inside async_update is generous but not unbounded — a busy event loop
-            # (many rooms, slow RestoreEntity storage read) can exceed it.  Without
-            # retries, a single timeout leaves the dashboard permanently stale.
-            for attempt, delay in enumerate(_DASHBOARD_RETRY_DELAYS, start=1):
-                if delay:
-                    await asyncio.sleep(delay)
-                if config_entry.state not in (
-                    ConfigEntryState.LOADED,
-                    ConfigEntryState.SETUP_IN_PROGRESS,
-                ):
-                    LOGGER.debug(
-                        "RobEye: entry no longer loaded — cancelling dashboard rebuild"
-                    )
-                    return
-                success = await async_create_dashboard(
-                    hass,
-                    coordinator.areas,
-                    coordinator.robot_info,
-                    manager=dashboard_manager,
-                    device_id=coordinator.device_id,
-                    active_map_id=coordinator.active_map_id,
-                    friendly_name=friendly_name,
-                    available_maps=coordinator.available_maps,
-                    schedule_entries=_schedule_for_map(
-                        coordinator.schedule.get("schedule"),
-                        coordinator.active_map_id,
-                    ),
-                )
-                if success:
-                    return
-                LOGGER.debug(
-                    "RobEye: dashboard rebuild attempt %d/%d deferred — "
-                    "room entities not yet ready for map %s",
-                    attempt, len(_DASHBOARD_RETRY_DELAYS), coordinator.active_map_id,
-                )
+            await async_create_dashboard(
+                hass,
+                coordinator.areas,
+                coordinator.robot_info,
+                manager=dashboard_manager,
+                device_id=coordinator.device_id,
+                active_map_id=coordinator.active_map_id,
+                friendly_name=friendly_name,
+                available_maps=coordinator.available_maps,
+                schedule_entries=_schedule_for_map(
+                    coordinator.schedule.get("schedule"),
+                    coordinator.active_map_id,
+                ),
+            )
 
         hass.async_create_task(_areas_changed_task())
 

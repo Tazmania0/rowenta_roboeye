@@ -91,32 +91,19 @@ def _room_entities_registered(
     active_map_id: str,
     rooms: list[dict[str, Any]],
 ) -> bool:
-    """Return True when every per-room entity referenced by the dashboard exists
-    in hass.states with a non-unavailable state.
+    """Return True when every per-room entity referenced by the dashboard has
+    been registered in hass.states (entity ID is known to HA).
 
-    After a map switch, SIGNAL_AREAS_UPDATED triggers four independent
-    async_add_entities calls — sensor (4 per room), select (2 per room),
-    button (1 per room), switch (2 per room).  Each schedules entity-setup
-    tasks that write to hass.states only after async_added_to_hass()
-    completes.  The platforms run those tasks interleaved with everything
-    else queued on the event loop.
+    The guard prevents saving a dashboard that references entity IDs that do
+    not yet exist — e.g. right after a map switch when SIGNAL_AREAS_UPDATED
+    has fired but the four async_add_entities calls (sensor, button, select,
+    switch) have not yet completed their entity-setup tasks.
 
-    Earlier revisions of this guard probed only three of the platform entity
-    types and ignored sensors entirely.  When sensor setup tasks lagged
-    behind, the guard returned True and the dashboard was saved with sensor
-    cards rendering "unavailable".  This check now covers every entity_id
-    the room cards in _build_config reference, so an "all green" result here
-    really does mean Lovelace can render every card live.
-
-    Entities that exist in hass.states with state="unavailable" are also
-    treated as not-ready.  CoordinatorEntity writes state="unavailable" as
-    soon as async_added_to_hass() runs when coordinator.last_update_success
-    is False, and RestoreEntity subclasses (selects/switches) yield to the
-    event loop inside async_added_to_hass() during async_get_last_state()
-    before the first real coordinator state write.  Without this check the
-    guard returned True mid-setup and the dashboard was saved while entities
-    were transiently unavailable, causing the Rooms view to render
-    "unavailable" cards until the next coordinator-triggered save.
+    Entities that exist but are transiently "unavailable" (CoordinatorEntity
+    initial write, RestoreEntity async_get_last_state() yield) are accepted:
+    Lovelace auto-refreshes card state when the entity transitions to a live
+    value, so a brief unavailable flash is far preferable to timing out and
+    leaving the dashboard with the previous map's entity IDs.
     """
     if not rooms or not active_map_id:
         return True
@@ -125,13 +112,6 @@ def _room_entities_registered(
         rid = room.get("id")
         if rid is None:
             continue
-        # Order chosen to fail fast: sensors are added in the FIRST
-        # async_add_entities batch (Platform.SENSOR is registered before the
-        # switch/select/button platforms), but RoomSensor has no
-        # async_added_to_hass override so it usually appears quickly.
-        # Selects/switches restore prior state via async_get_last_state which
-        # is the slowest path — checking those last is ineffectual either way,
-        # the loop simply iterates until something is missing or unavailable.
         eids = (
             f"sensor.{device_id}_{_m}room_{rid}_last_cleaned",
             f"sensor.{device_id}_{_m}room_{rid}_cleanings",
@@ -144,8 +124,7 @@ def _room_entities_registered(
             room_selection_entity_id(device_id, active_map_id, str(rid)),
         )
         for eid in eids:
-            state = hass.states.get(eid)
-            if state is None or state.state == "unavailable":
+            if hass.states.get(eid) is None:
                 return False
     return True
 
