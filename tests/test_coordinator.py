@@ -2059,9 +2059,9 @@ def test_device_id_uses_conf_serial_immediately(mock_client, mock_config_entry):
     hass = MagicMock()
     coord = RobEyeCoordinator(hass=hass, config_entry=mock_config_entry,
                               client=mock_client, map_id="3")
-    # mock_config_entry has serial="sn123456789" — must be used instantly
-    assert coord.device_id == "sn123456789"
-    assert coord._stable_device_id == "sn123456789"
+    # mock_config_entry has serial="aicu_aicgca2rychxpdkawgzu" — must be used instantly
+    assert coord.device_id == "aicu_aicgca2rychxpdkawgzu"
+    assert coord._stable_device_id == "aicu_aicgca2rychxpdkawgzu"
 
 
 def test_device_id_falls_back_to_robot_info_when_no_conf_serial(mock_client, mock_config_entry):
@@ -2071,7 +2071,7 @@ def test_device_id_falls_back_to_robot_info_when_no_conf_serial(mock_client, moc
     coord = RobEyeCoordinator(hass=hass, config_entry=mock_config_entry,
                               client=mock_client, map_id="3")
     # Simulate robot_info having been populated by the first poll
-    coord.data = {"robot_info": {"robot_id": {"serial_number": "XYZ999"}}}
+    coord.data = {"robot_info": {"robot_id": {"unique_id": "XYZ999"}}}
     assert coord.device_id == "xyz999"
     # Once resolved, _stable_device_id is cached
     assert coord._stable_device_id == "xyz999"
@@ -2096,5 +2096,5 @@ async def test_update_caches_serial_in_stable_device_id(coordinator, mock_client
     coordinator.data = {}
     coordinator._stable_device_id = ""  # pretend no serial in config entry
     await coordinator._async_update_data()
-    # MOCK_ROBOT_ID serial_number="SN123456789" → normalised "sn123456789"
-    assert coordinator._stable_device_id == "sn123456789"
+    # MOCK_ROBOT_ID unique_id="aicu-aicgca2rychxpdkawgzu" → normalised "aicu_aicgca2rychxpdkawgzu"
+    assert coordinator._stable_device_id == "aicu_aicgca2rychxpdkawgzu"

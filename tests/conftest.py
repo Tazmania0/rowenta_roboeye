@@ -57,7 +57,12 @@ MOCK_AREAS = {
 }
 
 MOCK_WIFI_STATUS = {"ssid": "HomeNetwork", "rssi": -55, "ip": "192.168.1.100"}
-MOCK_ROBOT_ID = {"serial_number": "SN123456789", "robot_id": "aicu-abc123"}
+MOCK_ROBOT_ID = {
+    "firmware": "SER120-1.1.0-release:3.11.2872",
+    "unique_id": "aicu-aicgca2rychxpdkawgzu",
+    "name": "Madeleine120",
+    "model": "005:000:000:000:005",
+}
 MOCK_PROTOCOL_VERSION = {"version": "2.3.1"}
 MOCK_LIVE_PARAMETERS = {"area_cleaned": 50000, "cleaning_time": 720}
 MOCK_SENSOR_STATUS = {"cliff_sensor": "ok", "bump_sensor": "ok", "wheel_drop": "ok"}
@@ -188,7 +193,7 @@ def mock_config_entry():
         "host": "192.168.1.100",
         "hostname": "xplorer120.local.",
         "map_id": "3",
-        # Normalised serial — matches MOCK_ROBOT_ID["serial_number"].lower()
-        "serial": "sn123456789",
+        # Normalised serial — matches MOCK_ROBOT_ID["unique_id"] with hyphens → underscores
+        "serial": "aicu_aicgca2rychxpdkawgzu",
     }
     return entry

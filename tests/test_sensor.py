@@ -144,9 +144,9 @@ def test_protocol_version():
     assert _sensor(desc).native_value == "2.3.1"
 
 
-def test_robot_serial_from_serial_number():
+def test_robot_serial_from_unique_id():
     desc = next(d for d in ROBOT_INFO_SENSORS if d.key == "robot_serial")
-    assert _sensor(desc).native_value == "SN123456789"
+    assert _sensor(desc).native_value == "aicu-aicgca2rychxpdkawgzu"
 
 
 def test_robot_serial_falls_back_to_robot_id():
