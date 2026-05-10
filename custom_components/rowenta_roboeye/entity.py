@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import MATCH_ALL
+from homeassistant.const import CONF_HOST, MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -392,9 +392,24 @@ class RobEyeEntity(CoordinatorEntity[RobEyeCoordinator]):
 
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, coordinator.device_id)},
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        robot_id = self.coordinator.robot_info.get("robot_id", {})
+        proto = self.coordinator.robot_info.get("protocol_version", {})
+        serial = (
+            robot_id.get("serial_number")
+            or robot_id.get("robot_id")
+            or robot_id.get("id")
+            or None
+        )
+        host = self.coordinator.config_entry.data.get(CONF_HOST)
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.coordinator.device_id)},
             manufacturer="Rowenta / SEB",
             name="Rowenta Xplorer 120",
             model="Xplorer 120",
+            serial_number=serial,
+            sw_version=proto.get("version") or None,
+            configuration_url=f"http://{host}:8080" if host else None,
         )
