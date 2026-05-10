@@ -467,6 +467,31 @@ def test_room_switch_coordinator_update_no_change_no_overwrite():
     assert sw._is_on is True  # must NOT be reverted
 
 
+def test_room_switch_coordinator_update_skipped_on_map_switch():
+    """Cross-map contamination guard: areas_map_id != entity map → no sync.
+
+    After a map switch, coordinator.areas holds the NEW map's data while the
+    old-map entity is still alive during the grace period.  If the new map has
+    an area with the same id as the old-map room, the deep-clean switch must NOT
+    read that area's strategy_mode — doing so flips _is_on and fires a spurious
+    state-change event visible in the HA logbook ("Deep Clean turned on/off").
+    """
+    # Entity belongs to map "3". After map switch, areas_map_id = "4" (new map).
+    coord = _make_coordinator(active_map_id="3")
+    coord.areas_map_id = "4"
+    # New map also happens to have area_id=3 (area IDs are not globally unique).
+    coord.areas = [{"id": 3, "strategy_mode": "deep"}]  # new map area says "deep"
+    sw = _make_room_switch(coord=coord, area_id="3", map_id="3")
+    sw._last_robot_strategy = "normal"  # previously synced as "normal" on old map
+    sw._is_on = False
+
+    sw._handle_coordinator_update()
+
+    # Must not pick up "deep" from the new map's area — _is_on stays False.
+    assert sw._is_on is False
+    assert sw._last_robot_strategy == "normal"
+
+
 # ── RobEyeScheduleSwitch ──────────────────────────────────────────────
 
 _SCHED_ENTRY = {

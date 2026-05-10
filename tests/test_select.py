@@ -520,12 +520,13 @@ _CONFIRMED_AREA_HOL = {
 }
 
 
-def _make_room_coordinator(active_map_id="3", areas=None):
+def _make_room_coordinator(active_map_id="3", areas=None, areas_map_id=None):
     coord = MagicMock()
     coord.device_id = "dev123"
     coord.config_entry = MagicMock()
     coord.config_entry.entry_id = "test_entry"
     coord.active_map_id = active_map_id
+    coord.areas_map_id = areas_map_id if areas_map_id is not None else active_map_id
     coord.areas = areas if areas is not None else []
     # async_send_command must be an AsyncMock so it can be awaited in select_option
     coord.async_send_command = AsyncMock()
@@ -841,6 +842,31 @@ def test_room_fan_speed_coordinator_update_first_read_sets_baseline():
 
     assert entity._selected == "eco"
     assert entity._last_robot_raw == "2"
+
+
+def test_room_fan_speed_coordinator_update_skipped_on_map_switch():
+    """Cross-map contamination guard: areas_map_id != entity map → no sync.
+
+    After a map switch, coordinator.areas holds the NEW map's data while the
+    old-map entity is still alive during the grace period.  If the new map has
+    an area with the same id as an old-map room, the fan-speed entity must NOT
+    read that area's cleaning_parameter_set — doing so would fire a spurious
+    state-change event visible in the HA logbook.
+    """
+    # Entity belongs to map "3".  After map switch, areas_map_id = "4" (new map).
+    old_area_id = "3"
+    coord = _make_room_coordinator(active_map_id="3", areas_map_id="4")
+    # New map also happens to have area_id=3 (IDs are not globally unique).
+    coord.areas = [{"id": 3, "cleaning_parameter_set": 2}]  # eco on new map
+    entity = _room_fan_entity(coord=coord, area_id=old_area_id, map_id="3")
+    entity._last_robot_raw = "3"   # previously synced as "high" on old map
+    entity._selected = "high"
+
+    entity._handle_coordinator_update()
+
+    # Must not pick up eco from the new map's area.
+    assert entity._selected == "high"
+    assert entity._last_robot_raw == "3"
 
 
 # ══════════════════════════════════════════════════════════════════════

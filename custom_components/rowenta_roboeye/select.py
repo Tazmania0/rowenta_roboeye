@@ -402,19 +402,26 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         never overwritten by the stale pre-poll cache.
         Once the areas poll returns a changed value (e.g. the native app set a
         different speed), _last_robot_raw differs → _selected is updated.
+
+        The areas_map_id guard prevents cross-map contamination: after a map
+        switch, coordinator.areas holds the NEW map's data while old-map entities
+        are still alive during the grace period.  Without the guard, an old-map
+        entity whose area_id collides with a new-map area would read the wrong
+        cleaning_parameter_set, producing spurious fan-speed state-change events.
         """
-        for area in self.coordinator.areas:
-            if str(area.get("id", "")) == self._area_id:
-                raw = area.get("cleaning_parameter_set")
-                raw_str = str(raw) if raw is not None else None
-                if raw_str is not None and raw_str != self._last_robot_raw and raw_str in FAN_SPEED_MAP:
-                    self._last_robot_raw = raw_str
-                    self._selected = FAN_SPEED_MAP[raw_str]
-                    LOGGER.debug(
-                        "Room %s fan speed updated from robot: %s",
-                        self._area_id, self._selected,
-                    )
-                break
+        if self.coordinator.areas_map_id == self._map_id:
+            for area in self.coordinator.areas:
+                if str(area.get("id", "")) == self._area_id:
+                    raw = area.get("cleaning_parameter_set")
+                    raw_str = str(raw) if raw is not None else None
+                    if raw_str is not None and raw_str != self._last_robot_raw and raw_str in FAN_SPEED_MAP:
+                        self._last_robot_raw = raw_str
+                        self._selected = FAN_SPEED_MAP[raw_str]
+                        LOGGER.debug(
+                            "Room %s fan speed updated from robot: %s",
+                            self._area_id, self._selected,
+                        )
+                    break
         self.async_write_ha_state()
 
     async def async_select_option(self, option: str) -> None:
