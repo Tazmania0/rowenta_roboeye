@@ -176,44 +176,38 @@ def _make_hass_with_states_and_extra(
     return hass
 
 
-def test_registered_returns_false_when_entity_is_unavailable():
-    """Regression: entities in hass.states with state='unavailable' must NOT
-    satisfy the guard.
+def test_registered_returns_true_when_entity_is_unavailable():
+    """Entities that exist in hass.states with state='unavailable' are treated
+    as registered — only a missing entity (state is None) defers the save.
 
-    CoordinatorEntity writes state='unavailable' immediately inside
-    async_added_to_hass() when coordinator.last_update_success is False.
-    RestoreEntity subclasses (selects, switches) also yield to the event
-    loop during async_get_last_state(), leaving CoordinatorEntity's initial
-    'unavailable' write visible until the first real coordinator tick.
-
-    If the guard treated an 'unavailable' entity as "registered", the
-    dashboard poll would return True mid-setup and the Rooms view would
-    render 'unavailable' cards until the next save.
+    Blocking on transient 'unavailable' caused the 8-second poll to time out
+    when the coordinator hadn't yet completed its first tick for the new map,
+    leaving the dashboard with the PREVIOUS map's entity IDs.  Stale entity
+    IDs are far worse than a brief unavailable flash: Lovelace auto-refreshes
+    each card when the entity transitions to a live value, so the flash is
+    invisible in practice.
     """
     eids = _all_room_eids("dev", "3", 5)
-    # All entities exist in hass.states, but the deep-clean switch is
-    # transiently "unavailable" (CoordinatorEntity pre-first-tick state).
     unavailable_eid = "switch.dev_map3_room_5_deep_clean"
     present = eids - {unavailable_eid}
     hass = _make_hass_with_states_and_extra(present, {unavailable_eid})
     rooms = [{"id": 5, "name": "Kitchen"}]
-    assert _room_entities_registered(hass, "dev", "3", rooms) is False
+    assert _room_entities_registered(hass, "dev", "3", rooms) is True
 
 
-def test_registered_returns_false_when_sensor_is_unavailable():
-    """A sensor entity in 'unavailable' state must defer the save.
+def test_registered_returns_true_when_sensor_is_unavailable():
+    """A sensor in 'unavailable' state must not defer the save.
 
-    This is the exact scenario that caused 'unavailable' sensor cards in
-    the Rooms dashboard view after a map switch: the sensor entity was
-    present in hass.states but its state was 'unavailable' because the
-    coordinator hadn't completed a successful poll for the new map yet.
+    Same rationale as test_registered_returns_true_when_entity_is_unavailable:
+    blocking on unavailability caused timeouts that left the Rooms view showing
+    the wrong map's sensor entity IDs.
     """
     eids = _all_room_eids("dev", "3", 5)
     unavailable_eid = "sensor.dev_map3_room_5_last_cleaned"
     present = eids - {unavailable_eid}
     hass = _make_hass_with_states_and_extra(present, {unavailable_eid})
     rooms = [{"id": 5, "name": "Kitchen"}]
-    assert _room_entities_registered(hass, "dev", "3", rooms) is False
+    assert _room_entities_registered(hass, "dev", "3", rooms) is True
 
 
 def test_registered_returns_true_when_button_is_unknown():

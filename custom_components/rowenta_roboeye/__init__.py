@@ -337,6 +337,21 @@ async def _async_initial_dashboard(
     delays between attempts.  If all attempts fail, requests an HA restart
     as a last resort so the next boot picks up the persisted registry entry.
     """
+    # On a cold HA boot the integration sets up before Lovelace is fully
+    # initialised, so hass.data[LOVELACE_DATA] is not yet populated and
+    # _async_get_lovelace_store returns None on every attempt.  Wait for
+    # EVENT_HOMEASSISTANT_STARTED before starting the retry loop so that
+    # all 5 attempts are spent on real failures, not a timing race.
+    if hass.state != CoreState.running:
+        _ha_started = asyncio.Event()
+
+        @callback
+        def _on_ha_started(_event: object = None) -> None:
+            _ha_started.set()
+
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_ha_started)
+        await _ha_started.wait()
+
     for attempt, delay in enumerate(_DASHBOARD_RETRY_DELAYS, start=1):
         if delay:
             await asyncio.sleep(delay)
