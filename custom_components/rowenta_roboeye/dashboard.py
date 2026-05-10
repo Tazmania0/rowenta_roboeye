@@ -80,11 +80,6 @@ def _config_hash(config: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def _available(hass: HomeAssistant, entity_id: str) -> bool:
-    state = hass.states.get(entity_id)
-    return state is not None and state.state not in ("unavailable", "unknown", "")
-
-
 def _room_entities_registered(
     hass: HomeAssistant,
     device_id: str,
@@ -187,12 +182,8 @@ def _build_config(
     e_queue_eta         = f"sensor.{_d}_queue_eta"
 
     live_entities = [
-        {"entity": e, "name": label}
-        for e, label in [
-            (e_area_cleaned,  "Area Cleaned"),
-            (e_cleaning_time, "Time Elapsed"),
-        ]
-        if _available(hass, e)
+        {"entity": e_area_cleaned,  "name": "Area Cleaned"},
+        {"entity": e_cleaning_time, "name": "Time Elapsed"},
     ]
 
     live_map_entities = [
