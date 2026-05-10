@@ -1263,7 +1263,7 @@ def test_check_for_new_areas_signals_on_first_areas(coordinator):
     coordinator.hass.loop.call_soon.assert_called_once_with(
         async_dispatcher_send, coordinator.hass, expected_signal
     )
-    assert coordinator._known_area_ids == {5, 6}
+    assert coordinator._known_area_ids == {"5", "6"}
 
 
 def test_check_for_new_areas_no_signal_when_empty_response(coordinator):
@@ -1279,7 +1279,7 @@ def test_check_for_new_areas_signals_on_change(coordinator):
     """Signal fires (via call_soon) when area set differs from known set."""
     from custom_components.rowenta_roboeye.coordinator import async_dispatcher_send
 
-    coordinator._known_area_ids = {5}  # previously had area 5
+    coordinator._known_area_ids = {"5"}  # previously had area 5
     areas_blob = {"areas": [{"id": 5}, {"id": 7}]}  # now area 7 added
 
     coordinator._check_for_new_areas(areas_blob)
@@ -1287,12 +1287,12 @@ def test_check_for_new_areas_signals_on_change(coordinator):
     coordinator.hass.loop.call_soon.assert_called_once()
     call_args = coordinator.hass.loop.call_soon.call_args
     assert call_args[0][0] is async_dispatcher_send
-    assert coordinator._known_area_ids == {5, 7}
+    assert coordinator._known_area_ids == {"5", "7"}
 
 
 def test_check_for_new_areas_no_signal_when_unchanged(coordinator):
     """No signal when area set is identical to known set."""
-    coordinator._known_area_ids = {5, 6}
+    coordinator._known_area_ids = {"5", "6"}
     areas_blob = {"areas": [{"id": 5}, {"id": 6}]}
 
     coordinator._check_for_new_areas(areas_blob)

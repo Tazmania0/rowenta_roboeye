@@ -204,7 +204,7 @@ def _build_config(
 
     live_map_entities = [
         {"entity": e_live_map, "name": "Live Map Data"}
-    ] if _available(hass, e_live_map) else []
+    ]
 
     device_info_entities = [
         {"entity": e, "name": label}
@@ -214,7 +214,6 @@ def _build_config(
             (e_wifi_ssid,"Wi-Fi Network"),
             (e_wifi_rssi,"Wi-Fi Signal"),
         ]
-        if _available(hass, e)
     ]
 
     view_control: dict[str, Any] = {
@@ -365,7 +364,7 @@ def _build_config(
                     {"entity": f"sensor.{_d}_active_map",  "name": "Active Map"},
                     {"entity": f"select.{_d}_active_map",  "name": "Switch Map"},
                 ],
-            }] if (has_maps and _available(hass, f"sensor.{_d}_active_map")) else []),
+            }] if has_maps else []),
         ],
     }
 
@@ -496,21 +495,19 @@ def _build_config(
             ],
         },
     ]
-    if device_info_entities:
-        stats_cards.append({
-            "type": "entities",
-            "title": "Device Info",
-            "entities": device_info_entities,
-        })
+    stats_cards.append({
+        "type": "entities",
+        "title": "Device Info",
+        "entities": device_info_entities,
+    })
 
-    if _available(hass, e_live_map):
-        stats_cards.append({
-            "type": "entities",
-            "title": "Live Map",
-            "entities": [
-                {"entity": e_live_map, "name": "Map State"},
-            ],
-        })
+    stats_cards.append({
+        "type": "entities",
+        "title": "Live Map",
+        "entities": [
+            {"entity": e_live_map, "name": "Map State"},
+        ],
+    })
 
     view_stats: dict[str, Any] = {
         "title": "Statistics",
@@ -525,8 +522,7 @@ def _build_config(
             "icon": "mdi:map",
             "cards": [{"type": "markdown", "content": _NO_MAP_GUIDANCE}],
         }
-        views = [view_control, view_rooms, view_stats, view_map]
-    elif _available(hass, e_live_map):
+    else:
         view_map = {
             "title": "Map",
             "icon": "mdi:map",
@@ -539,9 +535,7 @@ def _build_config(
                 }
             ],
         }
-        views = [view_control, view_rooms, view_stats, view_map]
-    else:
-        views = [view_control, view_rooms, view_stats]
+    views = [view_control, view_rooms, view_stats, view_map]
 
     return {
         "title": title,
