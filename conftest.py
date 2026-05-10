@@ -111,6 +111,7 @@ ha_const = _make_module(
     Platform=MagicMock(),
     CONF_HOST="host",
     EntityCategory=MagicMock(),
+    MATCH_ALL="*",
     PERCENTAGE="%",
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT="dBm",
     UnitOfArea=MagicMock(),
