@@ -147,6 +147,90 @@ def test_registered_ignores_rooms_with_no_id():
     assert _room_entities_registered(hass, "dev", "3", rooms) is True
 
 
+def _make_hass_with_states_and_extra(
+    present_entity_ids: set[str],
+    unavailable_entity_ids: set[str],
+    unknown_entity_ids: set[str] | None = None,
+) -> MagicMock:
+    """Build a hass mock where some entities are "unavailable" or "unknown"."""
+    unknown_entity_ids = unknown_entity_ids or set()
+    hass = MagicMock()
+    hass.data = {}
+
+    def _states_get(entity_id: str):
+        if entity_id in unavailable_entity_ids:
+            state = MagicMock()
+            state.state = "unavailable"
+            return state
+        if entity_id in unknown_entity_ids:
+            state = MagicMock()
+            state.state = "unknown"
+            return state
+        if entity_id in present_entity_ids:
+            state = MagicMock()
+            state.state = "off"
+            return state
+        return None
+
+    hass.states.get = _states_get
+    return hass
+
+
+def test_registered_returns_false_when_entity_is_unavailable():
+    """Regression: entities in hass.states with state='unavailable' must NOT
+    satisfy the guard.
+
+    CoordinatorEntity writes state='unavailable' immediately inside
+    async_added_to_hass() when coordinator.last_update_success is False.
+    RestoreEntity subclasses (selects, switches) also yield to the event
+    loop during async_get_last_state(), leaving CoordinatorEntity's initial
+    'unavailable' write visible until the first real coordinator tick.
+
+    If the guard treated an 'unavailable' entity as "registered", the
+    dashboard poll would return True mid-setup and the Rooms view would
+    render 'unavailable' cards until the next save.
+    """
+    eids = _all_room_eids("dev", "3", 5)
+    # All entities exist in hass.states, but the deep-clean switch is
+    # transiently "unavailable" (CoordinatorEntity pre-first-tick state).
+    unavailable_eid = "switch.dev_map3_room_5_deep_clean"
+    present = eids - {unavailable_eid}
+    hass = _make_hass_with_states_and_extra(present, {unavailable_eid})
+    rooms = [{"id": 5, "name": "Kitchen"}]
+    assert _room_entities_registered(hass, "dev", "3", rooms) is False
+
+
+def test_registered_returns_false_when_sensor_is_unavailable():
+    """A sensor entity in 'unavailable' state must defer the save.
+
+    This is the exact scenario that caused 'unavailable' sensor cards in
+    the Rooms dashboard view after a map switch: the sensor entity was
+    present in hass.states but its state was 'unavailable' because the
+    coordinator hadn't completed a successful poll for the new map yet.
+    """
+    eids = _all_room_eids("dev", "3", 5)
+    unavailable_eid = "sensor.dev_map3_room_5_last_cleaned"
+    present = eids - {unavailable_eid}
+    hass = _make_hass_with_states_and_extra(present, {unavailable_eid})
+    rooms = [{"id": 5, "name": "Kitchen"}]
+    assert _room_entities_registered(hass, "dev", "3", rooms) is False
+
+
+def test_registered_returns_true_when_button_is_unknown():
+    """Button entities always have state='unknown' — this must not block the guard.
+
+    Buttons have no persistent state in HA; their state is always 'unknown'.
+    The guard must distinguish 'unknown' (normal for buttons) from
+    'unavailable' (coordinator failure) and allow 'unknown' through.
+    """
+    eids = _all_room_eids("dev", "3", 5)
+    button_eid = "button.dev_map3_clean_room_5"
+    present = eids - {button_eid}
+    hass = _make_hass_with_states_and_extra(present, set(), unknown_entity_ids={button_eid})
+    rooms = [{"id": 5, "name": "Kitchen"}]
+    assert _room_entities_registered(hass, "dev", "3", rooms) is True
+
+
 # ── RobEyeDashboardManager.async_update integration ───────────────────
 
 # Use a minimal poll budget so deferred-save tests don't block real time.

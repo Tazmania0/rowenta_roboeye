@@ -91,7 +91,8 @@ def _room_entities_registered(
     active_map_id: str,
     rooms: list[dict[str, Any]],
 ) -> bool:
-    """Return True when every per-room entity referenced by the dashboard exists in hass.states.
+    """Return True when every per-room entity referenced by the dashboard exists
+    in hass.states with a non-unavailable state.
 
     After a map switch, SIGNAL_AREAS_UPDATED triggers four independent
     async_add_entities calls — sensor (4 per room), select (2 per room),
@@ -106,6 +107,16 @@ def _room_entities_registered(
     cards rendering "unavailable".  This check now covers every entity_id
     the room cards in _build_config reference, so an "all green" result here
     really does mean Lovelace can render every card live.
+
+    Entities that exist in hass.states with state="unavailable" are also
+    treated as not-ready.  CoordinatorEntity writes state="unavailable" as
+    soon as async_added_to_hass() runs when coordinator.last_update_success
+    is False, and RestoreEntity subclasses (selects/switches) yield to the
+    event loop inside async_added_to_hass() during async_get_last_state()
+    before the first real coordinator state write.  Without this check the
+    guard returned True mid-setup and the dashboard was saved while entities
+    were transiently unavailable, causing the Rooms view to render
+    "unavailable" cards until the next coordinator-triggered save.
     """
     if not rooms or not active_map_id:
         return True
@@ -120,7 +131,7 @@ def _room_entities_registered(
         # async_added_to_hass override so it usually appears quickly.
         # Selects/switches restore prior state via async_get_last_state which
         # is the slowest path — checking those last is ineffectual either way,
-        # the loop simply iterates until something is missing.
+        # the loop simply iterates until something is missing or unavailable.
         eids = (
             f"sensor.{device_id}_{_m}room_{rid}_last_cleaned",
             f"sensor.{device_id}_{_m}room_{rid}_cleanings",
@@ -133,7 +144,8 @@ def _room_entities_registered(
             room_selection_entity_id(device_id, active_map_id, str(rid)),
         )
         for eid in eids:
-            if hass.states.get(eid) is None:
+            state = hass.states.get(eid)
+            if state is None or state.state == "unavailable":
                 return False
     return True
 
