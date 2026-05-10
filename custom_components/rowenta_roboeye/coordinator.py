@@ -279,7 +279,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self._stable_device_id
         robot_id_data = self.robot_info.get("robot_id", {})
         serial = (
-            robot_id_data.get("serial_number")
+            robot_id_data.get("unique_id")
+            or robot_id_data.get("serial_number")
             or robot_id_data.get("robot_id")
             or robot_id_data.get("id")
         )
@@ -931,7 +932,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if not self._stable_device_id:
                     _rid = robot_info.get("robot_id", {})
                     _raw = (
-                        _rid.get("serial_number")
+                        _rid.get("unique_id")
+                        or _rid.get("serial_number")
                         or _rid.get("robot_id")
                         or _rid.get("id")
                     )

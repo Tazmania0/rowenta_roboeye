@@ -288,8 +288,11 @@ ROBOT_INFO_SENSORS: tuple[RobEyeSensorDescription, ...] = (
         icon="mdi:identifier",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        value_fn=lambda c: c.robot_info.get("robot_id", {}).get("serial_number")
-        or c.robot_info.get("robot_id", {}).get("robot_id"),
+        value_fn=lambda c: (
+            c.robot_info.get("robot_id", {}).get("unique_id")
+            or c.robot_info.get("robot_id", {}).get("serial_number")
+            or c.robot_info.get("robot_id", {}).get("robot_id")
+        ),
     ),
 )
 

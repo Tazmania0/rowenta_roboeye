@@ -398,9 +398,15 @@ class RobEyeEntity(CoordinatorEntity[RobEyeCoordinator]):
         robot_id = self.coordinator.robot_info.get("robot_id", {})
         proto = self.coordinator.robot_info.get("protocol_version", {})
         serial = (
-            robot_id.get("serial_number")
+            robot_id.get("unique_id")
+            or robot_id.get("serial_number")
             or robot_id.get("robot_id")
             or robot_id.get("id")
+            or None
+        )
+        sw_version = (
+            robot_id.get("firmware")
+            or proto.get("version")
             or None
         )
         host = self.coordinator.config_entry.data.get(CONF_HOST)
@@ -410,6 +416,6 @@ class RobEyeEntity(CoordinatorEntity[RobEyeCoordinator]):
             name="Rowenta Xplorer 120",
             model="Xplorer 120",
             serial_number=serial,
-            sw_version=proto.get("version") or None,
+            sw_version=sw_version,
             configuration_url=f"http://{host}:8080" if host else None,
         )
