@@ -872,6 +872,25 @@ class RobEyeDashboardManager:
                 self._url_path,
             )
 
+        # Step 1b — Delete the dashboard content storage file.
+        # DashboardsCollection.async_delete_item() only removes the registry
+        # entry (lovelace_dashboards store).  The actual card config lives in a
+        # separate Store keyed "lovelace.<url_path>" and must be removed
+        # explicitly, otherwise .storage/lovelace.<url_path> is left behind as
+        # an orphan after the device is deleted.
+        try:
+            from homeassistant.helpers.storage import Store as _Store
+            content_store = _Store(hass, 1, f"lovelace.{self._url_path}")
+            await content_store.async_remove()
+            _LOGGER.info(
+                "RobEye dashboard: removed content store 'lovelace.%s'",
+                self._url_path,
+            )
+        except Exception as err:
+            _LOGGER.debug(
+                "RobEye dashboard: content store removal skipped: %s", err
+            )
+
         # Step 2 — Remove from the in-memory lovelace dashboards dict
         # This is what storage_dashboard_changed (removal) normally does via
         # the global DashboardsCollection listener.
