@@ -214,6 +214,7 @@ def _build_config(
             (e_wifi_ssid,"Wi-Fi Network"),
             (e_wifi_rssi,"Wi-Fi Signal"),
         ]
+        if hass.states.get(e) is not None
     ]
 
     view_control: dict[str, Any] = {
@@ -495,11 +496,23 @@ def _build_config(
             ],
         },
     ]
-    stats_cards.append({
-        "type": "entities",
-        "title": "Device Info",
-        "entities": device_info_entities,
-    })
+    if device_info_entities:
+        stats_cards.append({
+            "type": "entities",
+            "title": "Device Info",
+            "entities": device_info_entities,
+        })
+    else:
+        stats_cards.append({
+            "type": "markdown",
+            "title": "Device Info",
+            "content": (
+                "*No device info sensors are enabled.*\n\n"
+                "Enable one or more diagnostic sensors (Serial Number, "
+                "Firmware Version, Wi-Fi Network, Wi-Fi Signal) in "
+                "Home Assistant to display device information here."
+            ),
+        })
 
     stats_cards.append({
         "type": "entities",
