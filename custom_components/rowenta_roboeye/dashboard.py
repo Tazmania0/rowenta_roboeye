@@ -40,6 +40,7 @@ import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from .const import CLEANING_MODE_ALL, DOMAIN, SCHEDULE_DAYS, room_selection_entity_id
 
@@ -164,6 +165,7 @@ def _build_config(
     title: str = DASHBOARD_TITLE,
     available_maps: list[dict[str, Any]] | None = None,
     schedule_entries: list[dict[str, Any]] | None = None,
+    device_info_entities: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     has_maps = bool(available_maps)
     _d = device_id
@@ -206,16 +208,7 @@ def _build_config(
         {"entity": e_live_map, "name": "Live Map Data"}
     ]
 
-    device_info_entities = [
-        {"entity": e, "name": label}
-        for e, label in [
-            (e_serial,   "Serial Number"),
-            (e_firmware, "Firmware Version"),
-            (e_wifi_ssid,"Wi-Fi Network"),
-            (e_wifi_rssi,"Wi-Fi Signal"),
-        ]
-        if hass.states.get(e) is not None
-    ]
+    device_info_entities = device_info_entities or []
 
     view_control: dict[str, Any] = {
         "title": "Control",
@@ -683,6 +676,23 @@ class RobEyeDashboardManager:
                 )
                 rooms = []
 
+        # Build the device-info entity list from the entity registry (stable
+        # between coordinator ticks) rather than hass.states (volatile during
+        # startup and after transient failures).  This keeps _build_config
+        # output deterministic and prevents spurious hash changes.
+        _ent_reg = er.async_get(hass)
+        _INFO_LABELS = [
+            (f"sensor.{device_id}_serial_number",        "Serial Number"),
+            (f"sensor.{device_id}_firmware_version",     "Firmware Version"),
+            (f"sensor.{device_id}_wi_fi_network",        "Wi-Fi Network"),
+            (f"sensor.{device_id}_wi_fi_signal_strength","Wi-Fi Signal"),
+        ]
+        _device_info_entities = [
+            {"entity": eid, "name": label}
+            for eid, label in _INFO_LABELS
+            if (_e := _ent_reg.async_get(eid)) is not None and not _e.disabled
+        ]
+
         # Poll for per-room entities to appear in hass.states.  Each
         # asyncio.sleep(0) hand-off lets the platform async_add_entities
         # tasks make progress; entity setup typically completes within a
@@ -717,7 +727,7 @@ class RobEyeDashboardManager:
             return False
 
         title = friendly_name or self._title
-        config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title, available_maps=available_maps, schedule_entries=schedule_entries)
+        config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title, available_maps=available_maps, schedule_entries=schedule_entries, device_info_entities=_device_info_entities)
         new_hash = _config_hash(config)
 
         _LOGGER.debug(

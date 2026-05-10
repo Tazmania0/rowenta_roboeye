@@ -198,7 +198,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     # Regenerate dashboard only when schedule content changes, not every tick.
     # Compare a SHA-256 of the serialised schedule list; skip the save when
     # nothing changed to avoid spurious Lovelace re-renders.
-    _last_sched_hash = ""
+    # Seed the hash from the current schedule so the first coordinator tick
+    # is a no-op unless the schedule actually changed since setup.
+    _sched_raw = coordinator.schedule.get("schedule") or []
+    try:
+        _last_sched_hash = hashlib.sha256(
+            json.dumps(_sched_raw, sort_keys=True, default=str).encode()
+        ).hexdigest()
+    except Exception:
+        _last_sched_hash = ""
 
     @callback
     def _on_sched_updated(*_args: object) -> None:
