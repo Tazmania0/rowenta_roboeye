@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant, CoreState, EVENT_HOMEASSISTANT_STARTED, callback
@@ -11,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
-from .const import AREA_STATE_BLOCKING, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, VERSION, room_selection_entity_id
+from .const import AREA_STATE_BLOCKING, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION, room_selection_entity_id
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
@@ -193,13 +195,24 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         eager_start=False,
     )
 
-    # Regenerate dashboard on every coordinator update.
-    # The dashboard manager serializes saves on its own asyncio.Lock and
-    # internally polls for per-room entities to appear in hass.states, so
-    # callers do not need to debounce or stagger.  Hash-based dedup makes
-    # repeated calls cheap when nothing has changed.
+    # Regenerate dashboard only when schedule content changes, not every tick.
+    # Compare a SHA-256 of the serialised schedule list; skip the save when
+    # nothing changed to avoid spurious Lovelace re-renders.
+    _last_sched_hash = ""
+
     @callback
-    def _schedule_dashboard_regen(*_args: object) -> None:
+    def _on_sched_updated(*_args: object) -> None:
+        nonlocal _last_sched_hash
+        sched_raw = coordinator.schedule.get("schedule") or []
+        try:
+            sig = hashlib.sha256(
+                json.dumps(sched_raw, sort_keys=True, default=str).encode()
+            ).hexdigest()
+        except Exception:
+            return
+        if sig == _last_sched_hash:
+            return
+        _last_sched_hash = sig
         hass.async_create_task(
             async_create_dashboard(
                 hass,
@@ -218,7 +231,36 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         )
 
     config_entry.async_on_unload(
-        coordinator.async_add_listener(_schedule_dashboard_regen)
+        coordinator.async_add_listener(_on_sched_updated)
+    )
+
+    # Regenerate dashboard when maps are deleted so the floor selector
+    # reflects the updated map list immediately.
+    @callback
+    def _on_maps_updated(_deleted_map_ids: set[str]) -> None:
+        hass.async_create_task(
+            async_create_dashboard(
+                hass,
+                coordinator.areas,
+                coordinator.robot_info,
+                manager=dashboard_manager,
+                device_id=coordinator.device_id,
+                active_map_id=coordinator.active_map_id,
+                friendly_name=friendly_name,
+                available_maps=coordinator.available_maps,
+                schedule_entries=_schedule_for_map(
+                    coordinator.schedule.get("schedule"),
+                    coordinator.active_map_id,
+                ),
+            )
+        )
+
+    config_entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            f"{SIGNAL_MAPS_UPDATED}_{config_entry.entry_id}",
+            _on_maps_updated,
+        )
     )
 
     # When the room set changes, invalidate the cached hash so the next
