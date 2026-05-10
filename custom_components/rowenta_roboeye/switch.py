@@ -394,20 +394,27 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         within 300 s (the areas poll interval).
 
         _last_robot_strategy prevents redundant state writes between polls.
+
+        The areas_map_id guard prevents cross-map contamination: after a map
+        switch, coordinator.areas holds the NEW map's data while old-map entities
+        are still alive during the grace period.  Without the guard, an old-map
+        entity whose area_id collides with a new-map area would read the wrong
+        strategy_mode and flip _is_on, producing spurious state-change events.
         """
-        for area in self.coordinator.areas:
-            if str(area.get("id", "")) == self._area_id:
-                robot_val = str(area.get("strategy_mode", "") or "").lower()
-                if robot_val != self._last_robot_strategy:
-                    self._last_robot_strategy = robot_val
-                    new_is_on = robot_val == "deep"
-                    if new_is_on != self._is_on:
-                        self._is_on = new_is_on
-                        LOGGER.debug(
-                            "Room %s deep clean synced %s from robot",
-                            self._area_id, "ON" if new_is_on else "OFF",
-                        )
-                break
+        if self.coordinator.areas_map_id == self._map_id:
+            for area in self.coordinator.areas:
+                if str(area.get("id", "")) == self._area_id:
+                    robot_val = str(area.get("strategy_mode", "") or "").lower()
+                    if robot_val != self._last_robot_strategy:
+                        self._last_robot_strategy = robot_val
+                        new_is_on = robot_val == "deep"
+                        if new_is_on != self._is_on:
+                            self._is_on = new_is_on
+                            LOGGER.debug(
+                                "Room %s deep clean synced %s from robot",
+                                self._area_id, "ON" if new_is_on else "OFF",
+                            )
+                    break
         self.async_write_ha_state()
 
     def _current_room_fan_speed_raw(self) -> str:
