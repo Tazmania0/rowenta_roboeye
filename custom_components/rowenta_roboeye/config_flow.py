@@ -162,7 +162,8 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
             client = RobEyeApiClient(host=host)
             data = await client.get_robot_id()
             raw = (
-                data.get("serial_number")
+                data.get("unique_id")
+                or data.get("serial_number")
                 or data.get("robot_id")
                 or data.get("id")
                 or ""
