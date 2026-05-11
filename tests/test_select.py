@@ -164,8 +164,10 @@ async def test_restore_triggers_map_switch_when_different():
 
     await entity.async_added_to_hass()
 
-    # Must have called async_set_active_map with the resolved map ID "4"
-    coord.async_set_active_map.assert_called_once_with("4")
+    # Must have called async_set_active_map with the resolved map ID "4" and
+    # skip_grace_period=True so the Active Map sensor never briefly shows the
+    # wrong map during the startup state-restore transition.
+    coord.async_set_active_map.assert_called_once_with("4", skip_grace_period=True)
 
 
 @pytest.mark.asyncio
@@ -229,8 +231,9 @@ async def test_restore_populates_name_to_id_before_lookup():
 
     await entity.async_added_to_hass()
 
-    # Must resolve to numeric ID "4" and call async_set_active_map (not set _manual_map_id directly)
-    coord.async_set_active_map.assert_called_once_with("4")
+    # Must resolve to numeric ID "4" and call async_set_active_map with
+    # skip_grace_period=True (state-restore path, not a live user action).
+    coord.async_set_active_map.assert_called_once_with("4", skip_grace_period=True)
 
 
 # ══════════════════════════════════════════════════════════════════════
