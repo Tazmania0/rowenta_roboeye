@@ -1008,6 +1008,18 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 self._areas_ready = True
                 self.hass.loop.call_soon(async_dispatcher_send, self.hass, signal)
+                # After the signal fires and new-map entities are registered,
+                # immediately schedule another coordinator refresh so the
+                # map-switch grace period (_prev_committed_map_id) is cleared
+                # at the start of that tick rather than waiting for the next
+                # scheduled poll (up to 15 s idle).  Without this the old map's
+                # entities remain "available" for the entire idle poll interval.
+                if self._prev_committed_map_id is not None:
+                    self.hass.loop.call_soon(
+                        lambda: self.hass.async_create_task(
+                            self.async_request_refresh()
+                        )
+                    )
             return
 
         if current_ids != self._known_area_ids:
