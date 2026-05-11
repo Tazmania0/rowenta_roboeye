@@ -128,6 +128,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         self._last_statistics: datetime | None = None
         self._last_areas: datetime | None = None
+        self._last_maps: datetime | None = None
         self._last_robot_info: datetime | None = None
         self._last_live_map: datetime | None = None
         self._last_map_geometry: datetime | None = None
@@ -338,7 +339,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result = []
         position = 0
         for entry in maps_list:
-            position += 1
+            # Increment position only for permanent maps so that
+            # session/temporary maps appearing or disappearing cannot shift
+            # the position-based display names of permanent maps.
+            if str(entry.get("permanent_flag", "")).strip().lower() == "true":
+                position += 1
             parsed = _parse_map_entry(entry, position=position, active_map_id=active)
             if parsed:
                 result.append(parsed)
@@ -728,20 +733,33 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._last_areas is None or (
                 now - self._last_areas
             ) >= timedelta(seconds=SCAN_INTERVAL_AREAS):
-                # Fetch map_status and maps for informational display (map list,
-                # is_active flag in available_maps).  Not used to determine
-                # which map HA should display — that is always the HA-configured
-                # map_id (see active_map_id property).
-                try:
-                    data[DATA_MAP_STATUS] = await self.client.get_map_status()
-                except CannotConnect:
-                    LOGGER.debug("get_map_status unavailable, skipping")
+                # Maps + map_status use their own sub-timer so they are NOT
+                # re-fetched on every tick when _last_areas is None (e.g. during
+                # an empty-areas transient or after async_set_active_map resets
+                # _last_areas).  Without this guard every coordinator tick would
+                # re-call /get/maps while waiting for /get/areas to return
+                # non-empty data, and any ordering change in the maps response
+                # would shift position-based display names ("Map 1" ↔ "Map 2"),
+                # causing spurious state-change events in the HA logbook.
+                if self._last_maps is None or (
+                    now - self._last_maps
+                ) >= timedelta(seconds=SCAN_INTERVAL_AREAS):
+                    # Fetch map_status and maps for informational display (map list,
+                    # is_active flag in available_maps).  Not used to determine
+                    # which map HA should display — that is always the HA-configured
+                    # map_id (see active_map_id property).
+                    try:
+                        data[DATA_MAP_STATUS] = await self.client.get_map_status()
+                    except CannotConnect:
+                        LOGGER.debug("get_map_status unavailable, skipping")
 
-                try:
-                    data[DATA_MAPS] = await self.client.get_maps()
-                    self._check_for_deleted_maps(data[DATA_MAPS])
-                except CannotConnect:
-                    LOGGER.debug("get_maps unavailable, skipping")
+                    try:
+                        data[DATA_MAPS] = await self.client.get_maps()
+                        self._check_for_deleted_maps(data[DATA_MAPS])
+                    except CannotConnect:
+                        LOGGER.debug("get_maps unavailable, skipping")
+
+                    self._last_maps = now  # advance independently of areas readiness
 
                 # Always use the HA-configured map ID (manual override or setup map_id).
                 _fetched_for = self._manual_map_id or self.map_id

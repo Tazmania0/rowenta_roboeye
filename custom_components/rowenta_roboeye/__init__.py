@@ -190,16 +190,24 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     # Launch dashboard creation in the background so setup returns immediately.
     # The helper retries with increasing delays; last resort: request HA restart.
-    hass.async_create_task(
+    # Track the task so async_on_unload can cancel it if the entry is removed
+    # before all retries complete (prevents stale tasks from outliving the entry).
+    _dashboard_init_task = hass.async_create_task(
         _async_initial_dashboard(hass, config_entry, coordinator, dashboard_manager, friendly_name),
         eager_start=False,
     )
 
+    @callback
+    def _cancel_dashboard_init() -> None:
+        if not _dashboard_init_task.done():
+            _dashboard_init_task.cancel()
+
+    config_entry.async_on_unload(_cancel_dashboard_init)
+
     # Regenerate dashboard only when schedule content changes, not every tick.
-    # Compare a SHA-256 of the serialised schedule list; skip the save when
-    # nothing changed to avoid spurious Lovelace re-renders.
-    # Seed the hash from the current schedule so the first coordinator tick
-    # is a no-op unless the schedule actually changed since setup.
+    # Also retry automatically when the previous save was deferred (dashboard_manager._last_hash
+    # is None) — this recovers from the race where SIGNAL_AREAS_UPDATED fires before per-room
+    # entities appear in hass.states and the 8 s poll window expires without a save.
     _sched_raw = coordinator.schedule.get("schedule") or []
     try:
         _last_sched_hash = hashlib.sha256(
@@ -218,7 +226,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             ).hexdigest()
         except Exception:
             return
-        if sig == _last_sched_hash:
+        # Skip if schedule unchanged AND dashboard is already saved.
+        # When _last_hash is None the previous save was deferred (entity poll timed out);
+        # allow the retry so the next coordinator tick attempts the save again.
+        if sig == _last_sched_hash and dashboard_manager._last_hash is not None:
+            return
+        # Skip if a dashboard save is already in progress — prevents a queue backlog
+        # from building up when coordinator ticks fire faster than saves complete
+        # (each save can hold _save_lock for up to 8 s during entity polling).
+        if dashboard_manager._save_lock.locked():
             return
         _last_sched_hash = sig
         hass.async_create_task(
