@@ -942,6 +942,19 @@ def test_available_maps_empty_when_no_data(coordinator):
     assert coordinator.available_maps == []
 
 
+def test_available_maps_non_permanent_does_not_shift_position(coordinator):
+    """A session/temporary map before a permanent one must not advance the
+    position counter, so the permanent map gets 'Map 1' not 'Map 2'."""
+    coordinator.data = {"maps": {"maps": [
+        {"map_id": 99, "map_meta_data": "", "permanent_flag": "false", "statistics": {}},
+        {"map_id": 3,  "map_meta_data": "", "permanent_flag": "true",  "statistics": {}},
+    ]}}
+    maps = coordinator.available_maps
+    assert len(maps) == 1
+    assert maps[0]["map_id"] == "3"
+    assert maps[0]["display_name"] == "Map 1"  # NOT "Map 2"
+
+
 @pytest.mark.asyncio
 async def test_device_floor_change_does_not_reset_areas(coordinator, mock_client):
     """When the device reports a different map via map_status, HA ignores it.
@@ -969,10 +982,13 @@ async def test_device_floor_change_does_not_reset_areas(coordinator, mock_client
 
 
 @pytest.mark.asyncio
-async def test_maps_and_map_status_fetched_in_areas_bucket(coordinator, mock_client):
-    """get_maps and get_map_status are called in the 300s areas bucket."""
+async def test_maps_and_map_status_fetched_with_areas(coordinator, mock_client):
+    """get_maps and get_map_status are fetched on the 300s schedule (sub-timer
+    inside the areas block).  When both _last_areas and _last_maps are due,
+    both maps and areas are fetched in the same coordinator tick."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
     coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
+    # _last_maps is None (initial) so the maps sub-block also triggers
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
@@ -983,6 +999,25 @@ async def test_maps_and_map_status_fetched_in_areas_bucket(coordinator, mock_cli
     mock_client.get_map_status.assert_called_once()
     assert "maps" in coordinator.data
     assert "map_status" in coordinator.data
+
+
+@pytest.mark.asyncio
+async def test_maps_not_refetched_when_only_areas_retrying(coordinator, mock_client):
+    """When _last_areas is None (areas retrying after empty response) but
+    _last_maps is recent, /get/maps must NOT be called again — this prevents
+    per-tick display-name churn when the maps API returns different orderings."""
+    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
+    coordinator._last_areas = None  # areas will retry
+    coordinator._last_maps = datetime.utcnow()  # maps fetched recently
+    coordinator._last_statistics = datetime.utcnow()
+    coordinator._last_robot_info = datetime.utcnow()
+    coordinator._last_map_geometry = datetime.utcnow()
+
+    await coordinator._async_update_data()
+
+    mock_client.get_maps.assert_not_called()
+    mock_client.get_map_status.assert_not_called()
+    mock_client.get_areas.assert_called_once()  # areas still retried
 
 
 # ── Manual map override (async_set_active_map) ────────────────────────
