@@ -13,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
-from .const import AREA_STATE_BLOCKING, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION, room_selection_entity_id
+from .const import AREA_STATE_BLOCKING, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION, room_selection_entity_id
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
@@ -143,7 +143,16 @@ async def _async_sync_room_selection_booleans(
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up Rowenta RobEye from a config entry."""
     host: str = config_entry.data[CONF_HOST]
-    map_id: str = config_entry.data.get(CONF_MAP_ID, DEFAULT_MAP_ID)
+    # CONF_LAST_ACTIVE_MAP is written silently whenever the user switches maps via
+    # the Select entity.  It takes priority over CONF_MAP_ID so the coordinator
+    # starts with the correct map immediately — preventing the sensor from writing
+    # the CONF_MAP_ID name as its initial state only to flip to the restored map a
+    # tick later, which produced a spurious "Active map changed to X" logbook entry
+    # on every HA restart.
+    map_id: str = (
+        config_entry.data.get(CONF_LAST_ACTIVE_MAP)
+        or config_entry.data.get(CONF_MAP_ID, DEFAULT_MAP_ID)
+    )
     friendly_name: str = config_entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
 
     client = RobEyeApiClient(host=host)
@@ -501,6 +510,21 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def _async_update_listener(
     hass: HomeAssistant, config_entry: ConfigEntry
 ) -> None:
-    """Handle options update."""
+    """Handle config entry update.
+
+    Reloads the integration when host changes (new API endpoint needed).
+    Silently skips reload for data-only writes that do not affect connectivity —
+    specifically CONF_LAST_ACTIVE_MAP updates written by the map Select entity
+    and serial/device-id caching written by async_setup_entry.  Those writes
+    must not trigger a reload loop.
+    """
+    coordinator = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
+    if coordinator is not None:
+        if coordinator.client._host == config_entry.data.get(CONF_HOST):
+            LOGGER.debug(
+                "_async_update_listener: host unchanged — skipping reload for %s",
+                config_entry.entry_id,
+            )
+            return
     LOGGER.debug("_async_update_listener: reloading %s", config_entry.entry_id)
     await hass.config_entries.async_reload(config_entry.entry_id)

@@ -34,6 +34,7 @@ def _make_coordinator(data=None):
     coord = MagicMock()
     coord.config_entry = MagicMock()
     coord.config_entry.entry_id = "test_entry"
+    coord.config_entry.data = {"map_id": "3"}  # real dict so ** and .get() work
     coord.map_id = "3"
     coord._manual_map_id = None
     coord.data = data if data is not None else {
@@ -65,8 +66,12 @@ def _entity(coord=None) -> RobEyeActiveMapSelect:
     object.__setattr__(entity, "coordinator", coord)
     object.__setattr__(entity, "_attr_unique_id", "active_map_test")
     object.__setattr__(entity, "_name_to_id", {})
-    # async_select_option calls async_write_ha_state for optimistic update.
+    # async_select_option and async_added_to_hass call async_write_ha_state
+    # and hass.config_entries.async_update_entry for map persistence.
     object.__setattr__(entity, "async_write_ha_state", MagicMock())
+    hass = MagicMock()
+    hass.config_entries.async_update_entry = MagicMock()
+    object.__setattr__(entity, "hass", hass)
     return entity
 
 

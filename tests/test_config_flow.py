@@ -226,7 +226,10 @@ async def test_options_flow_happy_path():
     assert result["data"]["host"] == "192.168.1.101"
     # Serial must be preserved so entity unique_ids don't change after IP update
     assert result["data"]["serial"] == "sn_persisted"
-    assert "map_id" not in result["data"]
+    # map_id and last_active_map are now preserved through options saves
+    # so the active map survives host/name changes without reverting to default
+    assert result["data"].get("map_id") == "3"       # DEFAULT_MAP_ID fallback when not set
+    assert result["data"].get("last_active_map") is None  # not yet set in this test entry
 
 
 @pytest.mark.asyncio

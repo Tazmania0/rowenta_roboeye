@@ -21,6 +21,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
     AREA_STATE_BLOCKING,
+    CONF_LAST_ACTIVE_MAP,
     DOMAIN,
     FAN_SPEED_MAP,
     FAN_SPEED_REVERSE_MAP,
@@ -498,11 +499,17 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
             if state not in ("unknown", "unavailable"):
                 map_id = self._name_to_id.get(state, state)
                 if map_id != self.coordinator.active_map_id:
-                    # The restored map differs from the one used during the first
-                    # coordinator refresh (which ran before any entity was loaded).
-                    # Force a full map switch now so areas, geometry, and live map
-                    # are fetched for the correct map immediately rather than after
-                    # the next 300-s / 600-s polling cycle.
+                    # The restored map differs from the coordinator's startup map.
+                    # Persist it now so the NEXT restart uses this map immediately
+                    # (avoids a spurious "Active map changed to X" logbook entry).
+                    # This write is safe — add_update_listener is registered after
+                    # async_forward_entry_setups so no reload listener fires here.
+                    entry = self.coordinator.config_entry
+                    if entry.data.get(CONF_LAST_ACTIVE_MAP) != map_id:
+                        self.hass.config_entries.async_update_entry(
+                            entry,
+                            data={**entry.data, CONF_LAST_ACTIVE_MAP: map_id},
+                        )
                     LOGGER.debug(
                         "Active map restored to %s (was %s) — forcing immediate switch",
                         map_id,
@@ -523,6 +530,15 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         self.coordinator._manual_map_id = map_id
         self.async_write_ha_state()
         await self.coordinator.async_set_active_map(map_id)
+        # Persist the selected map so the next HA restart starts with the correct
+        # coordinator.map_id before any entity writes its initial state.
+        # _async_update_listener checks that host is unchanged and skips reload.
+        entry = self.coordinator.config_entry
+        if entry.data.get(CONF_LAST_ACTIVE_MAP) != map_id:
+            self.hass.config_entries.async_update_entry(
+                entry,
+                data={**entry.data, CONF_LAST_ACTIVE_MAP: map_id},
+            )
 
 
 # ── Cleaning strategy select ──────────────────────────────────────────
