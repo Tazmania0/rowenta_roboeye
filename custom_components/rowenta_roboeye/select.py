@@ -508,7 +508,9 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
                         map_id,
                         self.coordinator.active_map_id,
                     )
-                    await self.coordinator.async_set_active_map(map_id)
+                    await self.coordinator.async_set_active_map(
+                        map_id, skip_grace_period=True
+                    )
                 else:
                     self.coordinator._manual_map_id = map_id
 

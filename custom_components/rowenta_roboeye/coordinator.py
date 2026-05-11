@@ -398,8 +398,16 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return True
         return entity_map_id == active
 
-    async def async_set_active_map(self, map_id: str) -> None:
-        """Override the active map and force-reload all map-dependent data."""
+    async def async_set_active_map(
+        self, map_id: str, *, skip_grace_period: bool = False
+    ) -> None:
+        """Override the active map and force-reload all map-dependent data.
+
+        skip_grace_period: when True the transition guard (_prev_committed_map_id)
+        is not set.  Pass True for state-restore switches that happen at HA startup
+        before any per-map entities are visible to the user, so the Active Map sensor
+        and the Switch Map selector never momentarily disagree.
+        """
         self._areas_ready = False
         self._manual_map_id = map_id
         self._last_active_map_id = map_id
@@ -410,12 +418,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # window (while new-map areas are being fetched) so the UI never flashes
         # "unavailable" while we wait for the first HTTP response.
         #
-        # Exception: if the destination map already has committed areas in this
-        # session its entities already exist in HA and become available immediately
-        # via active_map_id — no grace period is needed.  Keeping the old map's
-        # entities alive in that case causes a fast map1→map2→map1 round-trip to
-        # leave map2 entities visible as "available" while map1 is selected.
-        if map_id in self._maps_with_committed_areas:
+        # Skipped when:
+        #  - skip_grace_period=True (state-restore at startup — entities not yet live)
+        #  - destination map already has committed areas this session (entities exist,
+        #    become available immediately; keeping old ones causes stale-visible flash)
+        if skip_grace_period or map_id in self._maps_with_committed_areas:
             self._prev_committed_map_id = None
         else:
             self._prev_committed_map_id = self._areas_fetched_for_map_id
