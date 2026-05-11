@@ -13,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .api import CannotConnect, RobEyeApiClient
-from .const import CONF_HOSTNAME, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DOMAIN, LOGGER
+from .const import CONF_HOSTNAME, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER
 
 
 class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -209,6 +209,9 @@ class RobEyeOptionsFlow(OptionsFlow):
                         # Preserve stable identifiers so entity unique_ids never change
                         CONF_SERIAL: self._config_entry.data.get(CONF_SERIAL, ""),
                         "_device_id": self._config_entry.data.get("_device_id", ""),
+                        # Preserve map selection so the active map survives options saves
+                        CONF_MAP_ID: self._config_entry.data.get(CONF_MAP_ID, DEFAULT_MAP_ID),
+                        CONF_LAST_ACTIVE_MAP: self._config_entry.data.get(CONF_LAST_ACTIVE_MAP),
                     },
                 )
 

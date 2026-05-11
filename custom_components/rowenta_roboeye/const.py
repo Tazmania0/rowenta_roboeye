@@ -40,6 +40,7 @@ QUEUE_POST_DOCK_DELAY_S = 8.0  # short settle delay after dock before next queue
 
 # ── Config entry keys ─────────────────────────────────────────────────
 CONF_MAP_ID = "map_id"
+CONF_LAST_ACTIVE_MAP = "last_active_map"  # last map chosen via select entity; persisted silently
 CONF_HOSTNAME = "hostname"
 CONF_NAME = "name"
 CONF_SERIAL = "serial"  # device serial number; fetched at config-flow time, never changes
