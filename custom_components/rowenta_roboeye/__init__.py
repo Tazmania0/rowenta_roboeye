@@ -305,20 +305,32 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             hass.async_create_task(
                 _async_sync_room_selection_booleans(hass, coordinator)
             )
-            await async_create_dashboard(
-                hass,
-                coordinator.areas,
-                coordinator.robot_info,
-                manager=dashboard_manager,
-                device_id=coordinator.device_id,
-                active_map_id=coordinator.active_map_id,
-                friendly_name=friendly_name,
-                available_maps=coordinator.available_maps,
-                schedule_entries=_schedule_for_map(
-                    coordinator.schedule.get("schedule"),
-                    coordinator.active_map_id,
-                ),
-            )
+
+            def _dashboard_kwargs() -> dict:
+                return dict(
+                    hass=hass,
+                    areas=coordinator.areas,
+                    robot_info=coordinator.robot_info,
+                    manager=dashboard_manager,
+                    device_id=coordinator.device_id,
+                    active_map_id=coordinator.active_map_id,
+                    friendly_name=friendly_name,
+                    available_maps=coordinator.available_maps,
+                    schedule_entries=_schedule_for_map(
+                        coordinator.schedule.get("schedule"),
+                        coordinator.active_map_id,
+                    ),
+                )
+
+            success = await async_create_dashboard(**_dashboard_kwargs())
+            if not success and config_entry.state == ConfigEntryState.LOADED:
+                # The entity-readiness poll timed out (common on first map switch
+                # when entity setup tasks are still running).  Retry once after a
+                # short delay instead of waiting for the next coordinator tick
+                # (which could be up to 15 s away when the robot is idle).
+                await asyncio.sleep(5.0)
+                if config_entry.state == ConfigEntryState.LOADED:
+                    await async_create_dashboard(**_dashboard_kwargs())
 
         hass.async_create_task(_areas_changed_task())
 

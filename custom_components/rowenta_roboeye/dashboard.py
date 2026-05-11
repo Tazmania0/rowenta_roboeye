@@ -42,7 +42,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .const import CLEANING_MODE_ALL, DOMAIN, SCHEDULE_DAYS, room_selection_entity_id
+from .const import AREA_STATE_BLOCKING, CLEANING_MODE_ALL, DOMAIN, SCHEDULE_DAYS, room_selection_entity_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1069,6 +1069,8 @@ class RobEyeDashboardManager:
 def _extract_rooms(areas: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rooms: list[dict[str, Any]] = []
     for area in areas:
+        if area.get("area_state") == AREA_STATE_BLOCKING:
+            continue
         meta_raw = area.get("area_meta_data", "")
         if not meta_raw:
             continue
