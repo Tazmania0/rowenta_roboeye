@@ -21,6 +21,7 @@ import pytest
 from custom_components.rowenta_roboeye.const import room_selection_entity_id
 from custom_components.rowenta_roboeye.dashboard import (
     RobEyeDashboardManager,
+    _extract_rooms,
     _room_entities_registered,
 )
 
@@ -450,3 +451,47 @@ async def test_async_update_serializes_concurrent_callers():
     assert (a, b) == (True, True)
     assert save_called == 2
     assert max_in_flight == 1, "lock must serialize concurrent saves"
+
+
+# ── Blocking area filter in _extract_rooms ────────────────────────────
+
+def test_extract_rooms_excludes_blocking_areas():
+    """Blocking areas (virtual walls / forbidden zones) must not appear in the
+    rooms list even when they have a name.
+
+    Root cause of the 30-60 s dashboard-delay regression: _extract_rooms used
+    to include blocking areas, so _room_entities_registered waited 8 s for
+    entities that the platform builders never create (they skip
+    area_state == 'blocking').  Each timeout pushed the retry 15 s into the
+    future via the coordinator-tick schedule.
+    """
+    areas = [
+        {"id": 1, "area_meta_data": '{"name": "Living Room"}', "area_state": "clean"},
+        {"id": 2, "area_meta_data": '{"name": "No Go Zone"}', "area_state": "blocking"},
+        {"id": 3, "area_meta_data": '{"name": "Kitchen"}', "area_state": "inactive"},
+    ]
+    rooms = _extract_rooms(areas)
+    ids = {r["id"] for r in rooms}
+    assert 2 not in ids, "blocking area must be excluded"
+    assert 1 in ids and 3 in ids, "non-blocking named areas must be included"
+
+
+def test_registered_returns_true_when_only_normal_rooms_have_entities():
+    """Guard must pass when normal-room entities exist, even if a blocking
+    area's entities are absent (they are never created by the platforms).
+
+    Without the _extract_rooms fix, _room_entities_registered would include
+    the blocking area in `rooms` and loop until timeout because no entity for
+    that area_id is ever written to hass.states.
+    """
+    # Only room 1 (clean) gets entities; room 2 is blocking → no entities.
+    eids_1 = _all_room_eids("dev", "3", 1)
+    hass = _make_hass_with_states(eids_1)
+
+    # After the fix, _extract_rooms omits the blocking room (id=2).
+    rooms = _extract_rooms([
+        {"id": 1, "area_meta_data": '{"name": "Living Room"}', "area_state": "clean"},
+        {"id": 2, "area_meta_data": '{"name": "No Go Zone"}',  "area_state": "blocking"},
+    ])
+    # rooms contains only room 1; _room_entities_registered must be True.
+    assert _room_entities_registered(hass, "dev", "3", rooms) is True
