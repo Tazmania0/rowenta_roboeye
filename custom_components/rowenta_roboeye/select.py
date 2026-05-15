@@ -484,12 +484,23 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
     def current_option(self) -> str | None:
         # Always rebuild _name_to_id here: HA calls current_option before options
         # in state assembly, so _name_to_id could be stale and cause a flicker.
+        # Use active_map_id_for_display instead of active_map_id so the selector
+        # stays on the OLD map during the map-switch grace period.  It only advances
+        # to the new map once _prev_committed_map_id is cleared — i.e. after the
+        # new map's room entities are initialised — so the "Active map" card and the
+        # room-entity cards in the dashboard update in sync.
         self._build_options()
-        active_id = self.coordinator.active_map_id
+        active_id = self.coordinator.active_map_id_for_display
         for name, map_id in self._name_to_id.items():
             if map_id == active_id:
                 return name
         return active_id or None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        if self.coordinator.active_map_id_for_display != self.coordinator.active_map_id:
+            return {"map_switch_pending": True}
+        return {}
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -523,12 +534,12 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
 
     async def async_select_option(self, option: str) -> None:
         map_id = self._name_to_id.get(option, option)
-        # Optimistically write the new map to the coordinator and push state to
-        # HA immediately.  This eliminates the 1-2 s "flicker" where the selector
-        # briefly reverts to the previous map while waiting for the next
-        # coordinator refresh cycle to propagate _manual_map_id.
-        self.coordinator._manual_map_id = map_id
-        self.async_write_ha_state()
+        # async_set_active_map sets _manual_map_id, _prev_committed_map_id, and
+        # triggers a coordinator refresh — no pre-write needed here.  The entity
+        # state advances to the new map only after _prev_committed_map_id is cleared
+        # (i.e. once room entities for the new map are ready), so the "Active map"
+        # display stays on the old map during the transition instead of jumping
+        # ahead of the room-entity cards.
         await self.coordinator.async_set_active_map(map_id)
         # Persist the selected map so the next HA restart starts with the correct
         # coordinator.map_id before any entity writes its initial state.
