@@ -49,6 +49,8 @@ def _make_coordinator(data=None):
         {"map_id": "4", "display_name": "First Floor"},
     ]
     coord.active_map_id = "3"
+    # In steady state active_map_id_for_display == active_map_id (no switch in progress)
+    coord.active_map_id_for_display = "3"
     # async_set_active_map must be an AsyncMock so it can be awaited
     coord.async_set_active_map = AsyncMock()
     # Simulate stable-state availability (no transition tracking needed in unit tests)
@@ -105,6 +107,7 @@ def test_current_option_second_map():
     """current_option returns 'First Floor' when active map is 4."""
     coord = _make_coordinator()
     coord.active_map_id = "4"
+    coord.active_map_id_for_display = "4"
     entity = _entity(coord)
     entity._build_options()
     assert entity.current_option == "First Floor"
@@ -114,9 +117,36 @@ def test_current_option_falls_back_to_id_when_name_unknown():
     """If active map ID has no name, return the ID string directly."""
     coord = _make_coordinator()
     coord.active_map_id = "99"
+    coord.active_map_id_for_display = "99"
     entity = _entity(coord)
     entity._build_options()
     assert entity.current_option == "99"
+
+
+def test_current_option_stays_on_old_map_during_switch():
+    """During a map-switch transition active_map_id_for_display returns the OLD map,
+    so current_option must reflect that rather than jumping to the new map."""
+    coord = _make_coordinator()
+    coord.active_map_id = "4"           # new map already set on coordinator
+    coord.active_map_id_for_display = "3"  # but display still shows old map
+    entity = _entity(coord)
+    entity._build_options()
+    assert entity.current_option == "Ground Floor"
+
+
+def test_extra_state_attributes_map_switch_pending():
+    """extra_state_attributes exposes map_switch_pending=True during a transition."""
+    coord = _make_coordinator()
+    coord.active_map_id = "4"
+    coord.active_map_id_for_display = "3"  # old map still shown
+    entity = _entity(coord)
+    assert entity.extra_state_attributes == {"map_switch_pending": True}
+
+
+def test_extra_state_attributes_idle():
+    """extra_state_attributes is empty when no map switch is in progress."""
+    entity = _entity()
+    assert entity.extra_state_attributes == {}
 
 
 # ── async_select_option ───────────────────────────────────────────────
