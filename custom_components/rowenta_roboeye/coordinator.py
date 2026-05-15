@@ -428,6 +428,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._prev_committed_map_id = self._areas_fetched_for_map_id
         self._areas_fetched_for_map_id = None  # invalidate until refresh fetches new areas
         self._known_area_ids = set()
+        self.invalidate_schedule_cache()  # force schedule re-fetch for the new map context
         self._robot_path = []
         self._last_session_grid = {}
         self._last_session_path = []
