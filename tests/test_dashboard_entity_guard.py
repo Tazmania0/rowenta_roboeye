@@ -14,7 +14,7 @@ cards rendering "unavailable".
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -495,3 +495,135 @@ def test_registered_returns_true_when_only_normal_rooms_have_entities():
     ])
     # rooms contains only room 1; _room_entities_registered must be True.
     assert _room_entities_registered(hass, "dev", "3", rooms) is True
+
+
+# ── Entity registry fallback (map-switch re-enabling) ────────────────────
+
+
+def _make_registry_mock(
+    enabled_eids: set[str],
+    disabled_eids: set[str],
+) -> MagicMock:
+    """Build a fake entity registry.
+
+    enabled_eids  → entries with disabled_by=None  (entity is enabled)
+    disabled_eids → entries with disabled_by set   (entity still disabled)
+    All other entity_ids → async_get returns None  (not in registry at all)
+    """
+    ent_reg = MagicMock()
+
+    def _async_get(entity_id: str):
+        if entity_id in enabled_eids:
+            entry = MagicMock()
+            entry.disabled_by = None
+            return entry
+        if entity_id in disabled_eids:
+            entry = MagicMock()
+            entry.disabled_by = "integration"
+            return entry
+        return None
+
+    ent_reg.async_get = _async_get
+    return ent_reg
+
+
+def test_registered_accepts_registry_enabled_entity_not_yet_in_states():
+    """Entities enabled in the registry but not yet in hass.states are accepted.
+
+    When the user switches back to a previously-visited map,
+    async_enable_room_entities_for_map() sets disabled_by=None synchronously
+    inside the SIGNAL_AREAS_UPDATED callback, but HA takes 1-2 event-loop
+    ticks to reload the entity into hass.states.  The guard must not time out
+    waiting for the states-propagation step — an enabled registry entry is
+    sufficient proof that the entity is coming.
+    """
+    eids = _all_room_eids("dev", "3", 5)
+    hass = _make_hass_with_states(set())  # nothing in states yet
+
+    with patch(
+        "custom_components.rowenta_roboeye.dashboard.er.async_get",
+        return_value=_make_registry_mock(enabled_eids=eids, disabled_eids=set()),
+    ):
+        rooms = [{"id": 5, "name": "Kitchen"}]
+        assert _room_entities_registered(hass, "dev", "3", rooms) is True
+
+
+def test_registered_rejects_still_disabled_registry_entry():
+    """An entity that is still disabled in the registry must not satisfy the guard.
+
+    During a map switch the new map's entities may not exist at all, or may be
+    disabled (from a previous active session of that map).  Only entries with
+    disabled_by=None count as ready.
+    """
+    eids = _all_room_eids("dev", "3", 5)
+    hass = _make_hass_with_states(set())
+
+    with patch(
+        "custom_components.rowenta_roboeye.dashboard.er.async_get",
+        return_value=_make_registry_mock(enabled_eids=set(), disabled_eids=eids),
+    ):
+        rooms = [{"id": 5, "name": "Kitchen"}]
+        assert _room_entities_registered(hass, "dev", "3", rooms) is False
+
+
+def test_registered_rejects_entity_absent_from_registry():
+    """An entity absent from both hass.states and the registry must block the save.
+
+    This is the brand-new entity case: SIGNAL_AREAS_UPDATED fired but the
+    async_add_entities tasks for sensor/button/select/switch have not yet run.
+    """
+    hass = _make_hass_with_states(set())
+
+    with patch(
+        "custom_components.rowenta_roboeye.dashboard.er.async_get",
+        return_value=_make_registry_mock(enabled_eids=set(), disabled_eids=set()),
+    ):
+        rooms = [{"id": 5, "name": "Kitchen"}]
+        assert _room_entities_registered(hass, "dev", "3", rooms) is False
+
+
+def test_registered_accepts_mixed_states_and_registry():
+    """Entities partly in hass.states, partly enabled in registry — guard passes.
+
+    Mid-reload snapshot: fast entities (e.g. switch) may already appear in
+    hass.states while slower ones (e.g. sensor) are still pending but are
+    already enabled in the registry by async_enable_room_entities_for_map().
+    """
+    eids = sorted(_all_room_eids("dev", "3", 5))
+    in_states = set(eids[:5])
+    in_registry = set(eids[5:])
+
+    hass = _make_hass_with_states(in_states)
+
+    with patch(
+        "custom_components.rowenta_roboeye.dashboard.er.async_get",
+        return_value=_make_registry_mock(enabled_eids=in_registry, disabled_eids=set()),
+    ):
+        rooms = [{"id": 5, "name": "Kitchen"}]
+        assert _room_entities_registered(hass, "dev", "3", rooms) is True
+
+
+def test_registered_rejects_when_one_entity_still_disabled_in_registry():
+    """A single entity still disabled in the registry must block the guard.
+
+    Even if all others are either in hass.states or enabled in the registry,
+    the one remaining disabled entry means the dashboard would reference an
+    entity that is still missing from HA's active state machine.
+    """
+    eids = sorted(_all_room_eids("dev", "3", 5))
+    # All but the last entity are in states or enabled.
+    in_states = set(eids[:4])
+    in_registry_enabled = set(eids[4:-1])
+    still_disabled = {eids[-1]}
+
+    hass = _make_hass_with_states(in_states)
+
+    with patch(
+        "custom_components.rowenta_roboeye.dashboard.er.async_get",
+        return_value=_make_registry_mock(
+            enabled_eids=in_registry_enabled,
+            disabled_eids=still_disabled,
+        ),
+    ):
+        rooms = [{"id": 5, "name": "Kitchen"}]
+        assert _room_entities_registered(hass, "dev", "3", rooms) is False

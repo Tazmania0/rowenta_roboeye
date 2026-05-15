@@ -99,10 +99,19 @@ def _room_entities_registered(
     Lovelace auto-refreshes card state when the entity transitions to a live
     value, so a brief unavailable flash is far preferable to timing out and
     leaving the dashboard with the previous map's entity IDs.
+
+    When an entity is absent from hass.states the entity registry is consulted
+    as a fallback.  async_enable_room_entities_for_map() updates disabled_by
+    synchronously inside the SIGNAL_AREAS_UPDATED callback, but HA needs one
+    or two event-loop ticks before the re-enabled entity appears in hass.states.
+    An entity that is registered with disabled_by=None is considered ready —
+    this avoids an 8-second timeout when switching back to a previously-visited
+    map whose entities were simply disabled (not removed) while inactive.
     """
     if not rooms or not active_map_id:
         return True
     _m = f"map{active_map_id}_"
+    _ent_reg = er.async_get(hass)
     for room in rooms:
         rid = room.get("id")
         if rid is None:
@@ -119,7 +128,14 @@ def _room_entities_registered(
             room_selection_entity_id(device_id, active_map_id, str(rid)),
         )
         for eid in eids:
-            if hass.states.get(eid) is None:
+            if hass.states.get(eid) is not None:
+                continue
+            # Entity not yet in hass.states: accept it if it is registered and
+            # enabled (disabled_by=None).  This covers the re-enabling transition
+            # where async_enable_room_entities_for_map() has already cleared
+            # disabled_by in the registry but HA hasn't reloaded the entity yet.
+            entry = _ent_reg.async_get(eid)
+            if entry is None or entry.disabled_by is not None:
                 return False
     return True
 
