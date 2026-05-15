@@ -199,10 +199,13 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     # Launch dashboard creation in the background so setup returns immediately.
     # The helper retries with increasing delays; last resort: request HA restart.
-    # Track the task so async_on_unload can cancel it if the entry is removed
-    # before all retries complete (prevents stale tasks from outliving the entry).
-    _dashboard_init_task = hass.async_create_task(
+    # Use async_create_background_task (not async_create_task) so HA does NOT
+    # track this task during startup — the task waits for EVENT_HOMEASSISTANT_STARTED
+    # before doing real work, and async_create_task would cause a deadlock where
+    # HA blocks on this task while this task blocks waiting for HA to start.
+    _dashboard_init_task = hass.async_create_background_task(
         _async_initial_dashboard(hass, config_entry, coordinator, dashboard_manager, friendly_name),
+        name="rowenta_roboeye_dashboard_init",
         eager_start=False,
     )
 
