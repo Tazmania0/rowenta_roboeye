@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -440,6 +440,38 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if dashboard_manager:
             dashboard_manager.invalidate()
         await self.async_request_refresh()
+
+    @callback
+    def _async_clear_map_switch_guard(self) -> None:
+        """Clear the map-switch grace period without an HTTP round-trip.
+
+        Scheduled 1 s after new-map areas are committed so all four
+        platform async_add_entities tasks have time to complete their
+        async_added_to_hass setup.  Using call_later instead of a full
+        coordinator refresh avoids the failure mode where a transient
+        CannotConnect on the extra tick sets last_update_success=False
+        and every newly-created entity writes its initial state as
+        "unavailable" (visible for up to 15 s until the next normal poll).
+        """
+        if self._prev_committed_map_id is None:
+            return  # already cleared by deferred startup or another switch
+        _current_active = self._manual_map_id or self.map_id
+        if (
+            self._areas_fetched_for_map_id is None
+            or self._areas_fetched_for_map_id != _current_active
+        ):
+            # Map switched again while this callback was pending — skip;
+            # the next cycle will handle _prev_committed_map_id correctly.
+            return
+        LOGGER.debug(
+            "RobEye: clearing map-switch guard via lightweight callback "
+            "(old=%s new=%s)",
+            self._prev_committed_map_id,
+            self._areas_fetched_for_map_id,
+        )
+        self._prev_committed_map_id = None
+        if hasattr(self, "async_update_listeners"):
+            self.async_update_listeners()
 
     # ── Entity state helpers ───────────────────────────────────────────
 
@@ -1015,17 +1047,25 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 self._areas_ready = True
                 self.hass.loop.call_soon(async_dispatcher_send, self.hass, signal)
-                # After the signal fires and new-map entities are registered,
-                # immediately schedule another coordinator refresh so the
-                # map-switch grace period (_prev_committed_map_id) is cleared
-                # at the start of that tick rather than waiting for the next
-                # scheduled poll (up to 15 s idle).  Without this the old map's
-                # entities remain "available" for the entire idle poll interval.
+                # After the signal fires and new-map entities are set up,
+                # clear the map-switch grace period (_prev_committed_map_id)
+                # so the old map's entities flip to "unavailable" promptly.
+                #
+                # Previously this scheduled a full coordinator refresh
+                # (async_request_refresh), but that HTTP round-trip can fail
+                # if the robot is momentarily busy right after a map switch.
+                # A failed refresh sets last_update_success=False, causing
+                # every newly-created entity to write state "unavailable"
+                # immediately.  Recovery then takes up to 15 s (idle poll).
+                #
+                # The lightweight callback below clears the flag and notifies
+                # existing listeners without touching the network.  A 1-second
+                # delay gives all four platform async_add_entities tasks enough
+                # time to complete their async_added_to_hass setup before the
+                # old-map entities are flipped to unavailable.
                 if self._prev_committed_map_id is not None:
-                    self.hass.loop.call_soon(
-                        lambda: self.hass.async_create_task(
-                            self.async_request_refresh()
-                        )
+                    self.hass.loop.call_later(
+                        1.0, self._async_clear_map_switch_guard
                     )
             return
 

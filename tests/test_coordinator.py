@@ -2133,3 +2133,117 @@ async def test_update_caches_serial_in_stable_device_id(coordinator, mock_client
     await coordinator._async_update_data()
     # MOCK_ROBOT_ID unique_id="aicu-aicgca2rychxpdkawgzu" → normalised "aicu_aicgca2rychxpdkawgzu"
     assert coordinator._stable_device_id == "aicu_aicgca2rychxpdkawgzu"
+
+
+# ── _async_clear_map_switch_guard ─────────────────────────────────────
+
+
+def _make_coordinator_with_guard(mock_client, mock_config_entry, *, map_id="3"):
+    """Return a coordinator already wired with a fake async_update_listeners."""
+    hass = MagicMock()
+    coord = RobEyeCoordinator(
+        hass=hass,
+        config_entry=mock_config_entry,
+        client=mock_client,
+        map_id=map_id,
+    )
+    coord.async_update_listeners = MagicMock()
+    return coord
+
+
+def test_clear_guard_clears_prev_and_notifies(mock_client, mock_config_entry):
+    """Normal case: guard clears _prev_committed_map_id and calls async_update_listeners."""
+    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
+    # Simulate post-map-switch state: areas fetched for map 5, old guard set to map 3
+    coord._prev_committed_map_id = "3"
+    coord._areas_fetched_for_map_id = "5"
+    coord._manual_map_id = "5"
+
+    coord._async_clear_map_switch_guard()
+
+    assert coord._prev_committed_map_id is None
+    coord.async_update_listeners.assert_called_once()
+
+
+def test_clear_guard_noop_when_already_cleared(mock_client, mock_config_entry):
+    """If _prev_committed_map_id is already None the callback is a no-op."""
+    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
+    coord._prev_committed_map_id = None
+    coord._areas_fetched_for_map_id = "5"
+    coord._manual_map_id = "5"
+
+    coord._async_clear_map_switch_guard()
+
+    coord.async_update_listeners.assert_not_called()
+
+
+def test_clear_guard_skips_when_map_changed_again(mock_client, mock_config_entry):
+    """If the user switched maps again before callback fires, skip to avoid stomping."""
+    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
+    # Guard was set when transitioning from map 3 → map 5.
+    # User then switched again to map 7 before the 1-second callback fired.
+    coord._prev_committed_map_id = "3"
+    # areas_fetched is still for map 5 (mid-fetch for map 7)
+    coord._areas_fetched_for_map_id = "5"
+    coord._manual_map_id = "7"  # active is now map 7 — mismatch with fetched
+
+    coord._async_clear_map_switch_guard()
+
+    # Guard must NOT be cleared — the pending switch to map 7 will handle it
+    assert coord._prev_committed_map_id == "3"
+    coord.async_update_listeners.assert_not_called()
+
+
+def test_clear_guard_skips_when_areas_not_yet_fetched(mock_client, mock_config_entry):
+    """If _areas_fetched_for_map_id is None the coordinator hasn't seen the new map yet."""
+    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
+    coord._prev_committed_map_id = "3"
+    coord._areas_fetched_for_map_id = None  # fetch not complete
+    coord._manual_map_id = "5"
+
+    coord._async_clear_map_switch_guard()
+
+    assert coord._prev_committed_map_id == "3"
+    coord.async_update_listeners.assert_not_called()
+
+
+def test_clear_guard_uses_map_id_when_no_manual_override(mock_client, mock_config_entry):
+    """Falls back to coord.map_id when _manual_map_id is falsy."""
+    coord = _make_coordinator_with_guard(mock_client, mock_config_entry, map_id="5")
+    coord._prev_committed_map_id = "3"
+    coord._areas_fetched_for_map_id = "5"
+    coord._manual_map_id = None  # no manual override → uses self.map_id ("5")
+
+    coord._async_clear_map_switch_guard()
+
+    assert coord._prev_committed_map_id is None
+    coord.async_update_listeners.assert_called_once()
+
+
+def test_map_available_for_returns_true_during_grace_period(mock_client, mock_config_entry):
+    """Old-map entities remain available while _prev_committed_map_id is set."""
+    coord = _make_coordinator_with_guard(mock_client, mock_config_entry, map_id="5")
+    coord._prev_committed_map_id = "3"
+    coord._manual_map_id = "5"
+    coord._areas_fetched_for_map_id = "5"
+    coord.data = {}
+
+    assert coord.map_available_for("3") is True   # old map — grace period active
+    assert coord.map_available_for("5") is True   # new/active map
+    assert coord.map_available_for("9") is False  # unrelated map
+
+
+def test_map_available_for_false_after_guard_cleared(mock_client, mock_config_entry):
+    """After clear_guard runs, old-map entities become unavailable."""
+    coord = _make_coordinator_with_guard(mock_client, mock_config_entry, map_id="5")
+    coord._prev_committed_map_id = "3"
+    coord._manual_map_id = "5"
+    coord._areas_fetched_for_map_id = "5"
+    coord.data = {}
+
+    # Guard fires
+    coord._async_clear_map_switch_guard()
+
+    assert coord._prev_committed_map_id is None
+    assert coord.map_available_for("3") is False  # old map no longer in grace period
+    assert coord.map_available_for("5") is True   # new/active map still available
