@@ -260,12 +260,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 coordinator.robot_info,
                 manager=dashboard_manager,
                 device_id=coordinator.device_id,
-                active_map_id=coordinator.active_map_id,
+                active_map_id=coordinator.committed_active_map_id,
                 friendly_name=friendly_name,
                 available_maps=coordinator.available_maps,
                 schedule_entries=_schedule_for_map(
                     coordinator.schedule.get("schedule"),
-                    coordinator.active_map_id,
+                    coordinator.committed_active_map_id,
                 ),
             )
         )
@@ -285,12 +285,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 coordinator.robot_info,
                 manager=dashboard_manager,
                 device_id=coordinator.device_id,
-                active_map_id=coordinator.active_map_id,
+                active_map_id=coordinator.committed_active_map_id,
                 friendly_name=friendly_name,
                 available_maps=coordinator.available_maps,
                 schedule_entries=_schedule_for_map(
                     coordinator.schedule.get("schedule"),
-                    coordinator.active_map_id,
+                    coordinator.committed_active_map_id,
                 ),
             )
         )
@@ -310,6 +310,18 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     # because the lock-protected save already waits for entities to settle.
     @callback
     def _on_areas_changed(map_id: str) -> None:
+        # Only rebuild when areas changed for the currently committed map.
+        # Inactive-map refreshes (600 s cycle) carry a different map_id and
+        # must not trigger a spurious save: coordinator.areas always returns
+        # the committed map's rooms, so an inactive-map signal would rebuild
+        # the dashboard with stale committed-map areas but fresh timestamps,
+        # causing an unnecessary Lovelace reload with no content change.
+        if map_id != coordinator.committed_active_map_id:
+            LOGGER.debug(
+                "Areas changed for inactive map %s (committed=%s) — skipping dashboard rebuild",
+                map_id, coordinator.committed_active_map_id,
+            )
+            return
         LOGGER.debug("Areas changed for map %s — invalidating dashboard hash and triggering rebuild", map_id)
         dashboard_manager.invalidate()
 
@@ -329,12 +341,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                     robot_info=coordinator.robot_info,
                     manager=dashboard_manager,
                     device_id=coordinator.device_id,
-                    active_map_id=coordinator.active_map_id,
+                    active_map_id=coordinator.committed_active_map_id,
                     friendly_name=friendly_name,
                     available_maps=coordinator.available_maps,
                     schedule_entries=_schedule_for_map(
                         coordinator.schedule.get("schedule"),
-                        coordinator.active_map_id,
+                        coordinator.committed_active_map_id,
                     ),
                 )
 
@@ -414,12 +426,12 @@ async def _async_initial_dashboard(
             coordinator.robot_info,
             manager=dashboard_manager,
             device_id=coordinator.device_id,
-            active_map_id=coordinator.active_map_id,
+            active_map_id=coordinator.committed_active_map_id,
             friendly_name=friendly_name,
             available_maps=coordinator.available_maps,
             schedule_entries=_schedule_for_map(
                 coordinator.schedule.get("schedule"),
-                coordinator.active_map_id,
+                coordinator.committed_active_map_id,
             ),
         )
 
