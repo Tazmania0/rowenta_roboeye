@@ -288,7 +288,7 @@ def test_active_map_sensor_exists():
 
 def test_active_map_sensor_shows_map_name():
     coord = _make_coordinator()
-    coord.active_map_id_for_display = "3"
+    coord.active_map_id = "3"
     coord.available_maps = [
         {"map_id": "3", "display_name": "Ground Floor"},
         {"map_id": "4", "display_name": "First Floor"},
@@ -299,7 +299,7 @@ def test_active_map_sensor_shows_map_name():
 
 def test_active_map_sensor_falls_back_when_no_name():
     coord = _make_coordinator()
-    coord.active_map_id_for_display = "4"
+    coord.active_map_id = "4"
     coord.available_maps = []
     result = _resolve_active_map_name(coord)
     assert result == "Map 4"
@@ -307,47 +307,22 @@ def test_active_map_sensor_falls_back_when_no_name():
 
 def test_active_map_sensor_none_when_empty_id():
     coord = _make_coordinator()
-    coord.active_map_id_for_display = ""
+    coord.active_map_id = ""
     result = _resolve_active_map_name(coord)
     assert result is None
 
 
-def test_active_map_sensor_reflects_display_id_after_grace_period():
-    """Sensor shows new map after grace period clears (_prev_committed_map_id = None).
-
-    active_map_id_for_display returns the same value as active_map_id once the
-    grace period has expired, so the sensor naturally advances to the new map.
-    """
+def test_active_map_sensor_shows_new_map_immediately():
+    """Sensor shows the newly selected map immediately without waiting for grace period."""
     coord = _make_coordinator()
-    coord.active_map_id_for_display = "4"  # grace period gone; display = new map
+    coord.active_map_id = "4"          # new map selected by user
     coord.available_maps = [
         {"map_id": "3", "display_name": "Ground Floor"},
         {"map_id": "4", "display_name": "First Floor"},
     ]
     result = _resolve_active_map_name(coord)
+    # Must show new map immediately, even during the grace period.
     assert result == "First Floor"
-
-
-def test_active_map_sensor_stays_on_old_map_during_grace_period():
-    """Sensor shows the OLD map while the grace period is active.
-
-    During the map-switch transition window, active_map_id_for_display returns
-    _prev_committed_map_id (old map).  The sensor therefore continues to show the
-    previous map name in the HA logbook until the new map's entities are fully
-    initialised — preventing confusing split-state entries where the sensor shows
-    the new map while old-map entities are still showing as available.
-    """
-    coord = _make_coordinator()
-    # Grace period active: active_map_id_for_display returns the OLD map.
-    coord.active_map_id_for_display = "3"   # old map (grace period active)
-    coord.active_map_id = "4"               # new map selected by user
-    coord.available_maps = [
-        {"map_id": "3", "display_name": "Ground Floor"},
-        {"map_id": "4", "display_name": "First Floor"},
-    ]
-    result = _resolve_active_map_name(coord)
-    # Must show the old map during grace period, NOT the newly selected map.
-    assert result == "Ground Floor"
 
 
 # ── Map-prefixed room sensors ────────────────────────────────────────

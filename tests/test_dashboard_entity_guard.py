@@ -527,15 +527,15 @@ def _make_registry_mock(
     return ent_reg
 
 
-def test_registered_accepts_registry_enabled_entity_not_yet_in_states():
-    """Entities enabled in the registry but not yet in hass.states are accepted.
+def test_registered_rejects_registry_enabled_entity_not_yet_in_states():
+    """Entities enabled in the registry but not yet in hass.states are NOT accepted.
 
-    When the user switches back to a previously-visited map,
-    async_enable_room_entities_for_map() sets disabled_by=None synchronously
-    inside the SIGNAL_AREAS_UPDATED callback, but HA takes 1-2 event-loop
-    ticks to reload the entity into hass.states.  The guard must not time out
-    waiting for the states-propagation step — an enabled registry entry is
-    sufficient proof that the entity is coming.
+    The registry fallback was removed to prevent premature dashboard saves.
+    async_enable_room_entities_for_map() may set disabled_by=None before
+    async_add_entities has written the entity to the state machine.  Accepting
+    registry presence at that point causes Lovelace to show the raw entity_id
+    as an unknown row until the next browser refresh.  Only hass.states
+    presence is required.
     """
     eids = _all_room_eids("dev", "3", 5)
     hass = _make_hass_with_states(set())  # nothing in states yet
@@ -545,7 +545,7 @@ def test_registered_accepts_registry_enabled_entity_not_yet_in_states():
         return_value=_make_registry_mock(enabled_eids=eids, disabled_eids=set()),
     ):
         rooms = [{"id": 5, "name": "Kitchen"}]
-        assert _room_entities_registered(hass, "dev", "3", rooms) is True
+        assert _room_entities_registered(hass, "dev", "3", rooms) is False
 
 
 def test_registered_rejects_still_disabled_registry_entry():
@@ -582,16 +582,17 @@ def test_registered_rejects_entity_absent_from_registry():
         assert _room_entities_registered(hass, "dev", "3", rooms) is False
 
 
-def test_registered_accepts_mixed_states_and_registry():
-    """Entities partly in hass.states, partly enabled in registry — guard passes.
+def test_registered_rejects_mixed_states_and_registry():
+    """Entities partly in hass.states, partly only in registry — guard blocks.
 
-    Mid-reload snapshot: fast entities (e.g. switch) may already appear in
-    hass.states while slower ones (e.g. sensor) are still pending but are
-    already enabled in the registry by async_enable_room_entities_for_map().
+    The registry fallback was removed: all entities must be in hass.states.
+    A partial hass.states match (some entities ready, some only in registry)
+    must return False to prevent saving a dashboard with entity IDs that
+    Lovelace cannot yet resolve.
     """
     eids = sorted(_all_room_eids("dev", "3", 5))
-    in_states = set(eids[:5])
-    in_registry = set(eids[5:])
+    in_states = set(eids[:5])      # first 5 in hass.states
+    in_registry = set(eids[5:])   # remaining only in registry, not states
 
     hass = _make_hass_with_states(in_states)
 
@@ -600,7 +601,7 @@ def test_registered_accepts_mixed_states_and_registry():
         return_value=_make_registry_mock(enabled_eids=in_registry, disabled_eids=set()),
     ):
         rooms = [{"id": 5, "name": "Kitchen"}]
-        assert _room_entities_registered(hass, "dev", "3", rooms) is True
+        assert _room_entities_registered(hass, "dev", "3", rooms) is False
 
 
 def test_registered_rejects_when_one_entity_still_disabled_in_registry():

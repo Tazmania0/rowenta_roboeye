@@ -2255,15 +2255,14 @@ def test_map_available_for_false_after_guard_cleared(mock_client, mock_config_en
 def test_clear_guard_reschedules_when_entities_not_in_states(mock_client, mock_config_entry):
     """Guard reschedules when new-map button entities are missing from hass.states."""
     coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    # Non-empty areas so _new_map_entities_ready() actually checks hass.states
-    coord.data = {DATA_AREAS: {"areas": [{"id": 7}]}}
+    # Named, non-blocking area so _new_map_entities_ready() checks hass.states
+    coord.data = {DATA_AREAS: {"areas": [
+        {"id": 7, "area_meta_data": '{"name":"Kitchen"}'}
+    ]}}
     coord._prev_committed_map_id = "3"
     coord._areas_fetched_for_map_id = "5"
     coord._manual_map_id = "5"
-    # Entity not in states; default MagicMock registry returns entry with
-    # disabled_by as a MagicMock (truthy → considered "disabled"), so
-    # _new_map_entities_ready() returns False.
-    coord.hass.states.get.return_value = None
+    coord.hass.states.get.return_value = None  # entity not in states
 
     coord._async_clear_map_switch_guard()
 
@@ -2276,7 +2275,9 @@ def test_clear_guard_reschedules_when_entities_not_in_states(mock_client, mock_c
 def test_clear_guard_clears_when_entity_in_states(mock_client, mock_config_entry):
     """Guard clears immediately when new-map button entity is found in hass.states."""
     coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    coord.data = {DATA_AREAS: {"areas": [{"id": 7}]}}
+    coord.data = {DATA_AREAS: {"areas": [
+        {"id": 7, "area_meta_data": '{"name":"Kitchen"}'}
+    ]}}
     coord._prev_committed_map_id = "3"
     coord._areas_fetched_for_map_id = "5"
     coord._manual_map_id = "5"
@@ -2289,36 +2290,37 @@ def test_clear_guard_clears_when_entity_in_states(mock_client, mock_config_entry
     coord.async_update_listeners.assert_called_once()
 
 
-def test_clear_guard_clears_when_entity_in_registry_and_enabled(mock_client, mock_config_entry):
-    """Guard clears when entity is registered with disabled_by=None (re-enabling transition)."""
-    from unittest.mock import patch
+def test_clear_guard_reschedules_when_entity_in_registry_but_not_states(mock_client, mock_config_entry):
+    """Guard reschedules when entity is in registry but not yet in hass.states.
 
+    The registry fallback was removed to prevent premature dashboard saves:
+    async_add_entities may not have run yet even though the registry entry
+    is enabled, so accepting registry presence would cause Lovelace to show
+    the raw entity_id as an unknown row.
+    """
     coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    coord.data = {DATA_AREAS: {"areas": [{"id": 7}]}}
+    coord.data = {DATA_AREAS: {"areas": [
+        {"id": 7, "area_meta_data": '{"name":"Kitchen"}'}
+    ]}}
     coord._prev_committed_map_id = "3"
     coord._areas_fetched_for_map_id = "5"
     coord._manual_map_id = "5"
     coord.hass.states.get.return_value = None  # not in states yet
 
-    # Entity is registered with disabled_by=None → considered ready
-    mock_entry = MagicMock()
-    mock_entry.disabled_by = None
-    mock_registry = MagicMock()
-    mock_registry.async_get.return_value = mock_entry
+    coord._async_clear_map_switch_guard()
 
-    # Patch er in the coordinator module to avoid contaminating the global mock
-    with patch("custom_components.rowenta_roboeye.coordinator.er") as mock_er:
-        mock_er.async_get.return_value = mock_registry
-        coord._async_clear_map_switch_guard()
-
-    assert coord._prev_committed_map_id is None
-    coord.async_update_listeners.assert_called_once()
+    # Guard must stay active — only hass.states presence is accepted
+    assert coord._prev_committed_map_id == "3"
+    coord.async_update_listeners.assert_not_called()
+    coord.hass.loop.call_later.assert_called_with(0.5, coord._async_clear_map_switch_guard)
 
 
 def test_clear_guard_clears_after_max_attempts_timeout(mock_client, mock_config_entry):
     """Guard clears after 60 attempts even if entities never appear (hard timeout)."""
     coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    coord.data = {DATA_AREAS: {"areas": [{"id": 7}]}}
+    coord.data = {DATA_AREAS: {"areas": [
+        {"id": 7, "area_meta_data": '{"name":"Kitchen"}'}
+    ]}}
     coord._prev_committed_map_id = "3"
     coord._areas_fetched_for_map_id = "5"
     coord._manual_map_id = "5"

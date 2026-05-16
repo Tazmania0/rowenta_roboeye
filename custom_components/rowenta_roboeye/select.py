@@ -484,13 +484,12 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
     def current_option(self) -> str | None:
         # Always rebuild _name_to_id here: HA calls current_option before options
         # in state assembly, so _name_to_id could be stale and cause a flicker.
-        # Use active_map_id_for_display instead of active_map_id so the selector
-        # stays on the OLD map during the map-switch grace period.  It only advances
-        # to the new map once _prev_committed_map_id is cleared — i.e. after the
-        # new map's room entities are initialised — so the "Active map" card and the
-        # room-entity cards in the dashboard update in sync.
+        # Use active_map_id directly so the selector immediately confirms the
+        # user's selection.  Old-map entities remain available during the grace
+        # period via coordinator.map_available_for(); the map_switch_pending
+        # attribute signals the in-progress transition to automations.
         self._build_options()
-        active_id = self.coordinator.active_map_id_for_display
+        active_id = self.coordinator.active_map_id
         for name, map_id in self._name_to_id.items():
             if map_id == active_id:
                 return name
@@ -498,7 +497,9 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
 
     @property
     def extra_state_attributes(self) -> dict:
-        if self.coordinator.active_map_id_for_display != self.coordinator.active_map_id:
+        # _prev_committed_map_id is non-None while new-map entities are being
+        # created; expose the flag so automations can detect the transition.
+        if self.coordinator._prev_committed_map_id is not None:
             return {"map_switch_pending": True}
         return {}
 
