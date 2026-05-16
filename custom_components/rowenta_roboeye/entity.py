@@ -372,7 +372,7 @@ def async_remove_stale_room_entities(
     if not current_area_ids:
         return set()
 
-    active_map_id = coordinator.active_map_id
+    active_map_id = coordinator.committed_active_map_id
     current_strs = {str(x) for x in current_area_ids}
     ent_reg = er.async_get(hass)
     removed: set = set()

@@ -77,7 +77,7 @@ async def _async_sync_room_selection_booleans(
     import json as _json
 
     device_id = coordinator.device_id
-    map_id = coordinator.active_map_id
+    map_id = coordinator.committed_active_map_id
     areas = coordinator.areas
 
     # Collect all named, non-blocking rooms
@@ -277,7 +277,14 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     # Regenerate dashboard when maps are deleted so the floor selector
     # reflects the updated map list immediately.
     @callback
-    def _on_maps_updated(_deleted_map_ids: set[str]) -> None:
+    def _on_maps_updated(payload) -> None:
+        added = payload.get("added", set()) if isinstance(payload, dict) else set()
+        removed = payload.get("removed", set()) if isinstance(payload, dict) else payload
+        if removed:
+            LOGGER.info("Maps removed: %s", removed)
+            dashboard_manager.invalidate()
+        if added:
+            LOGGER.info("Maps added: %s — entities will be created when areas arrive", added)
         hass.async_create_task(
             async_create_dashboard(
                 hass,

@@ -107,7 +107,7 @@ def _resolve_active_map_name(coordinator: RobEyeCoordinator) -> str | None:
 
     Returns None until /get/maps has been fetched at least once.
     """
-    active_id = coordinator.active_map_id
+    active_id = coordinator.committed_active_map_id
     if not active_id:
         return None
 
@@ -481,8 +481,9 @@ async def async_setup_entry(
             async_remove_duplicate_room_entities(hass, config_entry, "sensor", canonical_uids)
 
     @callback
-    def _async_on_maps_updated(deleted_map_ids: set[str]) -> None:
-        """Called when maps are deleted from the device."""
+    def _async_on_maps_updated(payload) -> None:
+        """Called when maps are added/deleted from the device."""
+        deleted_map_ids = payload.get("removed", set()) if isinstance(payload, dict) else payload
         removed = async_remove_entities_for_deleted_maps(
             hass, config_entry, "sensor", deleted_map_ids
         )
@@ -635,7 +636,7 @@ class RobEyeScheduleSensor(RobEyeEntity, SensorEntity):
         if not isinstance(raw_list, list):
             return []
 
-        active_map = self.coordinator.active_map_id
+        active_map = self.coordinator.committed_active_map_id
         result = []
         for item in raw_list:
             if not isinstance(item, dict):
@@ -763,7 +764,7 @@ class RobEyeSelectedRoomCountSensor(RobEyeEntity, SensorEntity):
     @property
     def native_value(self) -> int:
         device_id = self.coordinator.device_id
-        map_id = self.coordinator.active_map_id
+        map_id = self.coordinator.committed_active_map_id
         count = 0
         for area in self.coordinator.areas:
             area_id = area.get("id")
@@ -814,7 +815,7 @@ class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
         # When map_id is provided explicitly, use it (recreating stub entities
         # for inactive maps from the registry).  Otherwise bind to the
         # currently active map (the normal live-creation path).
-        _map = map_id if map_id is not None else coordinator.active_map_id
+        _map = map_id if map_id is not None else coordinator.committed_active_map_id
         self._map_id = _map
         self._attr_unique_id = (
             f"room_{area_id}_map{_map}_{unique_suffix}_{coordinator.device_id}"

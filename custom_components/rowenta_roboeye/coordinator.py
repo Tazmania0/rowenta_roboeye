@@ -274,16 +274,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ── Active map tracking ─────────────────────────────────────────────
 
     @property
-    def active_map_id(self) -> str:
-        """Runtime map ID: manual HA selection > setup-time config map_id.
-
-        Always follows what the user has configured in HA.  The device's own
-        /get/map_status is intentionally ignored here — the native app can
-        change the active floor at any time and HA must not silently follow it.
-        """
-        return self._manual_map_id or self.map_id
-
-    @property
     def committed_active_map_id(self) -> str:
         """Single source of truth for entity availability.
 
@@ -414,6 +404,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "Pre-fetched areas for map %s (%d areas)",
                     mid, len(blob["areas"]),
                 )
+        self._known_map_ids = {
+            str(entry.get("map_id"))
+            for entry in maps_blob.get("maps", [])
+            if str(entry.get("permanent_flag", "")).strip().lower() == "true"
+            and entry.get("map_id") is not None
+        }
+        LOGGER.debug("async_load_all_map_areas: known permanent maps = %s", self._known_map_ids)
+
         # Mirror active map areas into legacy DATA_AREAS
         if self._committed_active_map_id in self._areas_by_map:
             if self.data is None:
@@ -522,7 +520,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     data.get(DATA_SEEN_POLYGON, {})
                 )
                 self._last_session_map_id  = str(
-                    self._last_session_grid.get("map_id", self.active_map_id)
+                    self._last_session_grid.get("map_id", self.committed_active_map_id)
                 )
                 self._session_complete = True
                 self._clean_session_start_time = None
@@ -689,7 +687,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     LOGGER.debug("get_map_status unavailable, skipping")
                 try:
                     data[DATA_MAPS] = await self.client.get_maps()
-                    self._check_for_deleted_maps(data[DATA_MAPS])
+                    self._async_handle_map_changes(data[DATA_MAPS])
                 except CannotConnect:
                     LOGGER.debug("get_maps unavailable, skipping")
                 self._last_maps = now
@@ -698,7 +696,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Build the set of map IDs to consider: all previously cached maps
             # plus the currently active map (in case it was never cached).
             _active_map = self._manual_map_id or self.map_id
-            _maps_to_refresh: set[str] = set(self._areas_by_map.keys()) | {_active_map}
+            _maps_to_refresh: set[str] = (
+                set(self._areas_by_map.keys())
+                | set(self._known_map_ids)
+                | {_active_map}
+            )
 
             for _mid in _maps_to_refresh:
                 _is_active_map = _mid == _active_map
@@ -899,16 +901,17 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # _async_update_data (the per-map areas loop) so that each map's signal
     # carries the map_id.  _check_for_deleted_maps is kept for map deletion.
 
-    def _check_for_deleted_maps(self, maps_blob: dict) -> None:
-        """Detect permanent maps that have been deleted from the device.
+    def _async_handle_map_changes(self, maps_blob: dict) -> None:
+        """Detect added/removed permanent maps and dispatch SIGNAL_MAPS_UPDATED.
 
-        Fires SIGNAL_MAPS_UPDATED with the set of deleted map_id strings so
-        platform listeners can purge entities that belong to those maps from
-        both the entity registry and the in-memory tracking dict.
+        Payload is a dict {"added": {...}, "removed": {...}} so handlers can
+        react to both events from one signal. Empty sets are valid (e.g. the
+        initial population fires {added: ..., removed: set()}).
 
-        A guard prevents false positives: if the API returns an empty list the
-        deletion is skipped — that is more likely a transient network error than
-        a real wipe of all maps.
+        For added maps: schedules a /get/areas fetch on the next coordinator
+        tick (handled by _maps_to_refresh in _async_update_data).
+        For removed maps: clears cached areas immediately so platform
+        listeners can purge their entity registry entries deterministically.
         """
         maps_list = (
             maps_blob.get("maps", []) if isinstance(maps_blob, dict) else []
@@ -916,32 +919,54 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         current_ids: set[str] = {
             str(m["map_id"])
             for m in maps_list
-            if isinstance(m, dict) and m.get("map_id") is not None and m.get("permanent")
+            if isinstance(m, dict)
+            and m.get("map_id") is not None
+            and str(m.get("permanent_flag", "")).strip().lower() == "true"
         }
 
         if not current_ids:
-            # Empty result — transient API error; do nothing.
+            # Empty response — transient API error; do nothing.
             return
 
+        # First population — seed and return (handled at setup by
+        # async_load_all_map_areas, but kept as a safety net).
         if not self._known_map_ids:
             self._known_map_ids = current_ids
             return
 
-        deleted_ids = self._known_map_ids - current_ids
-        if deleted_ids:
-            LOGGER.info(
-                "RobEye: maps deleted from device — %s, signalling platforms",
-                deleted_ids,
-            )
-            self._known_map_ids = current_ids
-            self.hass.loop.call_soon(
-                async_dispatcher_send,
-                self.hass,
-                f"{SIGNAL_MAPS_UPDATED}_{self.config_entry.entry_id}",
-                deleted_ids,
-            )
-        else:
-            self._known_map_ids = current_ids
+        added_ids = current_ids - self._known_map_ids
+        removed_ids = self._known_map_ids - current_ids
+
+        if not added_ids and not removed_ids:
+            return
+
+        if removed_ids:
+            LOGGER.info("RobEye: maps removed from device — %s", removed_ids)
+            for mid in removed_ids:
+                self._areas_by_map.pop(mid, None)
+                self._known_area_ids_by_map.pop(mid, None)
+                self._areas_fetched_at.pop(mid, None)
+
+            if self._committed_active_map_id in removed_ids:
+                fallback = next(iter(current_ids - removed_ids), self.map_id)
+                LOGGER.warning(
+                    "RobEye: active map %s was deleted — falling back to %s",
+                    self._committed_active_map_id, fallback,
+                )
+                self._manual_map_id = fallback
+                self._committed_active_map_id = fallback
+
+        if added_ids:
+            LOGGER.info("RobEye: maps added to device — %s (will fetch areas next tick)", added_ids)
+
+        self._known_map_ids = current_ids
+
+        self.hass.loop.call_soon(
+            async_dispatcher_send,
+            self.hass,
+            f"{SIGNAL_MAPS_UPDATED}_{self.config_entry.entry_id}",
+            {"added": added_ids, "removed": removed_ids},
+        )
 
     # ── Convenience properties ────────────────────────────────────────
 
@@ -1915,7 +1940,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return {
                 "status": "active",
                 "label": "Return to base",
-                "map_name": self._resolve_map_name(self.active_map_id),
+                "map_name": self._resolve_map_name(self.committed_active_map_id),
             }
 
         area_ids_raw = self.status.get("area_ids")
@@ -1938,7 +1963,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         map_id = str(
             self.status.get("map_id")
             or self.status.get("operation_map_id")
-            or self.active_map_id
+            or self.committed_active_map_id
         )
         return {
             "status": "active",

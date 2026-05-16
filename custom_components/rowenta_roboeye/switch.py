@@ -217,7 +217,8 @@ async def async_setup_entry(
             known_task_ids.update(new_task_ids)
 
     @callback
-    def _on_maps_updated(deleted_map_ids: set[str]) -> None:
+    def _on_maps_updated(payload) -> None:
+        deleted_map_ids = payload.get("removed", set()) if isinstance(payload, dict) else payload
         removed = async_remove_entities_for_deleted_maps(
             hass, config_entry, "switch", deleted_map_ids
         )
@@ -406,7 +407,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         # Always include cleaning_parameter_set so the firmware doesn't reset it.
         await self.coordinator.async_send_command(
             self.coordinator.client.modify_area,
-            map_id=self.coordinator.active_map_id,
+            map_id=self._map_id,
             area_id=self._area_id,
             cleaning_parameter_set=self._current_room_fan_speed_raw(),
             strategy_mode="deep",
@@ -420,7 +421,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         # Always include cleaning_parameter_set so the firmware doesn't reset it.
         await self.coordinator.async_send_command(
             self.coordinator.client.modify_area,
-            map_id=self.coordinator.active_map_id,
+            map_id=self._map_id,
             area_id=self._area_id,
             cleaning_parameter_set=self._current_room_fan_speed_raw(),
             strategy_mode="normal",

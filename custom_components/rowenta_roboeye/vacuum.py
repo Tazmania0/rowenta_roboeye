@@ -319,7 +319,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
 
         LOGGER.debug("clean_room: room_ids=%s fan_speed=%s deep_clean=%s", room_ids, fan_speed, deep_clean)
         area_ids_str = ",".join(str(r) for r in room_ids)
-        map_id: str = self.coordinator.active_map_id
+        map_id: str = self.coordinator.committed_active_map_id
 
         if fan_speed is not None:
             raw = FAN_SPEED_REVERSE_MAP.get(fan_speed, "2")
