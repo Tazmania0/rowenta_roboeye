@@ -86,32 +86,25 @@ def _room_entities_registered(
     active_map_id: str,
     rooms: list[dict[str, Any]],
 ) -> bool:
-    """Return True when every per-room entity referenced by the dashboard has
-    been registered in hass.states (entity ID is known to HA).
+    """Return True when every per-room entity referenced by the dashboard is
+    present in hass.states (entity ID is known to HA).
 
     The guard prevents saving a dashboard that references entity IDs that do
     not yet exist — e.g. right after a map switch when SIGNAL_AREAS_UPDATED
     has fired but the four async_add_entities calls (sensor, button, select,
-    switch) have not yet completed their entity-setup tasks.
+    switch) have not yet completed their entity-setup tasks.  Entities that
+    exist but are transiently "unavailable" are accepted: Lovelace
+    auto-refreshes when the entity transitions to a live value.
 
-    Entities that exist but are transiently "unavailable" (CoordinatorEntity
-    initial write, RestoreEntity async_get_last_state() yield) are accepted:
-    Lovelace auto-refreshes card state when the entity transitions to a live
-    value, so a brief unavailable flash is far preferable to timing out and
-    leaving the dashboard with the previous map's entity IDs.
-
-    When an entity is absent from hass.states the entity registry is consulted
-    as a fallback.  async_enable_room_entities_for_map() updates disabled_by
-    synchronously inside the SIGNAL_AREAS_UPDATED callback, but HA needs one
-    or two event-loop ticks before the re-enabled entity appears in hass.states.
-    An entity that is registered with disabled_by=None is considered ready —
-    this avoids an 8-second timeout when switching back to a previously-visited
-    map whose entities were simply disabled (not removed) while inactive.
+    Only hass.states presence is checked (no registry fallback) to prevent
+    premature saves when async_enable_room_entities_for_map() has cleared
+    disabled_by in the registry but async_add_entities has not yet written
+    the entity to the state machine — which would cause Lovelace to display
+    the raw entity_id as an unknown row until the next browser refresh.
     """
     if not rooms or not active_map_id:
         return True
     _m = f"map{active_map_id}_"
-    _ent_reg = er.async_get(hass)
     for room in rooms:
         rid = room.get("id")
         if rid is None:
@@ -128,14 +121,7 @@ def _room_entities_registered(
             room_selection_entity_id(device_id, active_map_id, str(rid)),
         )
         for eid in eids:
-            if hass.states.get(eid) is not None:
-                continue
-            # Entity not yet in hass.states: accept it if it is registered and
-            # enabled (disabled_by=None).  This covers the re-enabling transition
-            # where async_enable_room_entities_for_map() has already cleared
-            # disabled_by in the registry but HA hasn't reloaded the entity yet.
-            entry = _ent_reg.async_get(eid)
-            if entry is None or entry.disabled_by is not None:
+            if hass.states.get(eid) is None:
                 return False
     return True
 

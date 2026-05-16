@@ -448,12 +448,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _async_clear_map_switch_guard(self) -> None:
         """Clear the map-switch grace period once new-map entities are visible.
 
-        Polls hass.states every 0.5 s until every clean-room button entity
-        for the new map appears (proxy for all per-room entity types being
-        ready).  Only then clears _prev_committed_map_id so that
-        active_map_id_for_display — and therefore the Active Map select
-        entity — stays on the OLD map name until room cards in the Lovelace
-        dashboard have actually been rebuilt for the new map.
+        Polls hass.states every 0.5 s until every named, non-blocking
+        clean-room button for the new map appears (proxy for all per-room
+        entity types being ready).  Only then clears _prev_committed_map_id
+        so that old-map entities flip to unavailable only after new-map
+        entities are live in the state machine.
 
         A hard timeout of 30 s (60 polls × 0.5 s) guards against HA
         instances where entity setup is slow; the start-of-tick cleanup in
@@ -500,9 +499,13 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Return True when per-room button entities for the new map are in hass.states.
 
         Uses the clean-room button as a proxy: if a button exists for every
-        non-None area, all other per-room entity types are assumed ready since
-        they are created in the same async_add_entities call.  Returns True
-        immediately when there are no rooms so the guard always clears.
+        named, non-blocking area, all other per-room entity types are assumed
+        ready since they are created in the same async_add_entities call.
+        Returns True immediately when there are no actionable rooms so the
+        guard always clears.  Only hass.states presence is checked — no
+        registry fallback — to avoid clearing the guard before async_add_entities
+        has completed (which would allow the dashboard to save with entity IDs
+        that Lovelace would display as unknown rows).
         """
         map_id = self._areas_fetched_for_map_id
         if not map_id:
@@ -511,18 +514,26 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not areas:
             return True  # no rooms — nothing to wait for
         device_id = self.device_id
-        _ent_reg = er.async_get(self.hass)
+        found_any = False
         for area in areas:
             area_id = area.get("id")
             if area_id is None:
                 continue
-            eid = f"button.{device_id}_map{map_id}_clean_room_{area_id}"
-            if self.hass.states.get(eid) is not None:
+            if area.get("area_state") == AREA_STATE_BLOCKING:
                 continue
-            # Also accept if entity is in the registry and enabled (re-enabling
-            # transition: disabled_by was cleared but state not yet written).
-            entry = _ent_reg.async_get(eid)
-            if entry is None or entry.disabled_by is not None:
+            # Skip unnamed areas — they get no button entity
+            meta_raw = area.get("area_meta_data", "")
+            if not meta_raw:
+                continue
+            try:
+                name = json.loads(meta_raw).get("name", "").strip()
+            except Exception:
+                name = ""
+            if not name:
+                continue
+            found_any = True
+            eid = f"button.{device_id}_map{map_id}_clean_room_{area_id}"
+            if self.hass.states.get(eid) is None:
                 return False
         return True
 

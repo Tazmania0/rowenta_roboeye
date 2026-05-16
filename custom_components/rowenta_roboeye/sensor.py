@@ -106,15 +106,9 @@ def _resolve_active_map_name(coordinator: RobEyeCoordinator) -> str | None:
       non-empty map_meta_data → user name e.g. "Дружба"
       empty map_meta_data     → "Map {N}"  (1-based position in list)
 
-    Uses active_map_id_for_display (not active_map_id) so that the sensor
-    advances to the new map name in the same coordinator tick that old-map
-    entities flip to unavailable.  Without this, the sensor fires "Active map
-    changed to X" immediately on map selection while old-map entities are still
-    showing as available — producing confusing split-state logbook entries.
-
     Returns None until /get/maps has been fetched at least once.
     """
-    active_id = coordinator.active_map_id_for_display
+    active_id = coordinator.active_map_id
     if not active_id:
         return None
 

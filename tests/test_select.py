@@ -49,8 +49,9 @@ def _make_coordinator(data=None):
         {"map_id": "4", "display_name": "First Floor"},
     ]
     coord.active_map_id = "3"
-    # In steady state active_map_id_for_display == active_map_id (no switch in progress)
+    # In steady state no switch is in progress
     coord.active_map_id_for_display = "3"
+    coord._prev_committed_map_id = None
     # async_set_active_map must be an AsyncMock so it can be awaited
     coord.async_set_active_map = AsyncMock()
     # Simulate stable-state availability (no transition tracking needed in unit tests)
@@ -123,22 +124,26 @@ def test_current_option_falls_back_to_id_when_name_unknown():
     assert entity.current_option == "99"
 
 
-def test_current_option_stays_on_old_map_during_switch():
-    """During a map-switch transition active_map_id_for_display returns the OLD map,
-    so current_option must reflect that rather than jumping to the new map."""
+def test_current_option_shows_new_map_immediately_during_switch():
+    """current_option immediately reflects the newly selected map.
+
+    The selector confirms the user's choice right away; old-map entities remain
+    available via coordinator.map_available_for() during the grace period, but
+    the selector itself should not flip back to the old name.
+    """
     coord = _make_coordinator()
-    coord.active_map_id = "4"           # new map already set on coordinator
-    coord.active_map_id_for_display = "3"  # but display still shows old map
+    coord.active_map_id = "4"           # new map selected
+    coord._prev_committed_map_id = "3"  # grace period active (old map still kept available)
     entity = _entity(coord)
     entity._build_options()
-    assert entity.current_option == "Ground Floor"
+    assert entity.current_option == "First Floor"  # shows NEW map immediately
 
 
 def test_extra_state_attributes_map_switch_pending():
     """extra_state_attributes exposes map_switch_pending=True during a transition."""
     coord = _make_coordinator()
     coord.active_map_id = "4"
-    coord.active_map_id_for_display = "3"  # old map still shown
+    coord._prev_committed_map_id = "3"  # grace period active
     entity = _entity(coord)
     assert entity.extra_state_attributes == {"map_switch_pending": True}
 
