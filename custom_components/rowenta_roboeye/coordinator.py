@@ -370,6 +370,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._committed_active_map_id = str(map_id)
             if hasattr(self, "async_update_listeners"):
                 self.async_update_listeners()
+            # Fire SIGNAL_AREAS_UPDATED so the dashboard rebuilds for the new
+            # map's rooms.  The area fetch loop only fires this signal when area
+            # IDs change; when areas are already cached the IDs are identical and
+            # the signal would be silently skipped — leaving the dashboard showing
+            # the previous map's room cards.
+            _signal = f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}"
+            self.hass.loop.call_soon(
+                async_dispatcher_send, self.hass, _signal, str(map_id)
+            )
         # Always request a refresh to pull fresh /get/areas for the new map.
         await self.async_request_refresh()
 
