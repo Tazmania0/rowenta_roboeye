@@ -13,7 +13,8 @@ def _make_coordinator(areas, areas_ready=True, map_id="3"):
     coord._areas_ready = areas_ready
     coord.device_id = "test_device"
     coord.active_map_id = map_id
-    coord.areas_map_id = map_id
+    coord.committed_active_map_id = map_id
+    coord.areas_for = lambda mid: list(coord.areas)
     return coord
 
 
@@ -167,7 +168,7 @@ def test_build_room_sensor_entities_returns_dict():
     config_entry = MagicMock()
     config_entry.entry_id = "test_entry"
 
-    flat, by_area = _build_room_sensor_entities(coord, config_entry, coord.areas, set())
+    flat, by_area = _build_room_sensor_entities(coord, config_entry, "3", coord.areas, set())
 
     assert isinstance(by_area, dict), "by_area must be a dict"
     assert "10" in by_area, "area_id 10 must be a key in by_area"
@@ -186,7 +187,7 @@ def test_build_room_sensor_entities_skips_known():
     config_entry.entry_id = "test_entry"
 
     # Pre-populate already_known with area 10 (string, as produced by the function)
-    flat, by_area = _build_room_sensor_entities(coord, config_entry, coord.areas, {"10"})
+    flat, by_area = _build_room_sensor_entities(coord, config_entry, "3", coord.areas, {"10"})
 
     assert "10" not in by_area, "area 10 must be skipped (already known)"
     assert "12" in by_area, "area 12 must be included (new)"
@@ -204,7 +205,7 @@ def test_build_room_button_entities_returns_list():
     config_entry = MagicMock()
     config_entry.entry_id = "test_entry"
 
-    entities, ids = _build_room_button_entities(coord, config_entry, coord.areas, set())
+    entities, ids = _build_room_button_entities(coord, config_entry, "3", coord.areas, set())
 
     assert isinstance(ids, list), "ids must be a list (ordered)"
     assert len(entities) == len(ids), "entities and ids must have same length"
@@ -224,7 +225,7 @@ def test_build_room_button_entities_skips_blocking():
     config_entry = MagicMock()
     config_entry.entry_id = "test_entry"
 
-    entities, ids = _build_room_button_entities(coord, config_entry, coord.areas, set())
+    entities, ids = _build_room_button_entities(coord, config_entry, "3", coord.areas, set())
 
     assert "10" in ids
     assert "12" not in ids, "blocking area must be skipped"
@@ -905,13 +906,3 @@ def test_areas_commit_generation_starts_at_zero():
     coord = MagicMock(spec=RobEyeCoordinator)
     coord._areas_commit_generation = 0
     assert coord._areas_commit_generation == 0
-
-
-def test_areas_commit_generation_exposed_as_property():
-    """areas_commit_generation property returns _areas_commit_generation."""
-    from custom_components.rowenta_roboeye.coordinator import RobEyeCoordinator
-    coord = MagicMock(spec=RobEyeCoordinator)
-    coord._areas_commit_generation = 5
-    # Access via the real property on the class to confirm it delegates correctly.
-    result = RobEyeCoordinator.areas_commit_generation.fget(coord)
-    assert result == 5

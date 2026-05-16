@@ -32,8 +32,9 @@ def _make_coordinator(status=None, areas=None, device_id="dev123", active_map_id
     coord = MagicMock()
     coord.device_id = device_id
     coord.active_map_id = active_map_id
-    coord.areas_map_id = active_map_id
+    coord.committed_active_map_id = active_map_id
     coord.areas = list((areas or MOCK_AREAS)["areas"])
+    coord.areas_for = lambda mid: list((areas or MOCK_AREAS)["areas"]) if mid == active_map_id else []
     coord.status = dict(status or MOCK_STATUS)
     coord.cleaning_strategy = STRATEGY_DEFAULT
     # ha_fan_speed must be None (not a MagicMock) so the fallback to
@@ -52,8 +53,6 @@ def _make_coordinator(status=None, areas=None, device_id="dev123", active_map_id
     coord.hass.states.get = MagicMock(return_value=None)
     coord.hass.services = MagicMock()
     coord.hass.services.async_call = AsyncMock()
-    # Simulate stable-state availability (no transition tracking needed in unit tests)
-    coord.map_available_for = lambda mid: mid == coord.active_map_id
     return coord
 
 
@@ -187,7 +186,7 @@ def _make_room_button(coord=None, area_id="3", room_name="Bedroom", map_id="3"):
     object.__setattr__(btn, "_attr_unique_id", "")
     object.__setattr__(btn, "entity_id", "")
     object.__setattr__(btn, "async_write_ha_state", MagicMock())
-    RobEyeRoomCleanButton.__init__(btn, coord, entry, area_id, room_name)
+    RobEyeRoomCleanButton.__init__(btn, coord, entry, area_id, room_name, map_id)
     return btn
 
 
@@ -210,14 +209,14 @@ def test_room_button_available_same_map():
 
 
 def test_room_button_unavailable_on_map_switch():
-    # Entity becomes unavailable when active map changes away from its map.
+    # Entity becomes unavailable when committed_active_map_id changes away from its map.
     # It returns to available when the user switches back.
     coord = _make_coordinator(active_map_id="3")
     btn = _make_room_button(coord=coord)
     assert btn.available is True
-    coord.active_map_id = "4"
+    coord.committed_active_map_id = "4"
     assert btn.available is False
-    coord.active_map_id = "3"
+    coord.committed_active_map_id = "3"
     assert btn.available is True
 
 
@@ -329,7 +328,7 @@ async def test_room_button_press_falls_back_to_global_strategy():
 def test_build_room_button_entities_basic():
     coord = _make_coordinator()
     entry = _make_config_entry()
-    entities, ids = _build_room_button_entities(coord, entry, coord.areas, set())
+    entities, ids = _build_room_button_entities(coord, entry, "3", coord.areas, set())
     # MOCK_AREAS has 2 named rooms (Bedroom id=3, Kitchen id=11) and 1 no-metadata (id=99)
     assert len(entities) == 2
     names = {e._attr_name for e in entities}
@@ -340,7 +339,7 @@ def test_build_room_button_entities_basic():
 def test_build_room_button_entities_skips_no_metadata():
     coord = _make_coordinator()
     entry = _make_config_entry()
-    entities, ids = _build_room_button_entities(coord, entry, coord.areas, set())
+    entities, ids = _build_room_button_entities(coord, entry, "3", coord.areas, set())
     # area id=99 has empty area_meta_data — must be skipped
     entity_ids = {str(e._area_id) for e in entities}
     assert "99" not in entity_ids
@@ -350,7 +349,7 @@ def test_build_room_button_entities_skips_already_known():
     coord = _make_coordinator()
     entry = _make_config_entry()
     already_known = {"3"}  # area_id already added (string-normalised)
-    entities, ids = _build_room_button_entities(coord, entry, coord.areas, already_known)
+    entities, ids = _build_room_button_entities(coord, entry, "3", coord.areas, already_known)
     # Only Kitchen (id=11) should be returned
     assert len(entities) == 1
     assert entities[0]._attr_name == "Clean Kitchen"
@@ -363,19 +362,9 @@ def test_build_room_button_entities_skips_blocking_areas():
     ]
     coord = _make_coordinator(areas={"areas": areas})
     entry = _make_config_entry()
-    entities, ids = _build_room_button_entities(coord, entry, areas, set())
+    entities, ids = _build_room_button_entities(coord, entry, "3", areas, set())
     assert len(entities) == 1
     assert entities[0]._attr_name == "Clean Lounge"
-
-
-def test_build_room_button_entities_stale_map_guard():
-    """Returns nothing when areas were fetched for a different map."""
-    coord = _make_coordinator(active_map_id="3")
-    coord.areas_map_id = "4"  # stale
-    entry = _make_config_entry()
-    entities, ids = _build_room_button_entities(coord, entry, coord.areas, set())
-    assert entities == []
-    assert ids == []
 
 
 def test_build_room_button_entities_skips_invalid_json_meta():
@@ -385,7 +374,7 @@ def test_build_room_button_entities_skips_invalid_json_meta():
     ]
     coord = _make_coordinator(areas={"areas": areas})
     entry = _make_config_entry()
-    entities, ids = _build_room_button_entities(coord, entry, areas, set())
+    entities, ids = _build_room_button_entities(coord, entry, "3", areas, set())
     assert len(entities) == 1
     assert entities[0]._attr_name == "Clean Study"
 
@@ -397,7 +386,7 @@ def test_build_room_button_entities_skips_empty_name():
     ]
     coord = _make_coordinator(areas={"areas": areas})
     entry = _make_config_entry()
-    entities, ids = _build_room_button_entities(coord, entry, areas, set())
+    entities, ids = _build_room_button_entities(coord, entry, "3", areas, set())
     assert len(entities) == 1
     assert entities[0]._attr_name == "Clean Hall"
 

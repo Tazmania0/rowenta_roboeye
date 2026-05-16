@@ -26,12 +26,12 @@ def _make_coordinator(device_id="dev123", cleaning_strategy=STRATEGY_DEFAULT, ac
     coord.cleaning_strategy = cleaning_strategy
     coord.last_non_deep_strategy = last_non_deep
     coord.active_map_id = active_map_id
-    coord.areas_map_id = active_map_id
+    coord.committed_active_map_id = active_map_id
     coord.areas = []
     coord.async_send_command = AsyncMock()
     coord.client = MagicMock()
-    # Simulate stable-state availability (no transition tracking needed in unit tests)
-    coord.map_available_for = lambda mid: mid == coord.active_map_id
+    # areas_for returns areas only for the active map
+    coord.areas_for = lambda mid: coord.areas if mid == coord.committed_active_map_id else []
     return coord
 
 
@@ -62,7 +62,7 @@ def _make_room_switch(coord=None, area_id="3", room_name="Bedroom", map_id="3"):
     object.__setattr__(sw, "_attr_unique_id", "")
     object.__setattr__(sw, "entity_id", "")
     object.__setattr__(sw, "async_write_ha_state", MagicMock())
-    RobEyeRoomDeepCleanSwitch.__init__(sw, coord, entry, area_id, room_name)
+    RobEyeRoomDeepCleanSwitch.__init__(sw, coord, entry, area_id, room_name, map_id)
     return sw
 
 
@@ -268,18 +268,18 @@ async def test_room_switch_turn_on_preserves_fan_speed_from_areas():
 def test_room_switch_available_same_map():
     coord = _make_coordinator(active_map_id="3")
     sw = _make_room_switch(coord=coord, map_id="3")
-    # _map_id matches active_map_id → available (CoordinatorEntity stub returns True)
+    # _map_id matches committed_active_map_id → available (CoordinatorEntity stub returns True)
     assert sw.available is True
 
 
 def test_room_switch_unavailable_on_map_switch():
-    # Entity becomes unavailable when active map changes away from its map.
+    # Entity becomes unavailable when committed active map changes away from its map.
     coord = _make_coordinator(active_map_id="3")
     sw = _make_room_switch(coord=coord)
     assert sw.available is True
-    coord.active_map_id = "4"
+    coord.committed_active_map_id = "4"
     assert sw.available is False
-    coord.active_map_id = "3"
+    coord.committed_active_map_id = "3"
     assert sw.available is True
 
 
@@ -468,26 +468,24 @@ def test_room_switch_coordinator_update_no_change_no_overwrite():
 
 
 def test_room_switch_coordinator_update_skipped_on_map_switch():
-    """Cross-map contamination guard: areas_map_id != entity map → no sync.
+    """Cross-map contamination guard: areas_for(entity map) returns [] → no sync.
 
-    After a map switch, coordinator.areas holds the NEW map's data while the
-    old-map entity is still alive during the grace period.  If the new map has
-    an area with the same id as the old-map room, the deep-clean switch must NOT
-    read that area's strategy_mode — doing so flips _is_on and fires a spurious
+    After a map switch, coordinator.areas_for() returns [] for the old-map entity's
+    map_id while the old-map entity is still alive.  The deep-clean switch must NOT
+    read another map's area data — doing so flips _is_on and fires a spurious
     state-change event visible in the HA logbook ("Deep Clean turned on/off").
     """
-    # Entity belongs to map "3". After map switch, areas_map_id = "4" (new map).
+    # Entity belongs to map "3". After map switch, areas_for("3") returns [] (no data).
     coord = _make_coordinator(active_map_id="3")
-    coord.areas_map_id = "4"
-    # New map also happens to have area_id=3 (area IDs are not globally unique).
-    coord.areas = [{"id": 3, "strategy_mode": "deep"}]  # new map area says "deep"
+    # Simulate: new map "4" is active; areas_for("3") returns no data for old map.
+    coord.areas_for = lambda mid: []  # simulate no areas data for entity's map → no sync
     sw = _make_room_switch(coord=coord, area_id="3", map_id="3")
     sw._last_robot_strategy = "normal"  # previously synced as "normal" on old map
     sw._is_on = False
 
     sw._handle_coordinator_update()
 
-    # Must not pick up "deep" from the new map's area — _is_on stays False.
+    # Must not pick up any data — _is_on stays False.
     assert sw._is_on is False
     assert sw._last_robot_strategy == "normal"
 

@@ -97,10 +97,9 @@ def _room_entities_registered(
     auto-refreshes when the entity transitions to a live value.
 
     Only hass.states presence is checked (no registry fallback) to prevent
-    premature saves when async_enable_room_entities_for_map() has cleared
-    disabled_by in the registry but async_add_entities has not yet written
-    the entity to the state machine — which would cause Lovelace to display
-    the raw entity_id as an unknown row until the next browser refresh.
+    premature saves when async_add_entities has not yet written the entity
+    to the state machine — which would cause Lovelace to display the raw
+    entity_id as an unknown row until the next browser refresh.
     """
     if not rooms or not active_map_id:
         return True
@@ -635,26 +634,10 @@ class RobEyeDashboardManager:
 
         rooms = _extract_rooms(areas)
 
-        # Discard the rooms list when it does not belong to the currently
-        # active map.  Two cases trigger this:
-        #
-        #   1. areas_map_id is None — areas have not yet been committed for
-        #      the active map (e.g. user just switched, get_areas pending or
-        #      failed transiently this tick).
-        #   2. areas_map_id points at a different map — stale DATA_AREAS that
-        #      escaped the start-of-tick pop in _async_update_data (can happen
-        #      when the user's map switch races the in-flight tick after
-        #      _current_active was already latched).
-        #
-        # In either case the dashboard must NOT render the stale rooms: their
-        # area IDs would not match the active_map_id-prefixed entity IDs, so
-        # _room_entities_registered would loop until timeout and the previous
-        # save (still showing the OLD map's rooms) would persist in storage.
-        # Saving with rooms=[] actively replaces that stale dashboard with a
-        # transitional "No rooms discovered" view; the next successful commit
-        # invalidates and re-saves with the correct rooms.
+        # Discard the rooms list when committed_active_map_id doesn't match
+        # the requested active_map_id — areas are for a different map.
         if coordinator is not None:
-            fetched_for = getattr(coordinator, "areas_map_id", None)
+            fetched_for = coordinator.committed_active_map_id
             if fetched_for != active_map_id:
                 _LOGGER.debug(
                     "Dashboard: rooms fetched for map %s but active is %s — "

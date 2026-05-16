@@ -49,13 +49,9 @@ def _make_coordinator(data=None):
         {"map_id": "4", "display_name": "First Floor"},
     ]
     coord.active_map_id = "3"
-    # In steady state no switch is in progress
-    coord.active_map_id_for_display = "3"
-    coord._prev_committed_map_id = None
+    coord.committed_active_map_id = "3"
     # async_set_active_map must be an AsyncMock so it can be awaited
     coord.async_set_active_map = AsyncMock()
-    # Simulate stable-state availability (no transition tracking needed in unit tests)
-    coord.map_available_for = lambda mid: mid == coord.active_map_id
     return coord
 
 
@@ -108,7 +104,6 @@ def test_current_option_second_map():
     """current_option returns 'First Floor' when active map is 4."""
     coord = _make_coordinator()
     coord.active_map_id = "4"
-    coord.active_map_id_for_display = "4"
     entity = _entity(coord)
     entity._build_options()
     assert entity.current_option == "First Floor"
@@ -118,7 +113,6 @@ def test_current_option_falls_back_to_id_when_name_unknown():
     """If active map ID has no name, return the ID string directly."""
     coord = _make_coordinator()
     coord.active_map_id = "99"
-    coord.active_map_id_for_display = "99"
     entity = _entity(coord)
     entity._build_options()
     assert entity.current_option == "99"
@@ -127,31 +121,16 @@ def test_current_option_falls_back_to_id_when_name_unknown():
 def test_current_option_shows_new_map_immediately_during_switch():
     """current_option immediately reflects the newly selected map.
 
-    The selector confirms the user's choice right away; old-map entities remain
-    available via coordinator.map_available_for() during the grace period, but
-    the selector itself should not flip back to the old name.
+    The selector confirms the user's choice right away and the selector itself
+    should not flip back to the old name.
     """
     coord = _make_coordinator()
     coord.active_map_id = "4"           # new map selected
-    coord._prev_committed_map_id = "3"  # grace period active (old map still kept available)
     entity = _entity(coord)
     entity._build_options()
     assert entity.current_option == "First Floor"  # shows NEW map immediately
 
 
-def test_extra_state_attributes_map_switch_pending():
-    """extra_state_attributes exposes map_switch_pending=True during a transition."""
-    coord = _make_coordinator()
-    coord.active_map_id = "4"
-    coord._prev_committed_map_id = "3"  # grace period active
-    entity = _entity(coord)
-    assert entity.extra_state_attributes == {"map_switch_pending": True}
-
-
-def test_extra_state_attributes_idle():
-    """extra_state_attributes is empty when no map switch is in progress."""
-    entity = _entity()
-    assert entity.extra_state_attributes == {}
 
 
 # ── async_select_option ───────────────────────────────────────────────
@@ -204,10 +183,8 @@ async def test_restore_triggers_map_switch_when_different():
 
     await entity.async_added_to_hass()
 
-    # Must have called async_set_active_map with the resolved map ID "4" and
-    # skip_grace_period=True so the Active Map sensor never briefly shows the
-    # wrong map during the startup state-restore transition.
-    coord.async_set_active_map.assert_called_once_with("4", skip_grace_period=True)
+    # Must have called async_set_active_map with the resolved map ID "4".
+    coord.async_set_active_map.assert_called_once_with("4")
 
 
 @pytest.mark.asyncio
@@ -271,9 +248,8 @@ async def test_restore_populates_name_to_id_before_lookup():
 
     await entity.async_added_to_hass()
 
-    # Must resolve to numeric ID "4" and call async_set_active_map with
-    # skip_grace_period=True (state-restore path, not a live user action).
-    coord.async_set_active_map.assert_called_once_with("4", skip_grace_period=True)
+    # Must resolve to numeric ID "4" and call async_set_active_map.
+    coord.async_set_active_map.assert_called_once_with("4")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -563,18 +539,18 @@ _CONFIRMED_AREA_HOL = {
 }
 
 
-def _make_room_coordinator(active_map_id="3", areas=None, areas_map_id=None):
+def _make_room_coordinator(active_map_id="3", areas=None):
     coord = MagicMock()
     coord.device_id = "dev123"
     coord.config_entry = MagicMock()
     coord.config_entry.entry_id = "test_entry"
     coord.active_map_id = active_map_id
-    coord.areas_map_id = areas_map_id if areas_map_id is not None else active_map_id
+    coord.committed_active_map_id = active_map_id
     coord.areas = areas if areas is not None else []
     # async_send_command must be an AsyncMock so it can be awaited in select_option
     coord.async_send_command = AsyncMock()
-    # Simulate stable-state availability (no transition tracking needed in unit tests)
-    coord.map_available_for = lambda mid: mid == coord.active_map_id
+    # areas_for returns areas only for the active (committed) map
+    coord.areas_for = lambda mid: list(coord.areas) if mid == coord.committed_active_map_id else []
     return coord
 
 
@@ -621,13 +597,13 @@ def test_room_fan_speed_available_same_map():
 
 
 def test_room_fan_speed_unavailable_on_map_switch():
-    # Entity becomes unavailable when active map changes away from its map.
+    # Entity becomes unavailable when committed_active_map_id changes away from its map.
     coord = _make_room_coordinator(active_map_id="3")
     entity = _room_fan_entity(coord=coord)
     assert entity.available is True
-    coord.active_map_id = "4"
+    coord.committed_active_map_id = "4"
     assert entity.available is False
-    coord.active_map_id = "3"
+    coord.committed_active_map_id = "3"
     assert entity.available is True
 
 
@@ -888,26 +864,24 @@ def test_room_fan_speed_coordinator_update_first_read_sets_baseline():
 
 
 def test_room_fan_speed_coordinator_update_skipped_on_map_switch():
-    """Cross-map contamination guard: areas_map_id != entity map → no sync.
+    """Cross-map contamination guard: areas_for(entity map) returns [] → no sync.
 
-    After a map switch, coordinator.areas holds the NEW map's data while the
-    old-map entity is still alive during the grace period.  If the new map has
-    an area with the same id as an old-map room, the fan-speed entity must NOT
-    read that area's cleaning_parameter_set — doing so would fire a spurious
-    state-change event visible in the HA logbook.
+    After a map switch, coordinator.areas_for() returns [] for the old-map entity's
+    map_id while the old-map entity is still alive.  The fan-speed entity must NOT
+    read another map's area data — doing so would fire a spurious state-change event.
     """
-    # Entity belongs to map "3".  After map switch, areas_map_id = "4" (new map).
+    # Entity belongs to map "3".  After map switch, areas_for("3") returns [] (no data).
     old_area_id = "3"
-    coord = _make_room_coordinator(active_map_id="3", areas_map_id="4")
-    # New map also happens to have area_id=3 (IDs are not globally unique).
-    coord.areas = [{"id": 3, "cleaning_parameter_set": 2}]  # eco on new map
+    coord = _make_room_coordinator(active_map_id="3")
+    # Simulate: new map "4" is active; areas_for("3") returns no data for old map.
+    coord.areas_for = lambda mid: []  # simulate no areas data for entity's map → no sync
     entity = _room_fan_entity(coord=coord, area_id=old_area_id, map_id="3")
     entity._last_robot_raw = "3"   # previously synced as "high" on old map
     entity._selected = "high"
 
     entity._handle_coordinator_update()
 
-    # Must not pick up eco from the new map's area.
+    # Must not pick up any data — _selected stays "high".
     assert entity._selected == "high"
     assert entity._last_robot_raw == "3"
 
@@ -960,13 +934,13 @@ def test_room_strategy_available_same_map():
 
 
 def test_room_strategy_unavailable_on_map_switch():
-    # Entity becomes unavailable when active map changes away from its map.
+    # Entity becomes unavailable when committed_active_map_id changes away from its map.
     coord = _make_room_coordinator(active_map_id="3")
     entity = _room_strategy_entity(coord=coord)
     assert entity.available is True
-    coord.active_map_id = "4"
+    coord.committed_active_map_id = "4"
     assert entity.available is False
-    coord.active_map_id = "3"
+    coord.committed_active_map_id = "3"
     assert entity.available is True
 
 
@@ -1202,7 +1176,7 @@ def _make_select_coordinator(active_map_id="3"):
     coord = MagicMock()
     coord.device_id = "dev123"
     coord.active_map_id = active_map_id
-    coord.areas_map_id = active_map_id
+    coord.committed_active_map_id = active_map_id
     coord.areas = list(MOCK_AREAS["areas"])
     return coord
 
@@ -1211,7 +1185,7 @@ def test_build_room_selects_basic():
     coord = _make_select_coordinator()
     entry = MagicMock()
     entry.entry_id = "test"
-    entities, ids = _build_room_select_entities(coord, entry, coord.areas, set())
+    entities, ids = _build_room_select_entities(coord, entry, "3", coord.areas, set())
     # 2 named rooms → 2 fan speed + 2 strategy = 4 entities
     assert len(entities) == 4
 
@@ -1220,7 +1194,7 @@ def test_build_room_selects_skips_no_metadata():
     coord = _make_select_coordinator()
     entry = MagicMock()
     entry.entry_id = "test"
-    entities, ids = _build_room_select_entities(coord, entry, coord.areas, set())
+    entities, ids = _build_room_select_entities(coord, entry, "3", coord.areas, set())
     # area id=99 (no metadata) must be absent
     area_ids = {getattr(e, "_area_id", None) for e in entities}
     assert "99" not in area_ids
@@ -1231,7 +1205,7 @@ def test_build_room_selects_skips_already_known():
     entry = MagicMock()
     entry.entry_id = "test"
     already_known = {"3"}  # Bedroom already registered (string-normalised)
-    entities, ids = _build_room_select_entities(coord, entry, coord.areas, already_known)
+    entities, ids = _build_room_select_entities(coord, entry, "3", coord.areas, already_known)
     # Only Kitchen → 1 fan speed + 1 strategy = 2
     assert len(entities) == 2
 
@@ -1245,14 +1219,5 @@ def test_build_room_selects_skips_blocking():
     coord.areas = areas
     entry = MagicMock()
     entry.entry_id = "test"
-    entities, ids = _build_room_select_entities(coord, entry, areas, set())
+    entities, ids = _build_room_select_entities(coord, entry, "3", areas, set())
     assert len(entities) == 2  # only Lounge gets fan speed + strategy
-
-
-def test_build_room_selects_stale_map_guard():
-    coord = _make_select_coordinator(active_map_id="3")
-    coord.areas_map_id = "4"  # stale
-    entry = MagicMock()
-    entry.entry_id = "test"
-    entities, ids = _build_room_select_entities(coord, entry, coord.areas, set())
-    assert entities == []

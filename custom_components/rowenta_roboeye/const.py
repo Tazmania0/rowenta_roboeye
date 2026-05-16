@@ -31,6 +31,7 @@ SCAN_INTERVAL_ROB_POSE   = 5     # s — /get/rob_pose (cleaning only; idle uses
 SCAN_INTERVAL_STATUS     = 5     # s — /get/status
 SCAN_INTERVAL_STATISTICS = 600
 SCAN_INTERVAL_AREAS = 300
+SCAN_INTERVAL_AREAS_INACTIVE = 600  # s — inactive maps polled on a slow cycle
 SCAN_INTERVAL_ROBOT_INFO = 3600
 
 # Command result polling — used by _wait_for_robot_idle after each queued command
