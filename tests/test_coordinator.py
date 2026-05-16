@@ -800,24 +800,16 @@ def test_no_robot_position_when_invalid_and_idle():
 
 # ── Multi-map support ────────────────────────────────────────────────
 
-def test_active_map_id_falls_back_to_configured(coordinator):
-    """active_map_id returns setup-time map_id when map_status not yet fetched."""
-    coordinator.data = {}
-    assert coordinator.active_map_id == "3"
+def test_committed_active_map_id_set_at_construction(coordinator):
+    """committed_active_map_id is initialised to the setup-time map_id."""
+    assert coordinator.committed_active_map_id == "3"
 
 
-def test_active_map_id_ignores_map_status(coordinator):
-    """active_map_id intentionally ignores /get/map_status — HA must not silently
-    follow the native app's floor selection.  Only the HA-stored preference or the
-    setup-time map_id are used."""
+def test_committed_active_map_id_ignores_map_status(coordinator):
+    """committed_active_map_id intentionally ignores /get/map_status — HA must not
+    silently follow the native app's floor selection."""
     coordinator.data = {"map_status": {"active_map_id": 4, "operation_map_id": 4}}
-    # map_status says "4" but _manual_map_id is None → falls back to setup map_id "3"
-    assert coordinator.active_map_id == "3"
-
-
-def test_active_map_id_falls_back_on_empty_string(coordinator):
-    coordinator.data = {"map_status": {"active_map_id": ""}}
-    assert coordinator.active_map_id == "3"  # setup-time map_id
+    assert coordinator.committed_active_map_id == "3"
 
 
 CONFIRMED_MAPS_RESPONSE = {
@@ -972,8 +964,8 @@ async def test_device_floor_change_does_not_reset_areas(coordinator, mock_client
 
     await coordinator._async_update_data()
 
-    # active_map_id stays at setup map_id "3" regardless of what device reports
-    assert coordinator.active_map_id == "3"
+    # committed_active_map_id stays at setup map_id "3" regardless of what device reports
+    assert coordinator.committed_active_map_id == "3"
     # Areas/session state must NOT have been reset by the device-reported change
     assert coordinator._robot_path != []
     assert coordinator._session_complete is True
@@ -1020,19 +1012,19 @@ async def test_maps_not_refetched_when_only_areas_retrying(coordinator, mock_cli
 
 # ── Manual map override (async_set_active_map) ────────────────────────
 
-def test_active_map_id_manual_override_wins(coordinator):
-    """_manual_map_id takes priority over /get/map_status."""
+def test_manual_map_id_is_stored_correctly(coordinator):
+    """_manual_map_id takes priority as the destination for the next areas fetch."""
     coordinator.data = {"map_status": {"active_map_id": 3, "operation_map_id": 3}}
     coordinator._manual_map_id = "57"
-    assert coordinator.active_map_id == "57"
+    assert coordinator._manual_map_id == "57"
 
 
-def test_active_map_id_no_override_uses_setup_map_id(coordinator):
-    """Without manual override, active_map_id returns the setup-time map_id.
+def test_no_override_uses_setup_map_id_for_areas_fetch(coordinator):
+    """Without manual override, the setup-time map_id is used as fetch target.
     map_status is intentionally ignored — HA must not silently follow the native app."""
     coordinator.data = {"map_status": {"active_map_id": 4, "operation_map_id": 4}}
     coordinator._manual_map_id = None
-    assert coordinator.active_map_id == "3"  # setup-time map_id, not map_status
+    assert coordinator.map_id == "3"  # setup-time map_id, not map_status
 
 
 @pytest.mark.asyncio
@@ -1073,7 +1065,6 @@ async def test_manual_override_persists_across_poll(coordinator, mock_client):
 
     # Manual override must never be cleared by a poll cycle
     assert coordinator._manual_map_id == "57"
-    assert coordinator.active_map_id == "57"
 
 
 @pytest.mark.asyncio

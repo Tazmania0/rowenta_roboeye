@@ -137,7 +137,8 @@ async def async_setup_entry(
             async_remove_duplicate_room_entities(hass, config_entry, "button", canonical_uids)
 
     @callback
-    def _async_on_maps_updated(deleted_map_ids: set[str]) -> None:
+    def _async_on_maps_updated(payload) -> None:
+        deleted_map_ids = payload.get("removed", set()) if isinstance(payload, dict) else payload
         removed = async_remove_entities_for_deleted_maps(
             hass, config_entry, "button", deleted_map_ids
         )
@@ -281,7 +282,7 @@ class RobEyeCleanAllButton(RobEyeBaseButton):
         if areas:
             # Collect per-room strategy/fan-speed from HA entities.
             dev = self.coordinator.device_id
-            map_id = self.coordinator.active_map_id
+            map_id = self.coordinator.committed_active_map_id
             hass = self.coordinator.hass
 
             for area in areas:
@@ -374,7 +375,7 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
         LOGGER.debug("button: clean room %s", self._area_id)
         fan_speed_label = self._get_room_fan_speed()
         raw = FAN_SPEED_REVERSE_MAP.get(fan_speed_label, "2")
-        map_id: str = self.coordinator.active_map_id
+        map_id: str = self._map_id
         # Per-room deep-clean switch forces STRATEGY_DEEP for this room;
         # otherwise use the per-room strategy select, falling back to global.
         room_switch = self.coordinator.hass.states.get(self._deep_clean_switch_id)
@@ -445,7 +446,7 @@ class RobEyeCleanSelectedButton(RobEyeBaseButton):
     def _get_selected_area_ids(self) -> list[str]:
         """Return area_ids of all selected rooms on the active map."""
         device_id = self.coordinator.device_id
-        map_id = self.coordinator.active_map_id
+        map_id = self.coordinator.committed_active_map_id
         selected = []
         for area in self.coordinator.areas:
             area_id = area.get("id")
@@ -465,7 +466,7 @@ class RobEyeCleanSelectedButton(RobEyeBaseButton):
 
         LOGGER.debug("clean_selected: area_ids=%s", selected_ids)
         device_id = self.coordinator.device_id
-        map_id = self.coordinator.active_map_id
+        map_id = self.coordinator.committed_active_map_id
         hass = self.coordinator.hass
 
         # Resolve fan speed — use most intensive across selected rooms

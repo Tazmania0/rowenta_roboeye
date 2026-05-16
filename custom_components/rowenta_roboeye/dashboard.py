@@ -687,11 +687,11 @@ class RobEyeDashboardManager:
         for _ in range(deadline_iters):
             if (
                 coordinator is not None
-                and coordinator.active_map_id != active_map_id
+                and coordinator.committed_active_map_id != active_map_id
             ):
                 _LOGGER.debug(
                     "Dashboard update aborted — map changed mid-wait (%s → %s)",
-                    active_map_id, coordinator.active_map_id,
+                    active_map_id, coordinator.committed_active_map_id,
                 )
                 return False
             if _room_entities_registered(hass, device_id, active_map_id, rooms):

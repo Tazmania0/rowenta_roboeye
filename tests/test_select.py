@@ -83,11 +83,11 @@ def test_options_uses_map_names():
     assert opts == ["Ground Floor", "First Floor"]
 
 
-def test_options_falls_back_to_active_map_id_when_no_maps():
-    """When available_maps is empty, options shows the current map ID."""
+def test_options_falls_back_to_committed_map_id_when_no_maps():
+    """When available_maps is empty, options shows the committed map ID."""
     coord = _make_coordinator()
     coord.available_maps = []
-    coord.active_map_id = "3"
+    coord.committed_active_map_id = "3"
     entity = _entity(coord)
     opts = entity.options
     assert opts == ["3"]
@@ -101,34 +101,37 @@ def test_current_option_matches_active_map():
 
 
 def test_current_option_second_map():
-    """current_option returns 'First Floor' when active map is 4."""
+    """current_option returns 'First Floor' when committed map is 4."""
     coord = _make_coordinator()
-    coord.active_map_id = "4"
+    coord.committed_active_map_id = "4"
     entity = _entity(coord)
     entity._build_options()
     assert entity.current_option == "First Floor"
 
 
 def test_current_option_falls_back_to_id_when_name_unknown():
-    """If active map ID has no name, return the ID string directly."""
+    """If committed map ID has no name, return the ID string directly."""
     coord = _make_coordinator()
-    coord.active_map_id = "99"
+    coord.committed_active_map_id = "99"
     entity = _entity(coord)
     entity._build_options()
     assert entity.current_option == "99"
 
 
-def test_current_option_shows_new_map_immediately_during_switch():
-    """current_option immediately reflects the newly selected map.
+def test_current_option_waits_for_commit_during_switch():
+    """current_option shows the COMMITTED map, not the pending selection.
 
-    The selector confirms the user's choice right away and the selector itself
-    should not flip back to the old name.
+    During a map switch there is a 1-3 s window where _manual_map_id points to
+    the new map but committed_active_map_id still holds the previous value.
+    The dropdown must show the committed (previous) map to avoid wrong-entity
+    interactions while areas are still being fetched.
     """
     coord = _make_coordinator()
-    coord.active_map_id = "4"           # new map selected
+    coord.committed_active_map_id = "3"  # still committed to old map
+    # (coord._manual_map_id would be "4" in real code, but we don't read it here)
     entity = _entity(coord)
     entity._build_options()
-    assert entity.current_option == "First Floor"  # shows NEW map immediately
+    assert entity.current_option == "Ground Floor"  # shows COMMITTED map, not pending
 
 
 
