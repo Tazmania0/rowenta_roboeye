@@ -31,8 +31,7 @@ from .const import (
 from .coordinator import RobEyeCoordinator
 from .entity import (
     RobEyeEntity,
-    async_disable_room_entities_for_other_maps,
-    async_enable_room_entities_for_map,
+    async_enable_all_room_entities,
     async_remove_duplicate_room_entities,
     async_remove_entities_for_deleted_maps,
     async_remove_stale_room_entities,
@@ -55,31 +54,29 @@ async def async_setup_entry(
     # Per-map entity tracking: map_id -> {area_id -> entity}
     known_entities_by_map: dict[str, dict] = {}
 
-    _active = coordinator.active_map_id
+    # Migration: re-enable any entities that were disabled by the old disable/enable model.
+    async_enable_all_room_entities(hass, config_entry, "button")
 
-    # Re-enable registry entries for the active map that were disabled when a
-    # different map was previously active.  Must happen before async_add_entities
-    # so HA links the new entity objects to the (now enabled) registry entries.
-    if _active:
-        async_enable_room_entities_for_map(hass, config_entry, "button", _active)
-
-    if coordinator.areas_map_id == _active:
-        # Purge registry entries for areas that no longer exist on the active map.
+    # Build entities for every map we have areas for (active + all inactive).
+    for map_id, areas_blob in coordinator._areas_by_map.items():
+        areas_list = areas_blob.get("areas", []) if isinstance(areas_blob, dict) else []
+        if not areas_list:
+            continue
         current_area_ids: set = {
-            a.get("id")
-            for a in coordinator.areas
+            str(a.get("id"))
+            for a in areas_list
             if a.get("id") is not None and _parse_area_name(a)
         }
-        async_remove_stale_room_entities(
-            hass, config_entry, coordinator, "button", current_area_ids
+        if map_id == coordinator.committed_active_map_id:
+            async_remove_stale_room_entities(
+                hass, config_entry, coordinator, "button", current_area_ids
+            )
+        new_buttons, new_ids = _build_room_button_entities(
+            coordinator, config_entry, map_id, areas_list, set()
         )
-
-        initial_buttons, initial_ids = _build_room_button_entities(
-            coordinator, config_entry, coordinator.areas, set()
-        )
-        if initial_ids:
-            known_entities_by_map[_active] = dict(zip(initial_ids, initial_buttons))
-        entities.extend(initial_buttons)
+        if new_ids:
+            known_entities_by_map[map_id] = dict(zip(new_ids, new_buttons))
+        entities.extend(new_buttons)
 
     room_uids = {
         e._attr_unique_id
@@ -90,44 +87,26 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
-    # Disable registry entries for all maps other than the active one.
-    if _active:
-        async_disable_room_entities_for_other_maps(hass, config_entry, "button", _active)
-
-    # Dynamic listener
+    # Dynamic listener — receives map_id of the changed map
     @callback
-    def _async_on_areas_updated() -> None:
-        # Time-machine guard: capture the generation at handler entry.
-        # Since this is a synchronous @callback it cannot change mid-handler,
-        # but logging a mismatch (should never happen) aids diagnosis.
-        _generation = coordinator.areas_commit_generation
-
-        if coordinator.areas_map_id != coordinator.active_map_id:
-            LOGGER.debug("button: areas fetched for wrong map, skipping update")
+    def _async_on_areas_updated(map_id: str) -> None:
+        areas_list = coordinator.areas_for(map_id)
+        if not areas_list:
             return
 
-        active_map = coordinator.active_map_id
-
-        # Re-enable registry entries for this map before building new entity objects.
-        async_enable_room_entities_for_map(hass, config_entry, "button", active_map)
-
-        map_entities = known_entities_by_map.setdefault(active_map, {})
+        map_entities = known_entities_by_map.setdefault(map_id, {})
 
         current_ids: set = {
             str(area_id)
-            for area in coordinator.areas
+            for area in areas_list
             if (area_id := area.get("id")) is not None
-            and area.get("area_meta_data", "")
             and _parse_area_name(area)
         }
 
-        # Purge registry entries for area_ids no longer on this map.  This
-        # catches orphans whose area_ids changed between HA sessions (e.g. after
-        # a room redraw) when async_remove_stale_room_entities wasn't called at
-        # setup time because areas hadn't been fetched yet.
-        async_remove_stale_room_entities(
-            hass, config_entry, coordinator, "button", current_ids
-        )
+        if map_id == coordinator.committed_active_map_id:
+            async_remove_stale_room_entities(
+                hass, config_entry, coordinator, "button", current_ids
+            )
 
         stale_ids = set(map_entities.keys()) - current_ids
         from homeassistant.helpers import entity_registry as er
@@ -141,18 +120,14 @@ async def async_setup_entry(
                 hass.async_create_task(entity.async_remove())
 
         new_entities, new_area_ids = _build_room_button_entities(
-            coordinator, config_entry, coordinator.areas, set(map_entities.keys())
+            coordinator, config_entry, map_id, areas_list, set(map_entities.keys())
         )
         if new_entities:
-            LOGGER.debug("button: adding %d new room buttons", len(new_entities))
+            LOGGER.debug("button: adding %d new room buttons for map %s", len(new_entities), map_id)
             for entity, area_id in zip(new_entities, new_area_ids):
                 map_entities[area_id] = entity
             async_add_entities(new_entities)
 
-        # Remove stale duplicates: old-device_id registry entries for the same
-        # (area_id, map_id) pairs.  Called here (not just at setup) so that when
-        # the user switches to an inactive map the duplicate introduced by a prior
-        # device_id change is cleaned up on the first visit.
         canonical_uids: set[str] = {
             e._attr_unique_id
             for e in map_entities.values()
@@ -160,20 +135,6 @@ async def async_setup_entry(
         }
         if canonical_uids:
             async_remove_duplicate_room_entities(hass, config_entry, "button", canonical_uids)
-
-        if coordinator.areas_commit_generation != _generation:
-            LOGGER.warning(
-                "button: areas_commit_generation advanced during handler "
-                "(was %d, now %d) — handler ran on stale data",
-                _generation,
-                coordinator.areas_commit_generation,
-            )
-
-        # Disable all registry entries that belong to maps other than active_map.
-        async_disable_room_entities_for_other_maps(hass, config_entry, "button", active_map)
-        for _map_id in list(known_entities_by_map.keys()):
-            if _map_id != active_map:
-                known_entities_by_map.pop(_map_id)
 
     @callback
     def _async_on_maps_updated(deleted_map_ids: set[str]) -> None:
@@ -216,15 +177,12 @@ def _parse_area_name(area: dict) -> str:
 def _build_room_button_entities(
     coordinator: RobEyeCoordinator,
     config_entry: ConfigEntry,
+    map_id: str,
     areas: list,
     already_known: set,
 ) -> tuple[list, list]:
     new_entities = []
     new_ids: list = []
-    _map = coordinator.active_map_id
-    # Guard: skip if areas data was fetched for a different map (stale-signal race).
-    if coordinator.areas_map_id != _map:
-        return new_entities, new_ids
     for area in areas:
         area_id = area.get("id")
         if area_id is None:
@@ -235,7 +193,6 @@ def _build_room_button_entities(
         room_name = _parse_area_name(area)
         if not room_name:
             continue
-        # Skip areas disabled for cleaning in the RobEye app
         if area.get("area_state") == AREA_STATE_BLOCKING:
             continue
         new_entities.append(
@@ -244,6 +201,7 @@ def _build_room_button_entities(
                 config_entry=config_entry,
                 area_id=area_id,
                 room_name=room_name,
+                map_id=map_id,
             )
         )
         new_ids.append(area_id)
@@ -394,24 +352,23 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
         config_entry: ConfigEntry,
         area_id: str,
         room_name: str,
-        map_id: str | None = None,
+        map_id: str,
     ) -> None:
         super().__init__(coordinator)
         self._area_id = area_id
-        _map = map_id if map_id is not None else coordinator.active_map_id
-        self._map_id = _map
-        self._attr_unique_id = f"clean_room_map{_map}_{area_id}_{coordinator.device_id}"
+        self._map_id = map_id
+        self._attr_unique_id = f"clean_room_map{map_id}_{area_id}_{coordinator.device_id}"
         self._attr_name = f"Clean {room_name}"
         self._attr_icon = "mdi:broom"
         _dev = coordinator.device_id
-        self.entity_id = f"button.{_dev}_map{_map}_clean_room_{area_id}"
-        self._fan_speed_select_id = f"select.{_dev}_map{_map}_room_{area_id}_fan_speed"
-        self._strategy_select_id = f"select.{_dev}_map{_map}_room_{area_id}_strategy"
-        self._deep_clean_switch_id = f"switch.{_dev}_map{_map}_room_{area_id}_deep_clean"
+        self.entity_id = f"button.{_dev}_map{map_id}_clean_room_{area_id}"
+        self._fan_speed_select_id = f"select.{_dev}_map{map_id}_room_{area_id}_fan_speed"
+        self._strategy_select_id = f"select.{_dev}_map{map_id}_room_{area_id}_strategy"
+        self._deep_clean_switch_id = f"switch.{_dev}_map{map_id}_room_{area_id}_deep_clean"
 
     @property
     def available(self) -> bool:
-        return self.coordinator.map_available_for(self._map_id) and super().available
+        return self._map_id == self.coordinator.committed_active_map_id and super().available
 
     async def async_press(self) -> None:
         LOGGER.debug("button: clean room %s", self._area_id)

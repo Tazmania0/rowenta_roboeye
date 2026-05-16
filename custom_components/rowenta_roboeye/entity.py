@@ -272,6 +272,32 @@ def async_enable_room_entities_for_map(
             ent_reg.async_update_entity(entry.entity_id, disabled_by=None)
 
 
+def async_enable_all_room_entities(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    platform: str,
+) -> None:
+    """Re-enable all room entities that were disabled by the integration (upgrade migration).
+
+    Called once at setup time so users upgrading from the old disable/enable model
+    get all their per-map room entities back as enabled. Availability is now gated
+    by the `available` property comparison only.
+    """
+    ent_reg = er.async_get(hass)
+    for entry in list(er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)):
+        if entry.domain != platform:
+            continue
+        parsed = _parse_room_entity_uid(entry.unique_id)
+        if parsed is None:
+            continue
+        if entry.disabled_by == er.RegistryEntryDisabler.INTEGRATION:
+            LOGGER.debug(
+                "RobEye: re-enabling room entity %s (upgrade from disable/enable model)",
+                entry.entity_id,
+            )
+            ent_reg.async_update_entity(entry.entity_id, disabled_by=None)
+
+
 def async_disable_room_entities_for_other_maps(
     hass: HomeAssistant,
     config_entry: ConfigEntry,

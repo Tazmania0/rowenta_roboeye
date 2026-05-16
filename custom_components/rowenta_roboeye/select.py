@@ -40,8 +40,7 @@ from .const import (
 from .coordinator import RobEyeCoordinator
 from .entity import (
     RobEyeEntity,
-    async_disable_room_entities_for_other_maps,
-    async_enable_room_entities_for_map,
+    async_enable_all_room_entities,
     async_remove_duplicate_room_entities,
     async_remove_entities_for_deleted_maps,
     async_remove_stale_room_entities,
@@ -60,36 +59,36 @@ async def async_setup_entry(
         RobEyeActiveMapSelect(coordinator),
     ]
 
+    # Migration: re-enable all room entities that were disabled by the old
+    # disable/enable model.  Availability is now gated by `available` only.
+    async_enable_all_room_entities(hass, config_entry, "select")
+
     # Per-map entity tracking: map_id -> {area_id -> [entities]}
     # Entities for inactive maps stay registered but show as unavailable.
     # This avoids the async_remove/async_add race that caused duplicate-ID errors
     # when switching maps: we never remove+recreate entities for map switches.
     known_entities_by_map: dict[str, dict] = {}
 
-    _active = coordinator.active_map_id
+    _committed = coordinator.committed_active_map_id
 
-    # Re-enable registry entries for the active map that were disabled when a
-    # different map was previously active.  Must happen before async_add_entities
-    # so HA links the new entity objects to the (now enabled) registry entries.
-    if _active:
-        async_enable_room_entities_for_map(hass, config_entry, "select", _active)
-
-    if coordinator.areas_map_id == _active:
-        # Purge registry entries for areas that no longer exist on the active map.
+    # Purge registry entries for areas that no longer exist on the committed map.
+    if _committed:
         current_area_ids: set = {
             a.get("id")
-            for a in coordinator.areas
+            for a in coordinator.areas_for(_committed)
             if a.get("id") is not None and _parse_select_area_name(a)
         }
         async_remove_stale_room_entities(
             hass, config_entry, coordinator, "select", current_area_ids
         )
 
+    # Build entities for ALL known maps (not just the active one).
+    for map_id, areas_list in coordinator._areas_by_map.items():
         initial_selects, initial_by_area = _build_room_select_entities(
-            coordinator, config_entry, coordinator.areas, set()
+            coordinator, config_entry, map_id, areas_list, set()
         )
         if initial_by_area:
-            known_entities_by_map[_active] = initial_by_area
+            known_entities_by_map[map_id] = initial_by_area
         entities.extend(initial_selects)
 
     room_uids = {
@@ -102,40 +101,34 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
-    # Disable registry entries for all maps other than the active one.
-    if _active:
-        async_disable_room_entities_for_other_maps(hass, config_entry, "select", _active)
-
     @callback
-    def _async_on_areas_updated() -> None:
-        # Time-machine guard: capture the generation at handler entry.
-        _generation = coordinator.areas_commit_generation
+    def _async_on_areas_updated(map_id: str) -> None:
+        areas = coordinator.areas_for(map_id)
 
-        if coordinator.areas_map_id != coordinator.active_map_id:
-            LOGGER.debug("select: areas fetched for wrong map, skipping update")
-            return
+        # Only purge stale registry entries for the committed active map.
+        if map_id == coordinator.committed_active_map_id:
+            current_ids: set = {
+                str(area_id)
+                for area in areas
+                if (area_id := area.get("id")) is not None
+                and _parse_select_area_name(area)
+            }
+            # Purge registry entries for area_ids no longer on this map.  This
+            # catches orphans whose area_ids changed between HA sessions (e.g. after
+            # a room redraw) when async_remove_stale_room_entities wasn't called at
+            # setup time because areas hadn't been fetched yet.
+            async_remove_stale_room_entities(
+                hass, config_entry, coordinator, "select", current_ids
+            )
+        else:
+            current_ids = {
+                str(area_id)
+                for area in areas
+                if (area_id := area.get("id")) is not None
+                and _parse_select_area_name(area)
+            }
 
-        active_map = coordinator.active_map_id
-
-        # Re-enable registry entries for this map before building new entity objects.
-        async_enable_room_entities_for_map(hass, config_entry, "select", active_map)
-
-        map_entities = known_entities_by_map.setdefault(active_map, {})
-
-        current_ids: set = {
-            str(area_id)
-            for area in coordinator.areas
-            if (area_id := area.get("id")) is not None
-            and _parse_select_area_name(area)
-        }
-
-        # Purge registry entries for area_ids no longer on this map.  This
-        # catches orphans whose area_ids changed between HA sessions (e.g. after
-        # a room redraw) when async_remove_stale_room_entities wasn't called at
-        # setup time because areas hadn't been fetched yet.
-        async_remove_stale_room_entities(
-            hass, config_entry, coordinator, "select", current_ids
-        )
+        map_entities = known_entities_by_map.setdefault(map_id, {})
 
         stale_ids = set(map_entities.keys()) - current_ids
         from homeassistant.helpers import entity_registry as er
@@ -149,14 +142,14 @@ async def async_setup_entry(
                     hass.async_create_task(entity.async_remove())
 
         new_entities, new_by_area = _build_room_select_entities(
-            coordinator, config_entry, coordinator.areas, set(map_entities.keys())
+            coordinator, config_entry, map_id, areas, set(map_entities.keys())
         )
         if new_entities:
-            LOGGER.debug("select: adding %d new room selects", len(new_entities))
+            LOGGER.debug("select: adding %d new room selects for map %s", len(new_entities), map_id)
             map_entities.update(new_by_area)
             async_add_entities(new_entities)
 
-        # Remove stale duplicates for the current active map (and across all maps).
+        # Remove stale duplicates for this map.
         canonical_uids: set[str] = {
             e._attr_unique_id
             for entity_list in map_entities.values()
@@ -165,20 +158,6 @@ async def async_setup_entry(
         }
         if canonical_uids:
             async_remove_duplicate_room_entities(hass, config_entry, "select", canonical_uids)
-
-        if coordinator.areas_commit_generation != _generation:
-            LOGGER.warning(
-                "select: areas_commit_generation advanced during handler "
-                "(was %d, now %d) — handler ran on stale data",
-                _generation,
-                coordinator.areas_commit_generation,
-            )
-
-        # Disable all registry entries that belong to maps other than active_map.
-        async_disable_room_entities_for_other_maps(hass, config_entry, "select", active_map)
-        for _map_id in list(known_entities_by_map.keys()):
-            if _map_id != active_map:
-                known_entities_by_map.pop(_map_id)
 
     @callback
     def _async_on_maps_updated(deleted_map_ids: set[str]) -> None:
@@ -221,15 +200,13 @@ def _parse_select_area_name(area: dict) -> str:
 def _build_room_select_entities(
     coordinator: RobEyeCoordinator,
     config_entry: ConfigEntry,
+    map_id: str,
     areas: list,
     already_known: set,
 ) -> tuple[list, dict]:
     new_entities = []
     by_area: dict = {}
-    _map = coordinator.active_map_id
-    # Guard: skip if areas data was fetched for a different map (stale-signal race).
-    if coordinator.areas_map_id != _map:
-        return new_entities, by_area
+    _map = map_id
     for area in areas:
         area_id = area.get("id")
         if area_id is None:
@@ -249,12 +226,14 @@ def _build_room_select_entities(
                 config_entry=config_entry,
                 area_id=area_id,
                 room_name=room_name,
+                map_id=_map,
             ),
             RobEyeRoomStrategySelect(
                 coordinator=coordinator,
                 config_entry=config_entry,
                 area_id=area_id,
                 room_name=room_name,
+                map_id=_map,
             ),
         ]
         new_entities.extend(entities_for_area)
@@ -357,7 +336,7 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
 
     @property
     def available(self) -> bool:
-        return self.coordinator.map_available_for(self._map_id) and super().available
+        return self._map_id == self.coordinator.committed_active_map_id and super().available
 
     @property
     def current_option(self) -> str:
@@ -373,7 +352,7 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
                 # changed the setting while HA was offline), leave
                 # _last_robot_raw as None so _handle_coordinator_update syncs
                 # from the robot on the first poll.
-                for area in self.coordinator.areas:
+                for area in self.coordinator.areas_for(self._map_id):
                     if str(area.get("id", "")) == self._area_id:
                         raw = area.get("cleaning_parameter_set")
                         if raw is not None and FAN_SPEED_MAP.get(str(raw)) == last_state.state:
@@ -381,7 +360,7 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
                         break
                 return
         # Seed from robot's stored value on first run (no prior HA state).
-        for area in self.coordinator.areas:
+        for area in self.coordinator.areas_for(self._map_id):
             if str(area.get("id", "")) == self._area_id:
                 raw = area.get("cleaning_parameter_set")
                 if raw is not None and str(raw) in FAN_SPEED_MAP:
@@ -404,14 +383,12 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         Once the areas poll returns a changed value (e.g. the native app set a
         different speed), _last_robot_raw differs → _selected is updated.
 
-        The areas_map_id guard prevents cross-map contamination: after a map
-        switch, coordinator.areas holds the NEW map's data while old-map entities
-        are still alive during the grace period.  Without the guard, an old-map
-        entity whose area_id collides with a new-map area would read the wrong
-        cleaning_parameter_set, producing spurious fan-speed state-change events.
+        Uses areas_for(map_id) to guard against cross-map contamination: only
+        reads areas belonging to this entity's own map, so entities for inactive
+        maps stay stable and don't read the active map's data.
         """
-        if self.coordinator.areas_map_id == self._map_id:
-            for area in self.coordinator.areas:
+        if bool(self.coordinator.areas_for(self._map_id)):
+            for area in self.coordinator.areas_for(self._map_id):
                 if str(area.get("id", "")) == self._area_id:
                     raw = area.get("cleaning_parameter_set")
                     raw_str = str(raw) if raw is not None else None
@@ -485,23 +462,13 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         # Always rebuild _name_to_id here: HA calls current_option before options
         # in state assembly, so _name_to_id could be stale and cause a flicker.
         # Use active_map_id directly so the selector immediately confirms the
-        # user's selection.  Old-map entities remain available during the grace
-        # period via coordinator.map_available_for(); the map_switch_pending
-        # attribute signals the in-progress transition to automations.
+        # user's selection.
         self._build_options()
         active_id = self.coordinator.active_map_id
         for name, map_id in self._name_to_id.items():
             if map_id == active_id:
                 return name
         return active_id or None
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        # _prev_committed_map_id is non-None while new-map entities are being
-        # created; expose the flag so automations can detect the transition.
-        if self.coordinator._prev_committed_map_id is not None:
-            return {"map_switch_pending": True}
-        return {}
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -527,20 +494,12 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
                         map_id,
                         self.coordinator.active_map_id,
                     )
-                    await self.coordinator.async_set_active_map(
-                        map_id, skip_grace_period=True
-                    )
+                    await self.coordinator.async_set_active_map(map_id)
                 else:
                     self.coordinator._manual_map_id = map_id
 
     async def async_select_option(self, option: str) -> None:
         map_id = self._name_to_id.get(option, option)
-        # async_set_active_map sets _manual_map_id, _prev_committed_map_id, and
-        # triggers a coordinator refresh — no pre-write needed here.  The entity
-        # state advances to the new map only after _prev_committed_map_id is cleared
-        # (i.e. once room entities for the new map are ready), so the "Active map"
-        # display stays on the old map during the transition instead of jumping
-        # ahead of the room-entity cards.
         await self.coordinator.async_set_active_map(map_id)
         # Persist the selected map so the next HA restart starts with the correct
         # coordinator.map_id before any entity writes its initial state.
@@ -642,7 +601,7 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
 
     @property
     def available(self) -> bool:
-        return self.coordinator.map_available_for(self._map_id) and super().available
+        return self._map_id == self.coordinator.committed_active_map_id and super().available
 
     @property
     def current_option(self) -> str:
@@ -660,7 +619,7 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
             "normal":        STRATEGY_LABELS[STRATEGY_NORMAL],
             "walls_corners": STRATEGY_LABELS[STRATEGY_WALLS_CORNERS],
         }
-        for area in self.coordinator.areas:
+        for area in self.coordinator.areas_for(self._map_id):
             if str(area.get("id", "")) == self._area_id:
                 robot_val = str(area.get("strategy_mode", "")).lower()
                 label = _robot_to_label.get(robot_val)
@@ -691,7 +650,7 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
             current_cps = FAN_SPEED_REVERSE_MAP.get(fan_state.state, "1")
         else:
             current_cps = "1"
-            for area in self.coordinator.areas:
+            for area in self.coordinator.areas_for(self._map_id):
                 if str(area.get("id", "")) == self._area_id:
                     cps = area.get("cleaning_parameter_set")
                     if cps is not None:

@@ -52,6 +52,8 @@ def _make_coordinator(overrides: dict | None = None):
         "robot_id": dict(MOCK_ROBOT_ID),
         "protocol_version": dict(MOCK_PROTOCOL_VERSION),
     }
+    # areas_for returns all areas regardless of map_id (tests don't differentiate maps)
+    coord.areas_for = lambda mid: list(coord.areas)
     if overrides:
         for k, v in overrides.items():
             setattr(coord, k, v)

@@ -73,7 +73,8 @@ async def test_first_update_fetches_all_groups(coordinator, mock_client):
 async def test_status_fetched_every_tick(coordinator, mock_client):
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
     coordinator._last_statistics = datetime.utcnow()
-    coordinator._last_areas = datetime.utcnow()
+    coordinator._areas_fetched_at["3"] = datetime.utcnow()  # suppress per-map areas fetch
+    coordinator._last_maps = datetime.utcnow()              # suppress maps/map_status block
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()  # suppress geometry block
 
@@ -88,7 +89,8 @@ async def test_status_fetched_every_tick(coordinator, mock_client):
 @pytest.mark.asyncio
 async def test_areas_fetched_after_300s(coordinator, mock_client):
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
-    coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
+    # _areas_fetched_at is empty → triggers per-map fetch immediately (None = first fetch)
+    coordinator._last_maps = datetime.utcnow()              # suppress maps/map_status block
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()  # suppress geometry block
@@ -102,7 +104,8 @@ async def test_areas_fetched_after_300s(coordinator, mock_client):
 async def test_statistics_fetched_after_600s(coordinator, mock_client):
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
     coordinator._last_statistics = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_STATISTICS + 1)
-    coordinator._last_areas = datetime.utcnow()
+    coordinator._areas_fetched_at["3"] = datetime.utcnow()  # suppress per-map areas fetch
+    coordinator._last_maps = datetime.utcnow()              # suppress maps/map_status block
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()  # suppress geometry block
 
@@ -116,7 +119,8 @@ async def test_robot_info_fetched_after_3600s(coordinator, mock_client):
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
     coordinator._last_robot_info = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_ROBOT_INFO + 1)
     coordinator._last_statistics = datetime.utcnow()
-    coordinator._last_areas = datetime.utcnow()
+    coordinator._areas_fetched_at["3"] = datetime.utcnow()  # suppress per-map areas fetch
+    coordinator._last_maps = datetime.utcnow()              # suppress maps/map_status block
 
     await coordinator._async_update_data()
     mock_client.get_robot_id.assert_called_once()
@@ -471,7 +475,7 @@ def test_status_property(coordinator):
 
 
 def test_areas_property_unwraps_list(coordinator):
-    coordinator.data = {DATA_AREAS: MOCK_AREAS}
+    coordinator._areas_by_map["3"] = MOCK_AREAS
     assert len(coordinator.areas) == 3  # includes the empty-meta area
 
 
@@ -491,9 +495,7 @@ def test_resolve_room_name_by_id_falls_back_to_saved_map_areas(coordinator):
 
 
 def test_resolve_room_name_by_id_handles_string_area_ids(coordinator):
-    coordinator.data = {
-        DATA_AREAS: {"areas": [{"id": "31", "area_meta_data": '{"name":"Детска"}'}]},
-    }
+    coordinator._areas_by_map["3"] = {"areas": [{"id": "31", "area_meta_data": '{"name":"Детска"}'}]}
     assert coordinator._resolve_room_name_by_id(31) == "Детска"
 
 
@@ -554,9 +556,7 @@ def test_command_queue_items_shows_external_active_session_and_keeps_ha_pending(
 
 
 def test_command_queue_items_resolves_pending_room_names(coordinator, mock_client):
-    coordinator.data = {
-        DATA_AREAS: {"areas": [{"id": "31", "area_meta_data": '{"name":"Детска"}'}]},
-    }
+    coordinator._areas_by_map["3"] = {"areas": [{"id": "31", "area_meta_data": '{"name":"Детска"}'}]}
     coordinator._command_queue.put_nowait(
         (1, 1, mock_client.clean_map, (), {"map_id": "3", "area_ids": "31"})
     )
@@ -566,9 +566,9 @@ def test_command_queue_items_resolves_pending_room_names(coordinator, mock_clien
 
 
 def test_parsed_current_session_resolves_room_names_from_status_area_ids(coordinator):
+    coordinator._areas_by_map["3"] = {"areas": [{"id": 3, "area_meta_data": '{"name":"Bedroom"}'}]}
     coordinator.data = {
         DATA_STATUS: {"mode": "cleaning", "area_ids": [3]},
-        DATA_AREAS: {"areas": [{"id": 3, "area_meta_data": '{"name":"Bedroom"}'}]},
     }
     item = coordinator._parsed_current_session_item()
     assert item is not None
@@ -960,12 +960,10 @@ async def test_device_floor_change_does_not_reset_areas(coordinator, mock_client
     """When the device reports a different map via map_status, HA ignores it.
     Area state must NOT be reset — only async_set_active_map (user action) does that."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
-    coordinator._last_active_map_id = "3"
-    coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
+    coordinator._areas_fetched_at["3"] = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = {3, 11}
     coordinator._robot_path = [(0.0, 0.0)]
     coordinator._session_complete = True
 
@@ -987,7 +985,7 @@ async def test_maps_and_map_status_fetched_with_areas(coordinator, mock_client):
     inside the areas block).  When both _last_areas and _last_maps are due,
     both maps and areas are fetched in the same coordinator tick."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
-    coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
+    coordinator._areas_fetched_at["3"] = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
     # _last_maps is None (initial) so the maps sub-block also triggers
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
@@ -1007,7 +1005,7 @@ async def test_maps_not_refetched_when_only_areas_retrying(coordinator, mock_cli
     _last_maps is recent, /get/maps must NOT be called again — this prevents
     per-tick display-name churn when the maps API returns different orderings."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
-    coordinator._last_areas = None  # areas will retry
+    # _areas_fetched_at is empty for "3" → areas will retry
     coordinator._last_maps = datetime.utcnow()  # maps fetched recently
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
@@ -1037,35 +1035,12 @@ def test_active_map_id_no_override_uses_setup_map_id(coordinator):
     assert coordinator.active_map_id == "3"  # setup-time map_id, not map_status
 
 
-def test_active_map_id_for_display_stable_state(coordinator):
-    """active_map_id_for_display matches active_map_id when no transition is in progress."""
-    coordinator._manual_map_id = "4"
-    coordinator._prev_committed_map_id = None
-    assert coordinator.active_map_id_for_display == "4"
-
-
-def test_active_map_id_for_display_holds_during_transition(coordinator):
-    """active_map_id_for_display returns old map id while grace period is active."""
-    coordinator._manual_map_id = "4"   # user selected map 4
-    coordinator._prev_committed_map_id = "3"  # map 3 was showing before
-    assert coordinator.active_map_id_for_display == "3"
-
-
-def test_active_map_id_for_display_advances_after_grace_cleared(coordinator):
-    """Once grace period clears, active_map_id_for_display returns the new map id."""
-    coordinator._manual_map_id = "4"
-    coordinator._prev_committed_map_id = None  # grace period cleared
-    assert coordinator.active_map_id_for_display == "4"
-
-
 @pytest.mark.asyncio
 async def test_async_set_active_map_updates_state(coordinator):
-    """async_set_active_map sets override, resets area/geometry/live-map timestamps."""
+    """async_set_active_map sets override, resets geometry/live-map timestamps."""
     coordinator.data = {}
-    coordinator._last_areas = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
     coordinator._last_live_map = datetime.utcnow()
-    coordinator._known_area_ids = {3, 11}
     coordinator._robot_path = [(1.0, 2.0)]
     coordinator._session_complete = True
     coordinator.async_request_refresh = AsyncMock()
@@ -1073,32 +1048,11 @@ async def test_async_set_active_map_updates_state(coordinator):
     await coordinator.async_set_active_map("57")
 
     assert coordinator._manual_map_id == "57"
-    assert coordinator._last_active_map_id == "57"
-    assert coordinator._last_areas is None
     assert coordinator._last_map_geometry is None
     assert coordinator._last_live_map is None
-    assert coordinator._known_area_ids == set()
     assert coordinator._robot_path == []
     assert coordinator._session_complete is False
     coordinator.async_request_refresh.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_async_set_active_map_invalidates_dashboard(coordinator):
-    """async_set_active_map calls dashboard_manager.invalidate() when present."""
-    coordinator.data = {}
-    coordinator.async_request_refresh = AsyncMock()
-
-    dashboard_manager = MagicMock()
-    coordinator.hass.data = {
-        "rowenta_roboeye": {
-            f"{coordinator.config_entry.entry_id}_dashboard": dashboard_manager
-        }
-    }
-
-    await coordinator.async_set_active_map("4")
-
-    dashboard_manager.invalidate.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -1107,7 +1061,7 @@ async def test_manual_override_persists_across_poll(coordinator, mock_client):
     what map_status the device reports.  HA never silently follows the native app."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
     coordinator._manual_map_id = "57"
-    coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
+    coordinator._areas_fetched_at["57"] = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
@@ -1127,11 +1081,11 @@ async def test_areas_fetched_for_ha_configured_map(coordinator, mock_client):
     """Areas are always fetched for the HA-configured map, never the device's map_status."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
     coordinator._manual_map_id = None          # no user override → uses setup map_id "3"
-    coordinator._last_areas = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
+    coordinator._areas_fetched_at["3"] = datetime.utcnow() - timedelta(seconds=SCAN_INTERVAL_AREAS + 1)
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = {1, 2, 3}
+    coordinator._last_maps = datetime.utcnow()  # suppress maps/map_status block
 
     # Device reports map 4, but HA should fetch areas for map "3" (setup map)
     mock_client.get_map_status.return_value = {"active_map_id": 4, "operation_map_id": 4}
@@ -1140,77 +1094,30 @@ async def test_areas_fetched_for_ha_configured_map(coordinator, mock_client):
 
     # Areas must have been fetched for the HA setup map_id ("3"), not device's "4"
     mock_client.get_areas.assert_called_with("3")
-    assert coordinator.areas_map_id == "3"
-
-
-@pytest.mark.asyncio
-async def test_areas_discarded_when_map_switched_mid_fetch(coordinator, mock_client):
-    """Regression: if the user switches maps while get_areas() is in flight,
-    the stale response must be discarded so the next refresh re-fetches for
-    the new map.  Without this guard, _last_areas would be marked fresh and
-    room entities for the new map would never be created (dashboard shows
-    "unavailable" until the 300 s interval elapses)."""
-    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
-    coordinator._manual_map_id = None  # start on setup map "3"
-    coordinator._last_areas = None     # force areas bucket to run
-    coordinator._last_statistics = datetime.utcnow()
-    coordinator._last_robot_info = datetime.utcnow()
-    coordinator._last_map_geometry = datetime.utcnow()  # suppress geometry block
-    coordinator._known_area_ids = set()
-    coordinator._areas_fetched_for_map_id = None
-
-    # Simulate user flipping maps during the get_areas() HTTP await.
-    async def _switch_during_fetch(*_args, **_kwargs):
-        coordinator._manual_map_id = "57"
-        return dict(MOCK_AREAS)
-
-    mock_client.get_areas.side_effect = _switch_during_fetch
-
-    await coordinator._async_update_data()
-
-    # Stale response must have been discarded entirely.
-    assert coordinator._last_areas is None, (
-        "stale fetch must not update _last_areas — next refresh needs to re-fetch"
-    )
-    assert coordinator._areas_fetched_for_map_id is None
-    assert DATA_AREAS not in coordinator.data or coordinator.data.get(DATA_AREAS) != MOCK_AREAS
-    # _known_area_ids untouched → no stale-map signal was dispatched.
-    assert coordinator._known_area_ids == set()
+    assert coordinator.committed_active_map_id == "3"
 
 
 @pytest.mark.asyncio
 async def test_empty_areas_after_map_switch_does_not_advance_timer(coordinator, mock_client):
     """Regression: when get_areas returns empty data right after a map switch,
-    _last_areas must NOT be advanced so the next tick retries the fetch instead
-    of waiting the full 300 s interval.
-    _areas_fetched_for_map_id must also stay None so that platform guards
-    (areas_map_id != active_map_id) correctly block signal callbacks from
-    running with empty area data.
+    _areas_fetched_at for the active map must NOT be set so the next tick retries
+    the fetch instead of waiting the full 300 s interval.
     A fast 2-second retry must be scheduled via call_later so rooms appear
     sooner than the next normal coordinator tick (up to 15 s when idle)."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
-    coordinator._last_areas = None          # post-switch: force bucket to run
+    # _areas_fetched_at is empty → active map "3" is due for a fetch
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = set()     # post-switch: no known areas yet
-    coordinator._areas_fetched_for_map_id = None
-    coordinator._areas_ready = False
 
     # Robot transiently returns empty areas (the 20-30% failure case)
     mock_client.get_areas.return_value = {"areas": []}
 
     await coordinator._async_update_data()
 
-    # _last_areas must remain None so the bucket fires again next tick
-    assert coordinator._last_areas is None, (
-        "empty areas must not advance _last_areas — next tick must retry"
-    )
-    # _areas_ready stays False because no areas were loaded
-    assert coordinator._areas_ready is False
-    # _areas_fetched_for_map_id must stay None so platform guards block callbacks
-    assert coordinator._areas_fetched_for_map_id is None, (
-        "empty areas must not set _areas_fetched_for_map_id — guard must stay active"
+    # _areas_fetched_at must stay absent so the bucket fires again next tick
+    assert coordinator._areas_fetched_at.get("3") is None, (
+        "empty areas must not advance _areas_fetched_at — next tick must retry"
     )
     # No signal dispatched (no entities to create yet)
     coordinator.hass.loop.call_soon.assert_not_called()
@@ -1231,12 +1138,10 @@ async def test_get_areas_cannot_connect_is_non_fatal(coordinator, mock_client):
     from homeassistant.helpers.update_coordinator import UpdateFailed
 
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
-    coordinator._last_areas = None          # force bucket to run
+    # _areas_fetched_at is empty → active map "3" is due for a fetch
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._areas_fetched_for_map_id = None
-    coordinator._areas_ready = False
 
     mock_client.get_areas.side_effect = CannotConnect("connection timeout")
 
@@ -1244,95 +1149,31 @@ async def test_get_areas_cannot_connect_is_non_fatal(coordinator, mock_client):
     result = await coordinator._async_update_data()
     assert result is not None, "coordinator must return data even when get_areas fails"
 
-    # Timer must stay None so the bucket fires again next tick
-    assert coordinator._last_areas is None
-    assert coordinator._areas_ready is False
-    # _areas_fetched_for_map_id unchanged (stays None)
-    assert coordinator._areas_fetched_for_map_id is None
+    # _areas_fetched_at must stay absent so the bucket fires again next tick
+    assert coordinator._areas_fetched_at.get("3") is None
     # No quick-retry scheduled (only done for empty response, not CannotConnect)
     coordinator.hass.loop.call_later.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_nonempty_areas_after_map_switch_advances_timer(coordinator, mock_client):
-    """Complement of the above: when areas arrive non-empty, _last_areas is
-    set normally and the 300 s cycle resumes."""
+    """Complement of the above: when areas arrive non-empty, _areas_fetched_at
+    is set normally and the 300 s cycle resumes."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
-    coordinator._last_areas = None
+    # Clear per-map cache so the fetch bucket runs
+    coordinator._areas_fetched_at.clear()
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = set()
-    coordinator._areas_fetched_for_map_id = None
-    coordinator._areas_ready = False
+    coordinator._last_maps = datetime.utcnow()  # suppress maps/map_status block
 
     mock_client.get_areas.return_value = MOCK_AREAS
 
     await coordinator._async_update_data()
 
-    assert coordinator._last_areas is not None, (
-        "non-empty areas must advance _last_areas to start the 300 s cycle"
+    assert coordinator._areas_fetched_at.get("3") is not None, (
+        "non-empty areas must set _areas_fetched_at['3'] to start the 300 s cycle"
     )
-    assert coordinator._areas_ready is True
-
-
-# ── _check_for_new_areas signal behaviour ────────────────────────────────────
-
-def test_check_for_new_areas_signals_on_first_areas(coordinator):
-    """Signal fires (via call_soon) when _known_area_ids is empty and areas arrive."""
-    from custom_components.rowenta_roboeye.coordinator import async_dispatcher_send
-
-    coordinator._known_area_ids = set()  # simulate post-map-switch reset
-    areas_blob = {
-        "areas": [
-            {"id": 5, "area_meta_data": '{"name":"Kitchen"}'},
-            {"id": 6, "area_meta_data": '{"name":"Bedroom"}'},
-        ]
-    }
-
-    coordinator._check_for_new_areas(areas_blob)
-
-    # Signal is deferred through loop.call_soon so that self.data is updated
-    # before callbacks run.  Verify call_soon was invoked with the correct args.
-    expected_signal = f"rowenta_roboeye_areas_updated_{coordinator.config_entry.entry_id}"
-    coordinator.hass.loop.call_soon.assert_called_once_with(
-        async_dispatcher_send, coordinator.hass, expected_signal
-    )
-    assert coordinator._known_area_ids == {"5", "6"}
-
-
-def test_check_for_new_areas_no_signal_when_empty_response(coordinator):
-    """No signal when _known_area_ids is empty but API returns empty areas."""
-    coordinator._known_area_ids = set()
-
-    coordinator._check_for_new_areas({"areas": []})
-
-    coordinator.hass.loop.call_soon.assert_not_called()
-
-
-def test_check_for_new_areas_signals_on_change(coordinator):
-    """Signal fires (via call_soon) when area set differs from known set."""
-    from custom_components.rowenta_roboeye.coordinator import async_dispatcher_send
-
-    coordinator._known_area_ids = {"5"}  # previously had area 5
-    areas_blob = {"areas": [{"id": 5}, {"id": 7}]}  # now area 7 added
-
-    coordinator._check_for_new_areas(areas_blob)
-
-    coordinator.hass.loop.call_soon.assert_called_once()
-    call_args = coordinator.hass.loop.call_soon.call_args
-    assert call_args[0][0] is async_dispatcher_send
-    assert coordinator._known_area_ids == {"5", "7"}
-
-
-def test_check_for_new_areas_no_signal_when_unchanged(coordinator):
-    """No signal when area set is identical to known set."""
-    coordinator._known_area_ids = {"5", "6"}
-    areas_blob = {"areas": [{"id": 5}, {"id": 6}]}
-
-    coordinator._check_for_new_areas(areas_blob)
-
-    coordinator.hass.loop.call_soon.assert_not_called()
 
 
 # ── Pause / Resume — command queue drain and restore ──────────────────
@@ -1666,15 +1507,18 @@ async def test_modify_area_invalidates_areas_cache(coordinator, mock_client):
     mock_client.modify_area.return_value = {"cmd_id": 99, "error_code": 0}
     mock_client.modify_area.__name__ = "modify_area"
 
-    from datetime import datetime
-    coordinator._last_areas = datetime.now()  # simulate a warm cache
+    # Simulate a warm per-map cache for the active map "3"
+    coordinator._areas_fetched_at["3"] = datetime.utcnow()
 
     await coordinator.async_send_command(
         mock_client.modify_area,
         map_id="3", area_id="10", cleaning_parameter_set="2", strategy_mode="deep",
     )
 
-    assert coordinator._last_areas is None, "_last_areas must be cleared after modify_area"
+    # invalidate_areas_cache pops the active map's entry from _areas_fetched_at
+    assert coordinator._areas_fetched_at.get("3") is None, (
+        "_areas_fetched_at['3'] must be cleared after modify_area"
+    )
 
 
 @pytest.mark.asyncio
@@ -1684,15 +1528,16 @@ async def test_set_fan_speed_does_not_invalidate_areas_cache(coordinator, mock_c
     mock_client.set_fan_speed.return_value = {"cmd_id": 100, "error_code": 0}
     mock_client.set_fan_speed.__name__ = "set_fan_speed"
 
-    from datetime import datetime
-    ts = datetime.now()
-    coordinator._last_areas = ts
+    ts = datetime.utcnow()
+    coordinator._areas_fetched_at["3"] = ts
 
     await coordinator.async_send_command(
         mock_client.set_fan_speed, cleaning_parameter_set="3"
     )
 
-    assert coordinator._last_areas is ts, "_last_areas must NOT be cleared after set_fan_speed"
+    assert coordinator._areas_fetched_at.get("3") is ts, (
+        "_areas_fetched_at['3'] must NOT be cleared after set_fan_speed"
+    )
 
 
 @pytest.mark.asyncio
@@ -1730,17 +1575,15 @@ async def test_queue_eta_sums_all_queued_jobs(coordinator):
     """The same 3-room job queued twice gives 2× the single-job ETA (no dedup)."""
     import json as _json
 
-    coordinator.data = {
-        DATA_STATUS: {"mode": "ready", "charging": "charging"},
-        DATA_AREAS: {"areas": [
-            {"id": 30, "area_meta_data": _json.dumps({"name": "hall"}),
-             "statistics": {"average_cleaning_time": 420000}},   # 420 s
-            {"id": 31, "area_meta_data": _json.dumps({"name": "office"}),
-             "statistics": {"average_cleaning_time": 360000}},   # 360 s
-            {"id": 32, "area_meta_data": _json.dumps({"name": "bedroom"}),
-             "statistics": {"average_cleaning_time": 480000}},   # 480 s
-        ]},
-    }
+    coordinator.data = {DATA_STATUS: {"mode": "ready", "charging": "charging"}}
+    coordinator._areas_by_map["3"] = {"areas": [
+        {"id": 30, "area_meta_data": _json.dumps({"name": "hall"}),
+         "statistics": {"average_cleaning_time": 420000}},   # 420 s
+        {"id": 31, "area_meta_data": _json.dumps({"name": "office"}),
+         "statistics": {"average_cleaning_time": 360000}},   # 360 s
+        {"id": 32, "area_meta_data": _json.dumps({"name": "bedroom"}),
+         "statistics": {"average_cleaning_time": 480000}},   # 480 s
+    ]}
 
     async def fake_clean_map(**kwargs):
         return {"cmd_id": 1}
@@ -1769,15 +1612,13 @@ async def test_queue_eta_different_rooms_per_job(coordinator):
     """Each job's rooms are counted independently — no cross-job deduplication."""
     import json as _json
 
-    coordinator.data = {
-        DATA_STATUS: {"mode": "ready", "charging": "charging"},
-        DATA_AREAS: {"areas": [
-            {"id": 1, "area_meta_data": _json.dumps({"name": "a"}),
-             "statistics": {"average_cleaning_time": 600000}},   # 600 s
-            {"id": 2, "area_meta_data": _json.dumps({"name": "b"}),
-             "statistics": {"average_cleaning_time": 300000}},   # 300 s
-        ]},
-    }
+    coordinator.data = {DATA_STATUS: {"mode": "ready", "charging": "charging"}}
+    coordinator._areas_by_map["3"] = {"areas": [
+        {"id": 1, "area_meta_data": _json.dumps({"name": "a"}),
+         "statistics": {"average_cleaning_time": 600000}},   # 600 s
+        {"id": 2, "area_meta_data": _json.dumps({"name": "b"}),
+         "statistics": {"average_cleaning_time": 300000}},   # 300 s
+    ]}
 
     async def job1(**kwargs): return {"cmd_id": 1}
     async def job2(**kwargs): return {"cmd_id": 2}
@@ -1792,299 +1633,48 @@ async def test_queue_eta_different_rooms_per_job(coordinator):
     assert eta == 900
 
 
-# ── map_available_for / transition-guard tests ───────────────────────────────
-
-def test_map_available_for_stable_state(coordinator):
-    """When committed == active, only entities for the active map are available."""
-    coordinator._manual_map_id = "3"
-    coordinator._areas_fetched_for_map_id = "3"
-    coordinator._prev_committed_map_id = None
-
-    assert coordinator.map_available_for("3") is True
-    assert coordinator.map_available_for("1") is False
-    assert coordinator.map_available_for("57") is False
-
-
-def test_map_available_for_transition_keeps_prev_map_available(coordinator):
-    """During a map switch (committed=None), entities for the previously-committed
-    map stay available so the dashboard never shows an 'unavailable' flash.
-    Entities for the new active map are also available (handles switching BACK
-    to a previously-visited map whose entities still exist in HA)."""
-    coordinator._manual_map_id = "3"          # switched to map 3
-    coordinator._areas_fetched_for_map_id = None  # not yet fetched
-    coordinator._prev_committed_map_id = "1"  # was on map 1
-
-    # Map 1 entities must remain available during the transition
-    assert coordinator.map_available_for("1") is True
-    # Map 3 entities: available if they already exist (e.g. switching back).
-    # In practice, brand-new map 3 entities haven't been created yet so
-    # nobody calls map_available_for("3") — but if they do exist they should
-    # already show as available immediately.
-    assert coordinator.map_available_for("3") is True
-    # Completely unrelated map entities are always unavailable
-    assert coordinator.map_available_for("57") is False
-
-
-def test_map_available_for_clears_after_new_areas_committed(coordinator):
-    """Once new-map areas are committed, only new-map entities are available."""
-    coordinator._manual_map_id = "3"
-    coordinator._areas_fetched_for_map_id = "3"   # committed after fetch
-    coordinator._prev_committed_map_id = None      # cleared at commit time
-
-    assert coordinator.map_available_for("3") is True
-    assert coordinator.map_available_for("1") is False
-
-
-def test_map_available_for_no_prev_during_first_load(coordinator):
-    """On first startup (no previous map), only the active map qualifies."""
-    coordinator._manual_map_id = None
-    coordinator.map_id = "3"
-    coordinator._areas_fetched_for_map_id = None
-    coordinator._prev_committed_map_id = None
-
-    # Nothing committed yet — active map entity is available (it's being loaded)
-    assert coordinator.map_available_for("3") is True
-    assert coordinator.map_available_for("1") is False
-
-
 @pytest.mark.asyncio
 async def test_stale_data_areas_cleared_on_map_switch(coordinator, mock_client):
-    """When the active map changes, DATA_AREAS committed for the old map is
-    removed from the data copy at the start of _async_update_data so that
-    coordinator.areas never returns rooms from the wrong map."""
+    """When the active map switches, coordinator.areas returns rooms only for the
+    committed map — areas from the old map are not accessible via coordinator.areas."""
     map2_areas = {"areas": [{"id": 99, "area_meta_data": '{"name":"Map2Room"}'}]}
-    coordinator.data = {
-        DATA_STATUS: MOCK_STATUS,
-        DATA_STATISTICS: MOCK_STATISTICS,
-        DATA_AREAS: map2_areas,
-    }
-    coordinator._last_areas = datetime.utcnow()   # don't re-fetch areas this tick
-    coordinator._last_statistics = datetime.utcnow()
-    coordinator._last_robot_info = datetime.utcnow()
-    coordinator._last_map_geometry = datetime.utcnow()
-    # Simulate having already committed areas for map "2", but now switched to "3"
-    coordinator._areas_committed_map_id = "2"
-    coordinator._manual_map_id = "3"             # user switched to map 3
+    # Simulate: map2 areas cached, but user has switched to map3
+    coordinator._areas_by_map["2"] = map2_areas
+    coordinator._committed_active_map_id = "3"   # committed is now map3 (no areas yet)
+    coordinator._manual_map_id = "3"
 
-    result = await coordinator._async_update_data()
-
-    assert DATA_AREAS not in result, (
-        "DATA_AREAS for old map must be cleared when active map has changed"
+    # coordinator.areas reads from _areas_by_map[committed_active_map_id]
+    areas = coordinator.areas
+    area_ids = [a.get("id") for a in areas]
+    assert 99 not in area_ids, (
+        "map2 room must not be returned by coordinator.areas when map3 is active"
     )
 
 
 @pytest.mark.asyncio
 async def test_areas_committed_map_id_set_when_areas_committed(coordinator, mock_client):
-    """_areas_committed_map_id and _maps_with_committed_areas are updated when
-    areas are successfully committed so the stale-clear logic works correctly."""
+    """committed_active_map_id advances to the fetched map_id after a successful
+    areas fetch so per-map entities become available."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
-    coordinator._last_areas = None
+    # Start with no areas cached for map "3"
+    coordinator._areas_fetched_at.clear()
+    coordinator._areas_by_map.clear()
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = set()
-    coordinator._areas_fetched_for_map_id = None
-    coordinator._areas_committed_map_id = None
+    coordinator._last_maps = datetime.utcnow()
     coordinator._manual_map_id = "3"
 
     mock_client.get_areas.return_value = MOCK_AREAS
 
     await coordinator._async_update_data()
 
-    assert coordinator._areas_committed_map_id == "3", (
-        "_areas_committed_map_id must be set to the fetched map_id on commit"
+    assert coordinator.committed_active_map_id == "3", (
+        "committed_active_map_id must advance to '3' after a successful areas fetch"
     )
-    assert "3" in coordinator._maps_with_committed_areas, (
-        "_maps_with_committed_areas must include the committed map_id"
+    assert coordinator._areas_fetched_at.get("3") is not None, (
+        "_areas_fetched_at['3'] must be set after a successful fetch"
     )
-
-
-@pytest.mark.asyncio
-async def test_map1_map2_map1_fast_switch_no_stale_rooms(coordinator, mock_client):
-    """Fast map1→map2→map1 round-trip must not leave map2 entities available
-    and must not leave map2 areas in coordinator.data after switching back.
-
-    This exercises the two-part fix:
-    - _prev_committed_map_id=None when switching back to a known map (Fix 2)
-    - DATA_AREAS cleared for old map at start of next tick (Fix 1)
-    """
-    map1_areas = {"areas": [{"id": 1, "area_meta_data": '{"name":"LivingRoom"}'}]}
-    map2_areas = {"areas": [{"id": 99, "area_meta_data": '{"name":"Map2Room"}'}]}
-
-    # Starting state: map1 committed
-    coordinator._areas_committed_map_id = "1"
-    coordinator._areas_fetched_for_map_id = "1"
-    coordinator._maps_with_committed_areas = {"1"}
-    coordinator._manual_map_id = "1"
-    coordinator._prev_committed_map_id = None
-    coordinator.data = {
-        DATA_STATUS: MOCK_STATUS,
-        DATA_STATISTICS: MOCK_STATISTICS,
-        DATA_AREAS: map1_areas,
-    }
-    coordinator.async_request_refresh = AsyncMock()
-
-    # Step 1: switch to map2 (new map — grace period applies)
-    coordinator._areas_fetched_for_map_id = "1"
-    await coordinator.async_set_active_map("2")
-
-    assert coordinator._prev_committed_map_id == "1", "grace period for new map2"
-    assert coordinator._areas_fetched_for_map_id is None
-
-    # Simulate coordinator committing map2 areas (as if refresh ran successfully)
-    coordinator._areas_fetched_for_map_id = "2"
-    coordinator._areas_committed_map_id = "2"
-    coordinator._maps_with_committed_areas.add("2")
-    coordinator.data = {**coordinator.data, DATA_AREAS: map2_areas}
-
-    # Step 2: switch BACK to map1 (known map — no grace period)
-    coordinator._areas_fetched_for_map_id = "2"
-    await coordinator.async_set_active_map("1")
-
-    # Fix 2: no grace period because map1 is in _maps_with_committed_areas
-    assert coordinator._prev_committed_map_id is None, (
-        "no grace period when switching back to map1 (already known)"
-    )
-    # Fix 2: map2 entities immediately unavailable
-    assert coordinator.map_available_for("2") is False, (
-        "map2 entities must be unavailable immediately after switching back to map1"
-    )
-    assert coordinator.map_available_for("1") is True, (
-        "map1 entities must be available since map1 is now active"
-    )
-
-    # Step 3: simulate the coordinator tick that runs after the second switch
-    coordinator._last_areas = None
-    coordinator._last_statistics = datetime.utcnow()
-    coordinator._last_robot_info = datetime.utcnow()
-    coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = set()
-    coordinator._areas_ready = False
-    coordinator._areas_fetched_for_map_id = None
-    mock_client.get_areas.return_value = map1_areas
-
-    result = await coordinator._async_update_data()
-
-    # Fix 1: DATA_AREAS for map2 must be cleared at the start of the tick
-    # and then re-populated with map1's areas by the areas-fetch within the tick
-    areas_blob = result.get(DATA_AREAS, {})
-    area_ids = [a.get("id") for a in areas_blob.get("areas", [])]
-    assert 99 not in area_ids, "map2 room must not appear in coordinator.areas after map1 tick"
-    assert 1 in area_ids, "map1 room must appear in coordinator.areas"
-    assert coordinator._areas_committed_map_id == "1"
-
-
-@pytest.mark.asyncio
-async def test_async_set_active_map_saves_prev_committed(coordinator):
-    """async_set_active_map saves _areas_fetched_for_map_id into
-    _prev_committed_map_id before clearing it, so per-map entities for
-    the old map stay available during the transition window."""
-    coordinator.data = {}
-    coordinator._areas_fetched_for_map_id = "1"  # was on map 1
-    coordinator._prev_committed_map_id = None
-    coordinator.async_request_refresh = AsyncMock()
-
-    await coordinator.async_set_active_map("3")
-
-    assert coordinator._prev_committed_map_id == "1", (
-        "_prev_committed_map_id must be set to the previously committed map_id"
-    )
-    assert coordinator._areas_fetched_for_map_id is None, (
-        "_areas_fetched_for_map_id must be cleared to start fresh fetch"
-    )
-    assert coordinator._manual_map_id == "3"
-
-
-@pytest.mark.asyncio
-async def test_async_set_active_map_no_grace_when_switching_back_to_known_map(coordinator):
-    """When switching to a map that already has committed areas in this session,
-    _prev_committed_map_id is set to None instead of the old map_id.
-
-    Rationale: the destination map's entities already exist in HA and become
-    available immediately via active_map_id.  Keeping the old map's entities
-    alive via _prev_committed_map_id would cause a map1→map2→map1 round-trip
-    to leave map2 entities visible as 'available' while map1 is selected."""
-    coordinator.data = {}
-    coordinator._areas_fetched_for_map_id = "2"  # was on map 2
-    coordinator._prev_committed_map_id = None
-    coordinator._maps_with_committed_areas = {"1", "3"}  # map1 and map3 known
-    coordinator.async_request_refresh = AsyncMock()
-
-    # Switching back to a known map — no grace period needed
-    await coordinator.async_set_active_map("1")
-
-    assert coordinator._prev_committed_map_id is None, (
-        "_prev_committed_map_id must be None when destination map already has committed areas"
-    )
-    assert coordinator._areas_fetched_for_map_id is None
-    assert coordinator._manual_map_id == "1"
-
-
-@pytest.mark.asyncio
-async def test_nonempty_areas_defers_prev_committed_map_id_clear(coordinator, mock_client):
-    """When areas for the new map are fetched non-empty, _prev_committed_map_id
-    is NOT cleared immediately — it is deferred to the START of the following tick.
-
-    This lets async_update_listeners() (which fires right after _async_update_data
-    returns) see the guard still set, keeping old-map entities available while
-    new-map entities complete their async_added_to_hass() setup.  The guard is
-    cleared at the beginning of the next _async_update_data call once
-    _areas_fetched_for_map_id == active_map_id.
-    """
-    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
-    coordinator._last_areas = None
-    coordinator._last_statistics = datetime.utcnow()
-    coordinator._last_robot_info = datetime.utcnow()
-    coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = set()
-    coordinator._areas_fetched_for_map_id = None
-    coordinator._areas_ready = False
-    coordinator._prev_committed_map_id = "1"   # set by previous async_set_active_map
-
-    mock_client.get_areas.return_value = MOCK_AREAS
-
-    # First tick: areas committed but guard still set (deferred cleanup)
-    await coordinator._async_update_data()
-
-    assert coordinator._prev_committed_map_id == "1", (
-        "_prev_committed_map_id must NOT be cleared on the commit tick — "
-        "async_update_listeners fires right after this returns, and new-map "
-        "entities have not yet completed async_added_to_hass()"
-    )
-    assert coordinator._areas_fetched_for_map_id is not None
-    assert coordinator._areas_ready is True
-
-    # Second tick: deferred cleanup fires at the top of _async_update_data
-    await coordinator._async_update_data()
-
-    assert coordinator._prev_committed_map_id is None, (
-        "_prev_committed_map_id must be cleared at the START of the tick that "
-        "follows the commit tick, by which time new-map entities are initialised"
-    )
-
-
-@pytest.mark.asyncio
-async def test_empty_areas_does_not_clear_prev_committed_map_id(coordinator, mock_client):
-    """When areas come back empty (transient API quirk), _prev_committed_map_id
-    is left intact so old-map entities stay available during the retry window."""
-    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
-    coordinator._last_areas = None
-    coordinator._last_statistics = datetime.utcnow()
-    coordinator._last_robot_info = datetime.utcnow()
-    coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = set()
-    coordinator._areas_fetched_for_map_id = None
-    coordinator._areas_ready = False
-    coordinator._prev_committed_map_id = "1"
-
-    mock_client.get_areas.return_value = {"areas": []}
-
-    await coordinator._async_update_data()
-
-    assert coordinator._prev_committed_map_id == "1", (
-        "_prev_committed_map_id must be preserved while areas retry is pending"
-    )
-    assert coordinator._areas_fetched_for_map_id is None
 
 
 # ── Stable device_id (CONF_SERIAL) ───────────────────────────────────
@@ -2135,214 +1725,3 @@ async def test_update_caches_serial_in_stable_device_id(coordinator, mock_client
     assert coordinator._stable_device_id == "aicu_aicgca2rychxpdkawgzu"
 
 
-# ── _async_clear_map_switch_guard ─────────────────────────────────────
-
-
-def _make_coordinator_with_guard(mock_client, mock_config_entry, *, map_id="3"):
-    """Return a coordinator already wired with a fake async_update_listeners."""
-    hass = MagicMock()
-    coord = RobEyeCoordinator(
-        hass=hass,
-        config_entry=mock_config_entry,
-        client=mock_client,
-        map_id=map_id,
-    )
-    coord.async_update_listeners = MagicMock()
-    return coord
-
-
-def test_clear_guard_clears_prev_and_notifies(mock_client, mock_config_entry):
-    """Normal case: guard clears _prev_committed_map_id and calls async_update_listeners."""
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    # Simulate post-map-switch state: areas fetched for map 5, old guard set to map 3
-    coord._prev_committed_map_id = "3"
-    coord._areas_fetched_for_map_id = "5"
-    coord._manual_map_id = "5"
-
-    coord._async_clear_map_switch_guard()
-
-    assert coord._prev_committed_map_id is None
-    coord.async_update_listeners.assert_called_once()
-
-
-def test_clear_guard_noop_when_already_cleared(mock_client, mock_config_entry):
-    """If _prev_committed_map_id is already None the callback is a no-op."""
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    coord._prev_committed_map_id = None
-    coord._areas_fetched_for_map_id = "5"
-    coord._manual_map_id = "5"
-
-    coord._async_clear_map_switch_guard()
-
-    coord.async_update_listeners.assert_not_called()
-
-
-def test_clear_guard_skips_when_map_changed_again(mock_client, mock_config_entry):
-    """If the user switched maps again before callback fires, skip to avoid stomping."""
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    # Guard was set when transitioning from map 3 → map 5.
-    # User then switched again to map 7 before the 1-second callback fired.
-    coord._prev_committed_map_id = "3"
-    # areas_fetched is still for map 5 (mid-fetch for map 7)
-    coord._areas_fetched_for_map_id = "5"
-    coord._manual_map_id = "7"  # active is now map 7 — mismatch with fetched
-
-    coord._async_clear_map_switch_guard()
-
-    # Guard must NOT be cleared — the pending switch to map 7 will handle it
-    assert coord._prev_committed_map_id == "3"
-    coord.async_update_listeners.assert_not_called()
-
-
-def test_clear_guard_skips_when_areas_not_yet_fetched(mock_client, mock_config_entry):
-    """If _areas_fetched_for_map_id is None the coordinator hasn't seen the new map yet."""
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    coord._prev_committed_map_id = "3"
-    coord._areas_fetched_for_map_id = None  # fetch not complete
-    coord._manual_map_id = "5"
-
-    coord._async_clear_map_switch_guard()
-
-    assert coord._prev_committed_map_id == "3"
-    coord.async_update_listeners.assert_not_called()
-
-
-def test_clear_guard_uses_map_id_when_no_manual_override(mock_client, mock_config_entry):
-    """Falls back to coord.map_id when _manual_map_id is falsy."""
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry, map_id="5")
-    coord._prev_committed_map_id = "3"
-    coord._areas_fetched_for_map_id = "5"
-    coord._manual_map_id = None  # no manual override → uses self.map_id ("5")
-
-    coord._async_clear_map_switch_guard()
-
-    assert coord._prev_committed_map_id is None
-    coord.async_update_listeners.assert_called_once()
-
-
-def test_map_available_for_returns_true_during_grace_period(mock_client, mock_config_entry):
-    """Old-map entities remain available while _prev_committed_map_id is set."""
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry, map_id="5")
-    coord._prev_committed_map_id = "3"
-    coord._manual_map_id = "5"
-    coord._areas_fetched_for_map_id = "5"
-    coord.data = {}
-
-    assert coord.map_available_for("3") is True   # old map — grace period active
-    assert coord.map_available_for("5") is True   # new/active map
-    assert coord.map_available_for("9") is False  # unrelated map
-
-
-def test_map_available_for_false_after_guard_cleared(mock_client, mock_config_entry):
-    """After clear_guard runs, old-map entities become unavailable."""
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry, map_id="5")
-    coord._prev_committed_map_id = "3"
-    coord._manual_map_id = "5"
-    coord._areas_fetched_for_map_id = "5"
-    coord.data = {}
-
-    # Guard fires
-    coord._async_clear_map_switch_guard()
-
-    assert coord._prev_committed_map_id is None
-    assert coord.map_available_for("3") is False  # old map no longer in grace period
-    assert coord.map_available_for("5") is True   # new/active map still available
-
-
-# ── _async_clear_map_switch_guard — entity-readiness polling ─────────────────
-
-
-def test_clear_guard_reschedules_when_entities_not_in_states(mock_client, mock_config_entry):
-    """Guard reschedules when new-map button entities are missing from hass.states."""
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    # Named, non-blocking area so _new_map_entities_ready() checks hass.states
-    coord.data = {DATA_AREAS: {"areas": [
-        {"id": 7, "area_meta_data": '{"name":"Kitchen"}'}
-    ]}}
-    coord._prev_committed_map_id = "3"
-    coord._areas_fetched_for_map_id = "5"
-    coord._manual_map_id = "5"
-    coord.hass.states.get.return_value = None  # entity not in states
-
-    coord._async_clear_map_switch_guard()
-
-    # Guard must stay active; should have rescheduled
-    assert coord._prev_committed_map_id == "3"
-    coord.async_update_listeners.assert_not_called()
-    coord.hass.loop.call_later.assert_called_with(0.5, coord._async_clear_map_switch_guard)
-
-
-def test_clear_guard_clears_when_entity_in_states(mock_client, mock_config_entry):
-    """Guard clears immediately when new-map button entity is found in hass.states."""
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    coord.data = {DATA_AREAS: {"areas": [
-        {"id": 7, "area_meta_data": '{"name":"Kitchen"}'}
-    ]}}
-    coord._prev_committed_map_id = "3"
-    coord._areas_fetched_for_map_id = "5"
-    coord._manual_map_id = "5"
-    # Entity IS in states → ready
-    coord.hass.states.get.return_value = MagicMock()
-
-    coord._async_clear_map_switch_guard()
-
-    assert coord._prev_committed_map_id is None
-    coord.async_update_listeners.assert_called_once()
-
-
-def test_clear_guard_reschedules_when_entity_in_registry_but_not_states(mock_client, mock_config_entry):
-    """Guard reschedules when entity is in registry but not yet in hass.states.
-
-    The registry fallback was removed to prevent premature dashboard saves:
-    async_add_entities may not have run yet even though the registry entry
-    is enabled, so accepting registry presence would cause Lovelace to show
-    the raw entity_id as an unknown row.
-    """
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    coord.data = {DATA_AREAS: {"areas": [
-        {"id": 7, "area_meta_data": '{"name":"Kitchen"}'}
-    ]}}
-    coord._prev_committed_map_id = "3"
-    coord._areas_fetched_for_map_id = "5"
-    coord._manual_map_id = "5"
-    coord.hass.states.get.return_value = None  # not in states yet
-
-    coord._async_clear_map_switch_guard()
-
-    # Guard must stay active — only hass.states presence is accepted
-    assert coord._prev_committed_map_id == "3"
-    coord.async_update_listeners.assert_not_called()
-    coord.hass.loop.call_later.assert_called_with(0.5, coord._async_clear_map_switch_guard)
-
-
-def test_clear_guard_clears_after_max_attempts_timeout(mock_client, mock_config_entry):
-    """Guard clears after 60 attempts even if entities never appear (hard timeout)."""
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    coord.data = {DATA_AREAS: {"areas": [
-        {"id": 7, "area_meta_data": '{"name":"Kitchen"}'}
-    ]}}
-    coord._prev_committed_map_id = "3"
-    coord._areas_fetched_for_map_id = "5"
-    coord._manual_map_id = "5"
-    coord.hass.states.get.return_value = None  # entities still not in states
-    coord._guard_clear_attempts = 60  # at the 30-second limit
-
-    coord._async_clear_map_switch_guard()
-
-    # Timeout reached → guard clears unconditionally
-    assert coord._prev_committed_map_id is None
-    coord.async_update_listeners.assert_called_once()
-
-
-def test_clear_guard_no_rooms_ready_immediately(mock_client, mock_config_entry):
-    """When areas list is empty _new_map_entities_ready returns True and guard clears."""
-    coord = _make_coordinator_with_guard(mock_client, mock_config_entry)
-    coord.data = {DATA_AREAS: {"areas": []}}  # no rooms
-    coord._prev_committed_map_id = "3"
-    coord._areas_fetched_for_map_id = "5"
-    coord._manual_map_id = "5"
-
-    coord._async_clear_map_switch_guard()
-
-    assert coord._prev_committed_map_id is None
-    coord.async_update_listeners.assert_called_once()

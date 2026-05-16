@@ -165,6 +165,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     )
     await coordinator.async_config_entry_first_refresh()
 
+    # Pre-fetch areas for every permanent map so all per-map entities can be
+    # created at setup time.  Errors on individual maps are non-fatal.
+    await coordinator.async_load_all_map_areas()
+
     # Create input_boolean selection entities for all discovered rooms
     await _async_sync_room_selection_booleans(hass, coordinator)
 
@@ -305,8 +309,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     # readiness race; an extra "verify after 5 s" task is no longer needed
     # because the lock-protected save already waits for entities to settle.
     @callback
-    def _on_areas_changed() -> None:
-        LOGGER.debug("Areas changed — invalidating dashboard hash and triggering rebuild")
+    def _on_areas_changed(map_id: str) -> None:
+        LOGGER.debug("Areas changed for map %s — invalidating dashboard hash and triggering rebuild", map_id)
         dashboard_manager.invalidate()
 
         async def _areas_changed_task() -> None:

@@ -250,7 +250,7 @@ async def test_async_update_defers_when_entities_missing():
         device_id="dev",
         _areas_ready=True,
         active_map_id="3",
-        areas_map_id="3",
+        committed_active_map_id="3",
     )
     hass.data = {"rowenta_roboeye": {"entry1": coord}}
 
@@ -283,7 +283,7 @@ async def test_async_update_proceeds_when_entities_present():
         device_id="dev",
         _areas_ready=True,
         active_map_id="3",
-        areas_map_id="3",
+        committed_active_map_id="3",
     )
     hass.data = {"rowenta_roboeye": {"entry1": coord}}
 
@@ -311,8 +311,8 @@ async def test_async_update_proceeds_when_entities_present():
 
 
 @pytest.mark.asyncio
-async def test_async_update_clears_rooms_when_areas_map_id_mismatches():
-    """When areas_map_id != active_map_id the dashboard saves with an empty
+async def test_async_update_clears_rooms_when_committed_map_mismatches():
+    """When committed_active_map_id != active_map_id the dashboard saves with an empty
     rooms list rather than rendering the previous map's stale rooms.
 
     Regression: after a user-initiated map switch, coordinator.areas can
@@ -330,9 +330,9 @@ async def test_async_update_clears_rooms_when_areas_map_id_mismatches():
     hass = _make_hass_with_states(_all_room_eids("dev", "A", 5))
     coord = MagicMock(
         device_id="dev",
-        _areas_ready=False,         # transition in progress
-        active_map_id="B",          # user just switched to B
-        areas_map_id=None,          # B's areas not yet committed
+        _areas_ready=False,              # transition in progress
+        active_map_id="B",               # user just switched to B
+        committed_active_map_id=None,    # B's areas not yet committed
     )
     hass.data = {"rowenta_roboeye": {"entry1": coord}}
 
@@ -368,7 +368,7 @@ async def test_async_update_clears_rooms_when_areas_map_id_mismatches():
 async def test_async_update_aborts_when_active_map_changes_mid_wait():
     """If the user switches maps while we're polling for entity readiness,
     abort cleanly so an intermediate map's config is never saved."""
-    # areas_map_id matches the requested active_map_id ("3") so the rooms
+    # committed_active_map_id matches the requested active_map_id ("3") so the rooms
     # list is preserved for the readiness poll — coordinator.active_map_id
     # changing mid-wait to "9" is the only thing that triggers the abort.
     hass = _make_hass_with_states(set())  # entities never appear
@@ -376,7 +376,7 @@ async def test_async_update_aborts_when_active_map_changes_mid_wait():
         device_id="dev",
         _areas_ready=True,
         active_map_id="9",
-        areas_map_id="3",
+        committed_active_map_id="3",
     )
     hass.data = {"rowenta_roboeye": {"entry1": coord}}
 
@@ -410,7 +410,7 @@ async def test_async_update_serializes_concurrent_callers():
         device_id="dev",
         _areas_ready=True,
         active_map_id="3",
-        areas_map_id="3",
+        committed_active_map_id="3",
     )
     hass.data = {"rowenta_roboeye": {"entry1": coord}}
 

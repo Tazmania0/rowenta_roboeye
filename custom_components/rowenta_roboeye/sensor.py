@@ -64,8 +64,7 @@ from .const import (
 from .coordinator import RobEyeCoordinator
 from .entity import (
     RobEyeEntity,
-    async_disable_room_entities_for_other_maps,
-    async_enable_room_entities_for_map,
+    async_enable_all_room_entities,
     async_remove_duplicate_room_entities,
     async_remove_entities_for_deleted_maps,
     async_remove_stale_room_entities,
@@ -391,34 +390,35 @@ async def async_setup_entry(
     # Selected room count sensor (used by dashboard "Clean Selected" button label)
     entities.append(RobEyeSelectedRoomCountSensor(coordinator))
 
-    # ── Per-room sensors (from current area list) ─────────────────────
+    # ── Per-room sensors (from all known maps) ────────────────────────
     # Per-map entity tracking: map_id -> {area_id -> [entities]}.
     known_sensors_by_map: dict[str, dict] = {}
-    _active = coordinator.active_map_id
 
-    # Re-enable registry entries for the active map that were disabled when a
-    # different map was previously active.  Must happen before async_add_entities
-    # so HA links the new entity objects to the (now enabled) registry entries.
-    if _active:
-        async_enable_room_entities_for_map(hass, config_entry, "sensor", _active)
+    # Migration: re-enable entities disabled by the old disable/enable model.
+    async_enable_all_room_entities(hass, config_entry, "sensor")
 
-    if coordinator.areas_map_id == _active:
-        # Purge registry entries for areas that no longer exist on the active
-        # map (e.g. areas changed while HA was offline).
-        current_area_ids: set = {
-            a.get("id")
-            for a in coordinator.areas
-            if a.get("id") is not None and _parse_sensor_area_name(a)
-        }
+    # Purge stale registry entries for the committed active map.
+    _committed = coordinator.committed_active_map_id
+    current_area_ids: set = {
+        str(a.get("id"))
+        for a in coordinator.areas_for(_committed)
+        if a.get("id") is not None and _parse_sensor_area_name(a)
+    }
+    if current_area_ids:
         async_remove_stale_room_entities(
             hass, config_entry, coordinator, "sensor", current_area_ids
         )
 
+    # Build sensors for ALL known maps (active + inactive).
+    for map_id, areas_blob in coordinator._areas_by_map.items():
+        areas_list = areas_blob.get("areas", []) if isinstance(areas_blob, dict) else []
+        if not areas_list:
+            continue
         initial_sensors, initial_by_area = _build_room_sensor_entities(
-            coordinator, config_entry, coordinator.areas, set()
+            coordinator, config_entry, map_id, areas_list, set()
         )
         if initial_by_area:
-            known_sensors_by_map[_active] = initial_by_area
+            known_sensors_by_map[map_id] = initial_by_area
         entities.extend(initial_sensors)
 
     room_uids = {
@@ -430,50 +430,28 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
-    # Disable registry entries for all maps other than the active one.  This
-    # prevents inactive-map room entities from appearing as enabled-unavailable
-    # (!) duplicates in the entity list; they instead show as disabled (—).
-    if _active:
-        async_disable_room_entities_for_other_maps(hass, config_entry, "sensor", _active)
-
     # ── Dynamic listener: add/remove entities when area set changes ───
     @callback
-    def _async_on_areas_updated() -> None:
+    def _async_on_areas_updated(map_id: str) -> None:
         """Called by the coordinator when the area set changes."""
-        # Time-machine guard: capture the generation at handler entry.
-        _generation = coordinator.areas_commit_generation
-
-        if coordinator.areas_map_id != coordinator.active_map_id:
-            LOGGER.debug("sensor: areas fetched for wrong map, skipping update")
+        areas = coordinator.areas_for(map_id)
+        if not areas:
             return
 
-        active_map = coordinator.active_map_id
-
-        # Re-enable registry entries for the active map before building new
-        # entity objects.  On a map round-trip (map1→map2→map1) these entries
-        # were disabled when map2 became active; they must be enabled before
-        # async_add_entities so HA links the fresh objects to the existing entries.
-        async_enable_room_entities_for_map(hass, config_entry, "sensor", active_map)
-
-        map_sensors = known_sensors_by_map.setdefault(active_map, {})
+        map_sensors = known_sensors_by_map.setdefault(map_id, {})
 
         current_ids: set = {
             str(area_id)
-            for area in coordinator.areas
+            for area in areas
             if (area_id := area.get("id")) is not None
             and _parse_sensor_area_name(area)
         }
 
-        # Purge registry entries for area_ids no longer on this map.  This
-        # catches orphans whose area_ids changed between HA sessions (e.g. after
-        # a room redraw) when async_remove_stale_room_entities wasn't called at
-        # setup time because areas hadn't been fetched yet.
-        async_remove_stale_room_entities(
-            hass, config_entry, coordinator, "sensor", current_ids
-        )
+        if map_id == coordinator.committed_active_map_id:
+            async_remove_stale_room_entities(
+                hass, config_entry, coordinator, "sensor", current_ids
+            )
 
-        # Remove stale area entities from both memory and entity registry so
-        # they are fully gone (not recreated as stubs on next HA restart).
         stale_ids = set(map_sensors.keys()) - current_ids
         from homeassistant.helpers import entity_registry as er
         _ent_reg = er.async_get(hass)
@@ -486,14 +464,13 @@ async def async_setup_entry(
                     hass.async_create_task(entity.async_remove())
 
         new_entities, new_by_area = _build_room_sensor_entities(
-            coordinator, config_entry, coordinator.areas, set(map_sensors.keys())
+            coordinator, config_entry, map_id, areas, set(map_sensors.keys())
         )
         if new_entities:
-            LOGGER.debug("sensor: adding %d new room entities", len(new_entities))
+            LOGGER.debug("sensor: adding %d new room entities for map %s", len(new_entities), map_id)
             map_sensors.update(new_by_area)
             async_add_entities(new_entities)
 
-        # Remove stale duplicates for the current active map (and across all maps).
         canonical_uids: set[str] = {
             e._attr_unique_id
             for entity_list in map_sensors.values()
@@ -502,24 +479,6 @@ async def async_setup_entry(
         }
         if canonical_uids:
             async_remove_duplicate_room_entities(hass, config_entry, "sensor", canonical_uids)
-
-        if coordinator.areas_commit_generation != _generation:
-            LOGGER.warning(
-                "sensor: areas_commit_generation advanced during handler "
-                "(was %d, now %d) — handler ran on stale data",
-                _generation,
-                coordinator.areas_commit_generation,
-            )
-
-        # Disable all registry entries that belong to maps other than active_map.
-        # The in-memory tracking dicts for those maps are also cleared so entity
-        # objects are recreated fresh (from coordinator areas) the next time that
-        # map becomes active — the stale objects from this session are no longer
-        # usable after being disabled (HA removes them from the state machine).
-        async_disable_room_entities_for_other_maps(hass, config_entry, "sensor", active_map)
-        for _map_id in list(known_sensors_by_map.keys()):
-            if _map_id != active_map:
-                known_sensors_by_map.pop(_map_id)
 
     @callback
     def _async_on_maps_updated(deleted_map_ids: set[str]) -> None:
@@ -869,7 +828,7 @@ class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self.coordinator.map_available_for(self._map_id) and super().available
+        return self._map_id == self.coordinator.committed_active_map_id and super().available
 
     @property
     def native_value(self) -> Any:
@@ -896,6 +855,7 @@ def _parse_sensor_area_name(area: dict) -> str:
 def _build_room_sensor_entities(
     coordinator: RobEyeCoordinator,
     config_entry: ConfigEntry,
+    map_id: str,
     areas: list[dict[str, Any]],
     already_known: set,
 ) -> tuple[list[RobEyeRoomSensor], dict]:
@@ -903,10 +863,6 @@ def _build_room_sensor_entities(
     flat: list[RobEyeRoomSensor] = []
     by_area: dict = {}
 
-    _map = coordinator.active_map_id
-    # Guard: skip if areas data was fetched for a different map (stale-signal race).
-    if coordinator.areas_map_id != _map:
-        return flat, by_area
     for area in areas:
         area_id = area.get("id")
         if area_id is None:
@@ -923,7 +879,7 @@ def _build_room_sensor_entities(
             continue
         sensors = _build_room_sensors(
             coordinator, config_entry, area_id, room_name,
-            coordinator.device_id, map_id=_map,
+            coordinator.device_id, map_id=map_id,
         )
         flat.extend(sensors)
         by_area[area_id] = sensors
@@ -943,7 +899,7 @@ def _build_room_sensors(
 
     def _stats(c: RobEyeCoordinator) -> dict[str, Any]:
         _aid = str(area_id)
-        for a in c.areas:
+        for a in c.areas_for(map_id):
             if str(a.get("id", "")) == _aid:
                 return a.get("statistics", {})
         return {}
