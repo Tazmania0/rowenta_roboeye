@@ -188,6 +188,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # dashboard never shows an "unavailable" flash while new-map entities are
         # being created.
         self._prev_committed_map_id: str | None = None
+        # Poll counter for _async_clear_map_switch_guard entity-readiness loop.
+        self._guard_clear_attempts: int = 0
 
         # Last-session replay state
         self._robot_path: list[tuple[float, float]] = []
@@ -444,16 +446,26 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @callback
     def _async_clear_map_switch_guard(self) -> None:
-        """Clear the map-switch grace period without an HTTP round-trip.
+        """Clear the map-switch grace period once new-map entities are visible.
 
-        Scheduled 1 s after new-map areas are committed so all four
-        platform async_add_entities tasks have time to complete their
-        async_added_to_hass setup.  Using call_later instead of a full
-        coordinator refresh avoids the failure mode where a transient
-        CannotConnect on the extra tick sets last_update_success=False
-        and every newly-created entity writes its initial state as
-        "unavailable" (visible for up to 15 s until the next normal poll).
+        Polls hass.states every 0.5 s until every clean-room button entity
+        for the new map appears (proxy for all per-room entity types being
+        ready).  Only then clears _prev_committed_map_id so that
+        active_map_id_for_display — and therefore the Active Map select
+        entity — stays on the OLD map name until room cards in the Lovelace
+        dashboard have actually been rebuilt for the new map.
+
+        A hard timeout of 30 s (60 polls × 0.5 s) guards against HA
+        instances where entity setup is slow; the start-of-tick cleanup in
+        _async_update_data provides an additional safety net.
+
+        Using call_later instead of a full coordinator refresh avoids the
+        failure mode where a transient CannotConnect sets
+        last_update_success=False and every newly-created entity writes its
+        initial state as "unavailable" (visible for up to 15 s until the
+        next normal poll).
         """
+        _MAX_GUARD_POLLS = 60  # 0.5 s × 60 = 30 s maximum wait
         if self._prev_committed_map_id is None:
             return  # already cleared by deferred startup or another switch
         _current_active = self._manual_map_id or self.map_id
@@ -464,15 +476,55 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Map switched again while this callback was pending — skip;
             # the next cycle will handle _prev_committed_map_id correctly.
             return
+        # Increment attempt counter and reschedule if entities are not yet
+        # visible in hass.states and the timeout has not expired.
+        self._guard_clear_attempts += 1
+        if (
+            self._guard_clear_attempts <= _MAX_GUARD_POLLS
+            and not self._new_map_entities_ready()
+        ):
+            self.hass.loop.call_later(0.5, self._async_clear_map_switch_guard)
+            return
         LOGGER.debug(
-            "RobEye: clearing map-switch guard via lightweight callback "
-            "(old=%s new=%s)",
+            "RobEye: clearing map-switch guard "
+            "(old=%s new=%s attempts=%d)",
             self._prev_committed_map_id,
             self._areas_fetched_for_map_id,
+            self._guard_clear_attempts,
         )
         self._prev_committed_map_id = None
         if hasattr(self, "async_update_listeners"):
             self.async_update_listeners()
+
+    def _new_map_entities_ready(self) -> bool:
+        """Return True when per-room button entities for the new map are in hass.states.
+
+        Uses the clean-room button as a proxy: if a button exists for every
+        non-None area, all other per-room entity types are assumed ready since
+        they are created in the same async_add_entities call.  Returns True
+        immediately when there are no rooms so the guard always clears.
+        """
+        map_id = self._areas_fetched_for_map_id
+        if not map_id:
+            return False
+        areas = self.areas
+        if not areas:
+            return True  # no rooms — nothing to wait for
+        device_id = self.device_id
+        _ent_reg = er.async_get(self.hass)
+        for area in areas:
+            area_id = area.get("id")
+            if area_id is None:
+                continue
+            eid = f"button.{device_id}_map{map_id}_clean_room_{area_id}"
+            if self.hass.states.get(eid) is not None:
+                continue
+            # Also accept if entity is in the registry and enabled (re-enabling
+            # transition: disabled_by was cleared but state not yet written).
+            entry = _ent_reg.async_get(eid)
+            if entry is None or entry.disabled_by is not None:
+                return False
+        return True
 
     # ── Entity state helpers ───────────────────────────────────────────
 
@@ -1059,12 +1111,12 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # every newly-created entity to write state "unavailable"
                 # immediately.  Recovery then takes up to 15 s (idle poll).
                 #
-                # The lightweight callback below clears the flag and notifies
-                # existing listeners without touching the network.  A 1-second
-                # delay gives all four platform async_add_entities tasks enough
-                # time to complete their async_added_to_hass setup before the
-                # old-map entities are flipped to unavailable.
+                # The lightweight callback below polls hass.states until the
+                # new map's entities are actually visible (or 30 s timeout),
+                # then notifies listeners.  This keeps active_map_id_for_display
+                # on the OLD map name while room cards are still loading.
                 if self._prev_committed_map_id is not None:
+                    self._guard_clear_attempts = 0
                     self.hass.loop.call_later(
                         1.0, self._async_clear_map_switch_guard
                     )
