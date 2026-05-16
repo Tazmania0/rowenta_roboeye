@@ -143,10 +143,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._known_area_ids_by_map: dict[str, set[str]] = {}
         # Track known permanent map IDs so we can detect when a map is deleted
         self._known_map_ids: set = set()
-        # In-flight race guard: the map_id currently being fetched
-        self._areas_fetched_for_map_id: str | None = None
-        # Last map for which areas were successfully committed
-        self._areas_committed_map_id: str | None = None
 
         # Cleaning strategy — set by strategy select or deep-clean switch; read by all clean operations
         self.cleaning_strategy: str = STRATEGY_DEFAULT

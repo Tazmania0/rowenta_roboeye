@@ -964,7 +964,6 @@ async def test_device_floor_change_does_not_reset_areas(coordinator, mock_client
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = {3, 11}
     coordinator._robot_path = [(0.0, 0.0)]
     coordinator._session_complete = True
 
@@ -1101,36 +1100,24 @@ async def test_areas_fetched_for_ha_configured_map(coordinator, mock_client):
 @pytest.mark.asyncio
 async def test_empty_areas_after_map_switch_does_not_advance_timer(coordinator, mock_client):
     """Regression: when get_areas returns empty data right after a map switch,
-    _last_areas must NOT be advanced so the next tick retries the fetch instead
-    of waiting the full 300 s interval.
-    _areas_fetched_for_map_id must also stay None so that platform guards
-    (areas_map_id != active_map_id) correctly block signal callbacks from
-    running with empty area data.
+    _areas_fetched_at for the active map must NOT be set so the next tick retries
+    the fetch instead of waiting the full 300 s interval.
     A fast 2-second retry must be scheduled via call_later so rooms appear
     sooner than the next normal coordinator tick (up to 15 s when idle)."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
-    coordinator._last_areas = None          # post-switch: force bucket to run
+    # _areas_fetched_at is empty → active map "3" is due for a fetch
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = set()     # post-switch: no known areas yet
-    coordinator._areas_fetched_for_map_id = None
-    coordinator._areas_ready = False
 
     # Robot transiently returns empty areas (the 20-30% failure case)
     mock_client.get_areas.return_value = {"areas": []}
 
     await coordinator._async_update_data()
 
-    # _last_areas must remain None so the bucket fires again next tick
-    assert coordinator._last_areas is None, (
-        "empty areas must not advance _last_areas — next tick must retry"
-    )
-    # _areas_ready stays False because no areas were loaded
-    assert coordinator._areas_ready is False
-    # _areas_fetched_for_map_id must stay None so platform guards block callbacks
-    assert coordinator._areas_fetched_for_map_id is None, (
-        "empty areas must not set _areas_fetched_for_map_id — guard must stay active"
+    # _areas_fetched_at must stay absent so the bucket fires again next tick
+    assert coordinator._areas_fetched_at.get("3") is None, (
+        "empty areas must not advance _areas_fetched_at — next tick must retry"
     )
     # No signal dispatched (no entities to create yet)
     coordinator.hass.loop.call_soon.assert_not_called()
@@ -1151,12 +1138,10 @@ async def test_get_areas_cannot_connect_is_non_fatal(coordinator, mock_client):
     from homeassistant.helpers.update_coordinator import UpdateFailed
 
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
-    coordinator._last_areas = None          # force bucket to run
+    # _areas_fetched_at is empty → active map "3" is due for a fetch
     coordinator._last_statistics = datetime.utcnow()
     coordinator._last_robot_info = datetime.utcnow()
     coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._areas_fetched_for_map_id = None
-    coordinator._areas_ready = False
 
     mock_client.get_areas.side_effect = CannotConnect("connection timeout")
 
@@ -1164,11 +1149,8 @@ async def test_get_areas_cannot_connect_is_non_fatal(coordinator, mock_client):
     result = await coordinator._async_update_data()
     assert result is not None, "coordinator must return data even when get_areas fails"
 
-    # Timer must stay None so the bucket fires again next tick
-    assert coordinator._last_areas is None
-    assert coordinator._areas_ready is False
-    # _areas_fetched_for_map_id unchanged (stays None)
-    assert coordinator._areas_fetched_for_map_id is None
+    # _areas_fetched_at must stay absent so the bucket fires again next tick
+    assert coordinator._areas_fetched_at.get("3") is None
     # No quick-retry scheduled (only done for empty response, not CannotConnect)
     coordinator.hass.loop.call_later.assert_not_called()
 
@@ -1693,30 +1675,6 @@ async def test_areas_committed_map_id_set_when_areas_committed(coordinator, mock
     assert coordinator._areas_fetched_at.get("3") is not None, (
         "_areas_fetched_at['3'] must be set after a successful fetch"
     )
-
-
-@pytest.mark.asyncio
-async def test_empty_areas_does_not_clear_prev_committed_map_id(coordinator, mock_client):
-    """When areas come back empty (transient API quirk), _prev_committed_map_id
-    is left intact so old-map entities stay available during the retry window."""
-    coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
-    coordinator._last_areas = None
-    coordinator._last_statistics = datetime.utcnow()
-    coordinator._last_robot_info = datetime.utcnow()
-    coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._known_area_ids = set()
-    coordinator._areas_fetched_for_map_id = None
-    coordinator._areas_ready = False
-    coordinator._prev_committed_map_id = "1"
-
-    mock_client.get_areas.return_value = {"areas": []}
-
-    await coordinator._async_update_data()
-
-    assert coordinator._prev_committed_map_id == "1", (
-        "_prev_committed_map_id must be preserved while areas retry is pending"
-    )
-    assert coordinator._areas_fetched_for_map_id is None
 
 
 # ── Stable device_id (CONF_SERIAL) ───────────────────────────────────
