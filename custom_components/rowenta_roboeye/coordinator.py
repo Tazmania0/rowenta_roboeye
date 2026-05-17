@@ -215,6 +215,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # so the worker exits poll-interval sleeps without waiting the full 5 s.
         self._immediate_wake: asyncio.Event = asyncio.Event()
 
+        # When async_set_active_map dispatches SIGNAL_AREAS_UPDATED as a fast
+        # path (areas already cached), this marker tells the fetch loop not to
+        # re-dispatch for the same map on the very next tick.
+        self._suppress_next_commit_dispatch_for: str | None = None
+
     def _is_immediate_command(self, coro_func: Any) -> bool:
         """Return True for commands that must bypass normal queue waiting."""
         command_name = getattr(coro_func, "__name__", "")
@@ -365,6 +370,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # IDs change; when areas are already cached the IDs are identical and
             # the signal would be silently skipped — leaving the dashboard showing
             # the previous map's room cards.
+            # Mark that the next fetch-loop commit for this map should not
+            # re-dispatch (we're already doing it here as a fast path).
+            self._suppress_next_commit_dispatch_for = str(map_id)
             _signal = f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}"
             self.hass.loop.call_soon(
                 async_dispatcher_send, self.hass, _signal, str(map_id)
@@ -737,22 +745,31 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 # Advance committed_active_map_id when we get a fresh commit for
                 # the requested active map (atomic availability flip).
+                _committed_changed = False
                 if _is_active_map and self._committed_active_map_id != _mid:
                     LOGGER.info(
                         "RobEye: committing map switch %s -> %s (%d areas)",
                         self._committed_active_map_id, _mid, len(_area_list),
                     )
                     self._committed_active_map_id = _mid
+                    _committed_changed = True
 
-                # Fire SIGNAL_AREAS_UPDATED when the area set changes or when
-                # this is the first fetch for this map.  The signal now carries
-                # the map_id so platform listeners can limit their work to the
-                # changed map's entities.
-                if _new_ids != _old_ids:
+                # Honour suppression marker from async_set_active_map's fast path:
+                # it already dispatched the signal for this map, so skip here to
+                # avoid a duplicate rebuild triggered on the very next tick.
+                if getattr(self, "_suppress_next_commit_dispatch_for", None) == _mid:
+                    self._suppress_next_commit_dispatch_for = None
+                    _committed_changed = False
+
+                # Fire SIGNAL_AREAS_UPDATED when EITHER:
+                #  - the area id set within this map changed (rename, add/remove room), or
+                #  - the committed active map advanced (map switch not yet seen by dashboard).
+                if _new_ids != _old_ids or _committed_changed:
                     _signal = f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}"
                     LOGGER.debug(
-                        "RobEye: area set changed for map %s (new=%s removed=%s)",
-                        _mid, _new_ids - _old_ids, _old_ids - _new_ids,
+                        "RobEye: dispatching SIGNAL_AREAS_UPDATED for map %s "
+                        "(area_set_changed=%s committed_changed=%s)",
+                        _mid, _new_ids != _old_ids, _committed_changed,
                     )
                     self.hass.loop.call_soon(
                         async_dispatcher_send, self.hass, _signal, _mid

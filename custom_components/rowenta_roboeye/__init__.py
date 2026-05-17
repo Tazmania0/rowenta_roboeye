@@ -220,58 +220,89 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     config_entry.async_on_unload(_cancel_dashboard_init)
 
-    # Regenerate dashboard only when schedule content changes, not every tick.
-    # Also retry automatically when the previous save was deferred (dashboard_manager._last_hash
-    # is None) — this recovers from the race where SIGNAL_AREAS_UPDATED fires before per-room
-    # entities appear in hass.states and the 8 s poll window expires without a save.
-    _sched_raw = coordinator.schedule.get("schedule") or []
-    try:
-        _last_sched_hash = hashlib.sha256(
-            json.dumps(_sched_raw, sort_keys=True, default=str).encode()
-        ).hexdigest()
-    except Exception:
-        _last_sched_hash = ""
+    # ── Shared dashboard rebuild helper ───────────────────────────────────
+    # Single code path that constructs the rebuild kwargs, preventing the two
+    # trigger paths (areas-changed and schedule-changed) from drifting apart.
+
+    def _dashboard_rebuild_kwargs() -> dict:
+        return dict(
+            hass=hass,
+            areas=coordinator.areas,
+            robot_info=coordinator.robot_info,
+            manager=dashboard_manager,
+            device_id=coordinator.device_id,
+            active_map_id=coordinator.committed_active_map_id,
+            friendly_name=friendly_name,
+            available_maps=coordinator.available_maps,
+            schedule_entries=_schedule_for_map(
+                coordinator.schedule.get("schedule"),
+                coordinator.committed_active_map_id,
+            ),
+        )
+
+    async def _rebuild_dashboard_safe() -> None:
+        """Attempt a dashboard rebuild with bounded exponential backoff.
+
+        Retries up to 4 times (2 s, 4 s, 8 s, 16 s) when the entity-readiness
+        poll times out (e.g. entities for a newly-switched map haven't finished
+        their async_add_entities setup tasks yet).
+        """
+        for attempt in range(4):
+            success = await async_create_dashboard(**_dashboard_rebuild_kwargs())
+            if success or config_entry.state != ConfigEntryState.LOADED:
+                return
+            await asyncio.sleep(2.0 * (2 ** attempt))  # 2, 4, 8, 16 s
+        LOGGER.warning(
+            "RobEye: dashboard rebuild for map %s failed after 4 attempts",
+            coordinator.committed_active_map_id,
+        )
+
+    # ── Schedule-change trigger ───────────────────────────────────────────
+    # Hash the *rendered* schedule rows (filtered to the active map) rather than
+    # the raw device blob so a map switch — which changes the filtered subset but
+    # not the raw blob — invalidates the hash and triggers a rebuild.
+
+    def _current_sched_key() -> str:
+        raw = coordinator.schedule.get("schedule") or []
+        filtered = _schedule_for_map(raw, coordinator.committed_active_map_id) or []
+        payload = {"map": coordinator.committed_active_map_id, "rows": filtered}
+        try:
+            return hashlib.sha256(
+                json.dumps(payload, sort_keys=True, default=str).encode()
+            ).hexdigest()
+        except Exception:
+            return ""
+
+    _last_sched_hash = _current_sched_key()
 
     @callback
     def _on_sched_updated(*_args: object) -> None:
         nonlocal _last_sched_hash
-        sched_raw = coordinator.schedule.get("schedule") or []
-        try:
-            sig = hashlib.sha256(
-                json.dumps(sched_raw, sort_keys=True, default=str).encode()
-            ).hexdigest()
-        except Exception:
-            return
-        # Skip if schedule unchanged AND dashboard is already saved.
-        # When _last_hash is None the previous save was deferred (entity poll timed out);
-        # allow the retry so the next coordinator tick attempts the save again.
+        sig = _current_sched_key()
+        # Skip if the rendered schedule (including active map) is unchanged AND
+        # the dashboard is already saved.  When _last_hash is None the previous
+        # save was deferred (entity poll timed out); allow the retry.
         if sig == _last_sched_hash and dashboard_manager._last_hash is not None:
             return
-        # Skip if a dashboard save is already in progress — prevents a queue backlog
-        # from building up when coordinator ticks fire faster than saves complete
-        # (each save can hold _save_lock for up to 8 s during entity polling).
+        # Skip if a save is already in progress — prevents a backlog when ticks
+        # fire faster than saves complete (each save holds _save_lock ≤ 8 s).
         if dashboard_manager._save_lock.locked():
             return
         _last_sched_hash = sig
-        hass.async_create_task(
-            async_create_dashboard(
-                hass,
-                coordinator.areas,
-                coordinator.robot_info,
-                manager=dashboard_manager,
-                device_id=coordinator.device_id,
-                active_map_id=coordinator.committed_active_map_id,
-                friendly_name=friendly_name,
-                available_maps=coordinator.available_maps,
-                schedule_entries=_schedule_for_map(
-                    coordinator.schedule.get("schedule"),
-                    coordinator.committed_active_map_id,
-                ),
-            )
-        )
+        hass.async_create_task(_rebuild_dashboard_safe())
 
     config_entry.async_on_unload(
         coordinator.async_add_listener(_on_sched_updated)
+    )
+    # Also wire _on_sched_updated to SIGNAL_AREAS_UPDATED so the Control view
+    # rebuilds in the same tick as the Rooms view on a map switch, rather than
+    # waiting up to 15 s for the next coordinator listener tick.
+    config_entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            f"{SIGNAL_AREAS_UPDATED}_{config_entry.entry_id}",
+            _on_sched_updated,
+        )
     )
 
     # Regenerate dashboard when maps are deleted so the floor selector
@@ -285,22 +316,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             dashboard_manager.invalidate()
         if added:
             LOGGER.info("Maps added: %s — entities will be created when areas arrive", added)
-        hass.async_create_task(
-            async_create_dashboard(
-                hass,
-                coordinator.areas,
-                coordinator.robot_info,
-                manager=dashboard_manager,
-                device_id=coordinator.device_id,
-                active_map_id=coordinator.committed_active_map_id,
-                friendly_name=friendly_name,
-                available_maps=coordinator.available_maps,
-                schedule_entries=_schedule_for_map(
-                    coordinator.schedule.get("schedule"),
-                    coordinator.committed_active_map_id,
-                ),
-            )
-        )
+        hass.async_create_task(_rebuild_dashboard_safe())
 
     config_entry.async_on_unload(
         async_dispatcher_connect(
@@ -340,32 +356,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             hass.async_create_task(
                 _async_sync_room_selection_booleans(hass, coordinator)
             )
-
-            def _dashboard_kwargs() -> dict:
-                return dict(
-                    hass=hass,
-                    areas=coordinator.areas,
-                    robot_info=coordinator.robot_info,
-                    manager=dashboard_manager,
-                    device_id=coordinator.device_id,
-                    active_map_id=coordinator.committed_active_map_id,
-                    friendly_name=friendly_name,
-                    available_maps=coordinator.available_maps,
-                    schedule_entries=_schedule_for_map(
-                        coordinator.schedule.get("schedule"),
-                        coordinator.committed_active_map_id,
-                    ),
-                )
-
-            success = await async_create_dashboard(**_dashboard_kwargs())
-            if not success and config_entry.state == ConfigEntryState.LOADED:
-                # The entity-readiness poll timed out (common on first map switch
-                # when entity setup tasks are still running).  Retry once after a
-                # short delay instead of waiting for the next coordinator tick
-                # (which could be up to 15 s away when the robot is idle).
-                await asyncio.sleep(5.0)
-                if config_entry.state == ConfigEntryState.LOADED:
-                    await async_create_dashboard(**_dashboard_kwargs())
+            await _rebuild_dashboard_safe()
 
         hass.async_create_task(_areas_changed_task())
 
