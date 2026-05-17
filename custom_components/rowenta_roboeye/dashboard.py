@@ -687,7 +687,7 @@ class RobEyeDashboardManager:
         for _ in range(deadline_iters):
             if coordinator is not None and (
                 coordinator.committed_active_map_id != active_map_id
-                or coordinator.active_map_id != active_map_id
+                or coordinator.committed_active_map_id != active_map_id
             ):
                 _LOGGER.debug(
                     "Dashboard update aborted — map changed mid-wait (%s → %s)",
