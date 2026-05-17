@@ -685,9 +685,9 @@ class RobEyeDashboardManager:
         )
         ready = False
         for _ in range(deadline_iters):
-            if (
-                coordinator is not None
-                and coordinator.committed_active_map_id != active_map_id
+            if coordinator is not None and (
+                coordinator.committed_active_map_id != active_map_id
+                or coordinator.active_map_id != active_map_id
             ):
                 _LOGGER.debug(
                     "Dashboard update aborted — map changed mid-wait (%s → %s)",
@@ -700,6 +700,12 @@ class RobEyeDashboardManager:
             await asyncio.sleep(self._ENTITY_POLL_INTERVAL_S)
 
         if not ready:
+            if coordinator is not None and coordinator.committed_active_map_id != active_map_id:
+                _LOGGER.debug(
+                    "Dashboard update aborted after timeout — map changed mid-wait (%s → %s)",
+                    active_map_id, coordinator.committed_active_map_id,
+                )
+                return False
             _LOGGER.debug(
                 "Dashboard update deferred — room entities for map %s "
                 "not registered after %.1fs",
