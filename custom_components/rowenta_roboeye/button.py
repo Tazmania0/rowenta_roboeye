@@ -58,8 +58,8 @@ async def async_setup_entry(
     async_enable_all_room_entities(hass, config_entry, "button")
 
     # Build entities for every map we have areas for (active + all inactive).
-    for map_id, areas_blob in coordinator._areas_by_map.items():
-        areas_list = areas_blob.get("areas", []) if isinstance(areas_blob, dict) else []
+    for map_id in list(coordinator._areas_snapshot.keys()):
+        areas_list = coordinator.areas_for(map_id)
         if not areas_list:
             continue
         current_area_ids: set = {
@@ -67,7 +67,7 @@ async def async_setup_entry(
             for a in areas_list
             if a.get("id") is not None and _parse_area_name(a)
         }
-        if map_id == coordinator.committed_active_map_id:
+        if map_id == coordinator.active_map_id:
             async_remove_stale_room_entities(
                 hass, config_entry, coordinator, "button", current_area_ids
             )
@@ -103,7 +103,7 @@ async def async_setup_entry(
             and _parse_area_name(area)
         }
 
-        if map_id == coordinator.committed_active_map_id:
+        if map_id == coordinator.active_map_id:
             async_remove_stale_room_entities(
                 hass, config_entry, coordinator, "button", current_ids
             )
@@ -282,7 +282,7 @@ class RobEyeCleanAllButton(RobEyeBaseButton):
         if areas:
             # Collect per-room strategy/fan-speed from HA entities.
             dev = self.coordinator.device_id
-            map_id = self.coordinator.committed_active_map_id
+            map_id = self.coordinator.active_map_id
             hass = self.coordinator.hass
 
             for area in areas:
@@ -369,7 +369,7 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
 
     @property
     def available(self) -> bool:
-        return self._map_id == self.coordinator.committed_active_map_id and super().available
+        return self._map_id == self.coordinator.active_map_id and super().available
 
     async def async_press(self) -> None:
         LOGGER.debug("button: clean room %s", self._area_id)
@@ -446,7 +446,7 @@ class RobEyeCleanSelectedButton(RobEyeBaseButton):
     def _get_selected_area_ids(self) -> list[str]:
         """Return area_ids of all selected rooms on the active map."""
         device_id = self.coordinator.device_id
-        map_id = self.coordinator.committed_active_map_id
+        map_id = self.coordinator.active_map_id
         selected = []
         for area in self.coordinator.areas:
             area_id = area.get("id")
@@ -466,7 +466,7 @@ class RobEyeCleanSelectedButton(RobEyeBaseButton):
 
         LOGGER.debug("clean_selected: area_ids=%s", selected_ids)
         device_id = self.coordinator.device_id
-        map_id = self.coordinator.committed_active_map_id
+        map_id = self.coordinator.active_map_id
         hass = self.coordinator.hass
 
         # Resolve fan speed — use most intensive across selected rooms

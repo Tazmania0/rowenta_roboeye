@@ -107,7 +107,7 @@ def _resolve_active_map_name(coordinator: RobEyeCoordinator) -> str | None:
 
     Returns None until /get/maps has been fetched at least once.
     """
-    active_id = coordinator.committed_active_map_id
+    active_id = coordinator.active_map_id
     if not active_id:
         return None
 
@@ -398,7 +398,7 @@ async def async_setup_entry(
     async_enable_all_room_entities(hass, config_entry, "sensor")
 
     # Purge stale registry entries for the committed active map.
-    _committed = coordinator.committed_active_map_id
+    _committed = coordinator.active_map_id
     current_area_ids: set = {
         str(a.get("id"))
         for a in coordinator.areas_for(_committed)
@@ -410,8 +410,8 @@ async def async_setup_entry(
         )
 
     # Build sensors for ALL known maps (active + inactive).
-    for map_id, areas_blob in coordinator._areas_by_map.items():
-        areas_list = areas_blob.get("areas", []) if isinstance(areas_blob, dict) else []
+    for map_id in list(coordinator._areas_snapshot.keys()):
+        areas_list = coordinator.areas_for(map_id)
         if not areas_list:
             continue
         initial_sensors, initial_by_area = _build_room_sensor_entities(
@@ -447,7 +447,7 @@ async def async_setup_entry(
             and _parse_sensor_area_name(area)
         }
 
-        if map_id == coordinator.committed_active_map_id:
+        if map_id == coordinator.active_map_id:
             async_remove_stale_room_entities(
                 hass, config_entry, coordinator, "sensor", current_ids
             )
@@ -636,7 +636,7 @@ class RobEyeScheduleSensor(RobEyeEntity, SensorEntity):
         if not isinstance(raw_list, list):
             return []
 
-        active_map = self.coordinator.committed_active_map_id
+        active_map = self.coordinator.active_map_id
         result = []
         for item in raw_list:
             if not isinstance(item, dict):
@@ -764,7 +764,7 @@ class RobEyeSelectedRoomCountSensor(RobEyeEntity, SensorEntity):
     @property
     def native_value(self) -> int:
         device_id = self.coordinator.device_id
-        map_id = self.coordinator.committed_active_map_id
+        map_id = self.coordinator.active_map_id
         count = 0
         for area in self.coordinator.areas:
             area_id = area.get("id")
@@ -815,7 +815,7 @@ class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
         # When map_id is provided explicitly, use it (recreating stub entities
         # for inactive maps from the registry).  Otherwise bind to the
         # currently active map (the normal live-creation path).
-        _map = map_id if map_id is not None else coordinator.committed_active_map_id
+        _map = map_id if map_id is not None else coordinator.active_map_id
         self._map_id = _map
         self._attr_unique_id = (
             f"room_{area_id}_map{_map}_{unique_suffix}_{coordinator.device_id}"
@@ -829,7 +829,7 @@ class RobEyeRoomSensor(RobEyeEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self._map_id == self.coordinator.committed_active_map_id and super().available
+        return self._map_id == self.coordinator.active_map_id and super().available
 
     @property
     def native_value(self) -> Any:

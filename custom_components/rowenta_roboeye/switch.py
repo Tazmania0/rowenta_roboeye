@@ -128,7 +128,7 @@ async def async_setup_entry(
     async_enable_all_room_entities(hass, config_entry, "switch")
 
     # Purge stale registry entries for committed active map.
-    _committed = coordinator.committed_active_map_id
+    _committed = coordinator.active_map_id
     current_area_ids: set = {
         str(a.get("id"))
         for a in coordinator.areas_for(_committed)
@@ -140,8 +140,8 @@ async def async_setup_entry(
         )
 
     # Build entities for ALL known maps (active + inactive).
-    for map_id, areas_blob in coordinator._areas_by_map.items():
-        areas_list = areas_blob.get("areas", []) if isinstance(areas_blob, dict) else []
+    for map_id in list(coordinator._areas_snapshot.keys()):
+        areas_list = coordinator.areas_for(map_id)
         if not areas_list:
             continue
         initial_switches, initial_by_area = _room_switches(map_id, areas_list, set())
@@ -178,7 +178,7 @@ async def async_setup_entry(
             and _parse_switch_area_name(area)
         }
 
-        if map_id == coordinator.committed_active_map_id:
+        if map_id == coordinator.active_map_id:
             async_remove_stale_room_entities(
                 hass, config_entry, coordinator, "switch", current_ids
             )
@@ -322,7 +322,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
 
     @property
     def available(self) -> bool:
-        return self._map_id == self.coordinator.committed_active_map_id and super().available
+        return self._map_id == self.coordinator.active_map_id and super().available
 
     @property
     def is_on(self) -> bool:
@@ -465,7 +465,7 @@ class RobEyeRoomSelectSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
 
     @property
     def available(self) -> bool:
-        return self._map_id == self.coordinator.committed_active_map_id and super().available
+        return self._map_id == self.coordinator.active_map_id and super().available
 
     @property
     def is_on(self) -> bool:

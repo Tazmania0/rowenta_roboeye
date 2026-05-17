@@ -634,10 +634,10 @@ class RobEyeDashboardManager:
 
         rooms = _extract_rooms(areas)
 
-        # Discard the rooms list when committed_active_map_id doesn't match
+        # Discard the rooms list when active_map_id doesn't match
         # the requested active_map_id — areas are for a different map.
         if coordinator is not None:
-            fetched_for = coordinator.committed_active_map_id
+            fetched_for = coordinator.active_map_id
             if fetched_for != active_map_id:
                 _LOGGER.debug(
                     "Dashboard: rooms fetched for map %s but active is %s — "
@@ -685,13 +685,10 @@ class RobEyeDashboardManager:
         )
         ready = False
         for _ in range(deadline_iters):
-            if coordinator is not None and (
-                coordinator.committed_active_map_id != active_map_id
-                or coordinator.committed_active_map_id != active_map_id
-            ):
+            if coordinator is not None and coordinator.active_map_id != active_map_id:
                 _LOGGER.debug(
                     "Dashboard update aborted — map changed mid-wait (%s → %s)",
-                    active_map_id, coordinator.committed_active_map_id,
+                    active_map_id, coordinator.active_map_id,
                 )
                 return False
             if _room_entities_registered(hass, device_id, active_map_id, rooms):
@@ -700,10 +697,10 @@ class RobEyeDashboardManager:
             await asyncio.sleep(self._ENTITY_POLL_INTERVAL_S)
 
         if not ready:
-            if coordinator is not None and coordinator.committed_active_map_id != active_map_id:
+            if coordinator is not None and coordinator.active_map_id != active_map_id:
                 _LOGGER.debug(
                     "Dashboard update aborted after timeout — map changed mid-wait (%s → %s)",
-                    active_map_id, coordinator.committed_active_map_id,
+                    active_map_id, coordinator.active_map_id,
                 )
                 return False
             _LOGGER.debug(

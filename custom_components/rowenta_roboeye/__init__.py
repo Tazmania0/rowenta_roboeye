@@ -13,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
-from .const import AREA_STATE_BLOCKING, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION, room_selection_entity_id
+from .const import AREA_STATE_BLOCKING, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_ACTIVE_MAP_CHANGED, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION, room_selection_entity_id
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
@@ -77,7 +77,7 @@ async def _async_sync_room_selection_booleans(
     import json as _json
 
     device_id = coordinator.device_id
-    map_id = coordinator.committed_active_map_id
+    map_id = coordinator.active_map_id
     areas = coordinator.areas
 
     # Collect all named, non-blocking rooms
@@ -222,50 +222,100 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     # ── Shared dashboard rebuild helper ───────────────────────────────────
     # Single code path that constructs the rebuild kwargs, preventing the two
-    # trigger paths (areas-changed and schedule-changed) from drifting apart.
+    # trigger paths (areas-changed, active-map-changed, maps-changed).
 
     def _dashboard_rebuild_kwargs() -> dict:
+        """Read everything fresh from the coordinator at call time.
+
+        Called at each retry attempt so a state change landing mid-rebuild
+        produces correct YAML on the retry.
+        """
         return dict(
             hass=hass,
             areas=coordinator.areas,
             robot_info=coordinator.robot_info,
             manager=dashboard_manager,
             device_id=coordinator.device_id,
-            active_map_id=coordinator.committed_active_map_id,
+            active_map_id=coordinator.active_map_id,
             friendly_name=friendly_name,
             available_maps=coordinator.available_maps,
             schedule_entries=_schedule_for_map(
                 coordinator.schedule.get("schedule"),
-                coordinator.committed_active_map_id,
+                coordinator.active_map_id,
             ),
         )
 
     async def _rebuild_dashboard_safe() -> None:
-        """Attempt a dashboard rebuild with bounded exponential backoff.
-
-        Retries up to 4 times (2 s, 4 s, 8 s, 16 s) when the entity-readiness
-        poll times out (e.g. entities for a newly-switched map haven't finished
-        their async_add_entities setup tasks yet).
-        """
+        """Rebuild dashboard with bounded retry (2 / 4 / 8 / 16 s)."""
         for attempt in range(4):
-            success = await async_create_dashboard(**_dashboard_rebuild_kwargs())
-            if success or config_entry.state != ConfigEntryState.LOADED:
+            if config_entry.state not in (
+                ConfigEntryState.LOADED,
+                ConfigEntryState.SETUP_IN_PROGRESS,
+            ):
                 return
-            await asyncio.sleep(2.0 * (2 ** attempt))  # 2, 4, 8, 16 s
+            success = await async_create_dashboard(**_dashboard_rebuild_kwargs())
+            if success:
+                return
+            await asyncio.sleep(2.0 * (2 ** attempt))
         LOGGER.warning(
             "RobEye: dashboard rebuild for map %s failed after 4 attempts",
-            coordinator.committed_active_map_id,
+            coordinator.active_map_id,
         )
 
-    # ── Schedule-change trigger ───────────────────────────────────────────
-    # Hash the *rendered* schedule rows (filtered to the active map) rather than
-    # the raw device blob so a map switch — which changes the filtered subset but
-    # not the raw blob — invalidates the hash and triggers a rebuild.
+    # ── Trigger 1: snapshot diff — areas changed for some map ────────────
+    @callback
+    def _on_areas_updated(map_id: str) -> None:
+        """A map's areas changed (rename / add / remove).
 
+        Inactive maps: platform listeners update entities silently; no YAML
+        rebuild required.  Active map: rebuild YAML so rooms view reflects
+        new state.
+        """
+        if map_id != coordinator.active_map_id:
+            return
+        LOGGER.debug(
+            "Active map %s areas changed — rebuilding dashboard", map_id,
+        )
+        dashboard_manager.invalidate()
+        # Sync room-selection helpers independently (non-blocking).
+        hass.async_create_task(
+            _async_sync_room_selection_booleans(hass, coordinator)
+        )
+        hass.async_create_task(_rebuild_dashboard_safe())
+
+    # ── Trigger 2: user selected a different map ─────────────────────────
+    @callback
+    def _on_active_map_changed(map_id: str) -> None:
+        """User switched map. Entities for all maps exist; availability
+        already flipped via async_update_listeners() inside
+        async_set_active_map. We only need to rebuild the YAML once."""
+        LOGGER.debug(
+            "Active map changed to %s — rebuilding dashboard", map_id,
+        )
+        dashboard_manager.invalidate()
+        hass.async_create_task(_rebuild_dashboard_safe())
+
+    # ── Trigger 3: map added or removed on the device ────────────────────
+    @callback
+    def _on_maps_updated(payload) -> None:
+        added = payload.get("added", set()) if isinstance(payload, dict) else set()
+        removed = payload.get("removed", set()) if isinstance(payload, dict) else payload
+        if added:
+            LOGGER.info("Maps added: %s", added)
+        if removed:
+            LOGGER.info("Maps removed: %s", removed)
+        dashboard_manager.invalidate()
+        hass.async_create_task(_rebuild_dashboard_safe())
+
+    # ── Trigger 4: schedule-only change (no area / map change) ───────────
+    # Schedule updates that don't accompany an area change still need to
+    # refresh the Control view.  Hash the *filtered* schedule (keyed by
+    # active map) so that a map switch alone — which changes the filtered
+    # subset but not the raw blob — also triggers a rebuild.
     def _current_sched_key() -> str:
         raw = coordinator.schedule.get("schedule") or []
-        filtered = _schedule_for_map(raw, coordinator.committed_active_map_id) or []
-        payload = {"map": coordinator.committed_active_map_id, "rows": filtered}
+        filtered = _schedule_for_map(raw, coordinator.active_map_id) or []
+        payload = {"map": coordinator.active_map_id, "rows": filtered}
         try:
             return hashlib.sha256(
                 json.dumps(payload, sort_keys=True, default=str).encode()
@@ -276,97 +326,35 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     _last_sched_hash = _current_sched_key()
 
     @callback
-    def _on_sched_updated(*_args: object) -> None:
+    def _on_coord_update() -> None:
+        """Fires on every coordinator listener tick; only acts when the
+        filtered schedule (or active-map) hash differs from last build."""
         nonlocal _last_sched_hash
         sig = _current_sched_key()
-        # Skip if the rendered schedule (including active map) is unchanged AND
-        # the dashboard is already saved.  When _last_hash is None the previous
-        # save was deferred (entity poll timed out); allow the retry.
         if sig == _last_sched_hash and dashboard_manager._last_hash is not None:
             return
-        # Skip if a save is already in progress — prevents a backlog when ticks
-        # fire faster than saves complete (each save holds _save_lock ≤ 8 s).
         if dashboard_manager._save_lock.locked():
             return
         _last_sched_hash = sig
         hass.async_create_task(_rebuild_dashboard_safe())
 
     config_entry.async_on_unload(
-        coordinator.async_add_listener(_on_sched_updated)
-    )
-    # Also wire _on_sched_updated to SIGNAL_AREAS_UPDATED so the Control view
-    # rebuilds in the same tick as the Rooms view on a map switch, rather than
-    # waiting up to 15 s for the next coordinator listener tick.
-    config_entry.async_on_unload(
-        async_dispatcher_connect(
-            hass,
-            f"{SIGNAL_AREAS_UPDATED}_{config_entry.entry_id}",
-            _on_sched_updated,
-        )
+        coordinator.async_add_listener(_on_coord_update)
     )
 
-    # Regenerate dashboard when maps are deleted so the floor selector
-    # reflects the updated map list immediately.
-    @callback
-    def _on_maps_updated(payload) -> None:
-        added = payload.get("added", set()) if isinstance(payload, dict) else set()
-        removed = payload.get("removed", set()) if isinstance(payload, dict) else payload
-        if removed:
-            LOGGER.info("Maps removed: %s", removed)
-            dashboard_manager.invalidate()
-        if added:
-            LOGGER.info("Maps added: %s — entities will be created when areas arrive", added)
-        hass.async_create_task(_rebuild_dashboard_safe())
-
-    config_entry.async_on_unload(
-        async_dispatcher_connect(
-            hass,
-            f"{SIGNAL_MAPS_UPDATED}_{config_entry.entry_id}",
-            _on_maps_updated,
-        )
-    )
-
-    # When the room set changes, invalidate the cached hash so the next
-    # save actually writes (instead of being deduped) and schedule one
-    # rebuild.  The manager's internal poll-and-wait handles the entity
-    # readiness race; an extra "verify after 5 s" task is no longer needed
-    # because the lock-protected save already waits for entities to settle.
-    @callback
-    def _on_areas_changed(map_id: str) -> None:
-        # Only rebuild when areas changed for the currently committed map.
-        # Inactive-map refreshes (600 s cycle) carry a different map_id and
-        # must not trigger a spurious save: coordinator.areas always returns
-        # the committed map's rooms, so an inactive-map signal would rebuild
-        # the dashboard with stale committed-map areas but fresh timestamps,
-        # causing an unnecessary Lovelace reload with no content change.
-        if map_id != coordinator.committed_active_map_id:
-            LOGGER.debug(
-                "Areas changed for inactive map %s (committed=%s) — skipping dashboard rebuild",
-                map_id, coordinator.committed_active_map_id,
+    # Wire the three dispatcher signals
+    for _sig, _handler in (
+        (SIGNAL_AREAS_UPDATED,      _on_areas_updated),
+        (SIGNAL_ACTIVE_MAP_CHANGED, _on_active_map_changed),
+        (SIGNAL_MAPS_UPDATED,       _on_maps_updated),
+    ):
+        config_entry.async_on_unload(
+            async_dispatcher_connect(
+                hass,
+                f"{_sig}_{config_entry.entry_id}",
+                _handler,
             )
-            return
-        LOGGER.debug("Areas changed for map %s — invalidating dashboard hash and triggering rebuild", map_id)
-        dashboard_manager.invalidate()
-
-        async def _areas_changed_task() -> None:
-            # Keep the legacy room-selection input_boolean sync (other user
-            # automations may reference these helpers) but do NOT block the
-            # dashboard save on it — they are independent and the dashboard
-            # references switch entities, not input_booleans.
-            hass.async_create_task(
-                _async_sync_room_selection_booleans(hass, coordinator)
-            )
-            await _rebuild_dashboard_safe()
-
-        hass.async_create_task(_areas_changed_task())
-
-    config_entry.async_on_unload(
-        async_dispatcher_connect(
-            hass,
-            f"{SIGNAL_AREAS_UPDATED}_{config_entry.entry_id}",
-            _on_areas_changed,
         )
-    )
 
     config_entry.async_on_unload(
         config_entry.add_update_listener(_async_update_listener)
@@ -424,12 +412,12 @@ async def _async_initial_dashboard(
             coordinator.robot_info,
             manager=dashboard_manager,
             device_id=coordinator.device_id,
-            active_map_id=coordinator.committed_active_map_id,
+            active_map_id=coordinator.active_map_id,
             friendly_name=friendly_name,
             available_maps=coordinator.available_maps,
             schedule_entries=_schedule_for_map(
                 coordinator.schedule.get("schedule"),
-                coordinator.committed_active_map_id,
+                coordinator.active_map_id,
             ),
         )
 

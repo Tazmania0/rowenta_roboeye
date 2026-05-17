@@ -69,7 +69,7 @@ async def async_setup_entry(
     # when switching maps: we never remove+recreate entities for map switches.
     known_entities_by_map: dict[str, dict] = {}
 
-    _committed = coordinator.committed_active_map_id
+    _committed = coordinator.active_map_id
 
     # Purge registry entries for areas that no longer exist on the committed map.
     if _committed:
@@ -83,7 +83,7 @@ async def async_setup_entry(
         )
 
     # Build entities for ALL known maps (not just the active one).
-    for map_id in coordinator._areas_by_map:
+    for map_id in list(coordinator._areas_snapshot.keys()):
         areas_list = coordinator.areas_for(map_id)
         initial_selects, initial_by_area = _build_room_select_entities(
             coordinator, config_entry, map_id, areas_list, set()
@@ -107,7 +107,7 @@ async def async_setup_entry(
         areas = coordinator.areas_for(map_id)
 
         # Only purge stale registry entries for the committed active map.
-        if map_id == coordinator.committed_active_map_id:
+        if map_id == coordinator.active_map_id:
             current_ids: set = {
                 str(area_id)
                 for area in areas
@@ -328,7 +328,7 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         super().__init__(coordinator)
         self._area_id = area_id
         self._room_name = room_name
-        _map = map_id if map_id is not None else coordinator.committed_active_map_id
+        _map = map_id if map_id is not None else coordinator.active_map_id
         self._map_id = _map
         self._attr_unique_id = f"room_fan_speed_map{_map}_{area_id}_{coordinator.device_id}"
         self._attr_name = f"{room_name} Fan Speed"
@@ -338,7 +338,7 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
 
     @property
     def available(self) -> bool:
-        return self._map_id == self.coordinator.committed_active_map_id and super().available
+        return self._map_id == self.coordinator.active_map_id and super().available
 
     @property
     def current_option(self) -> str:
@@ -453,7 +453,7 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         maps = self.coordinator.available_maps
         self._name_to_id = {m["display_name"]: m["map_id"] for m in maps}
         opts = list(self._name_to_id.keys())
-        return opts if opts else [self.coordinator.committed_active_map_id]
+        return opts if opts else [self.coordinator.active_map_id]
 
     @property
     def options(self) -> list[str]:
@@ -463,9 +463,9 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
     def current_option(self) -> str | None:
         # Always rebuild _name_to_id here: HA calls current_option before options
         # in state assembly, so _name_to_id could be stale and cause a flicker.
-        # Use committed_active_map_id so the dropdown visually waits for commit.
+        # Use active_map_id so the dropdown visually waits for commit.
         self._build_options()
-        active_id = self.coordinator.committed_active_map_id
+        active_id = self.coordinator.active_map_id
         for name, map_id in self._name_to_id.items():
             if map_id == active_id:
                 return name
@@ -478,7 +478,7 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
             state = last_state.state
             if state not in ("unknown", "unavailable"):
                 map_id = self._name_to_id.get(state, state)
-                if map_id != self.coordinator.committed_active_map_id:
+                if map_id != self.coordinator.active_map_id:
                     # The restored map differs from the coordinator's startup map.
                     # Persist it now so the NEXT restart uses this map immediately
                     # (avoids a spurious "Active map changed to X" logbook entry).
@@ -493,11 +493,11 @@ class RobEyeActiveMapSelect(RobEyeEntity, SelectEntity, RestoreEntity):
                     LOGGER.debug(
                         "Active map restored to %s (was %s) — forcing immediate switch",
                         map_id,
-                        self.coordinator.committed_active_map_id,
+                        self.coordinator.active_map_id,
                     )
                     await self.coordinator.async_set_active_map(map_id)
-                else:
-                    self.coordinator._manual_map_id = map_id
+                # else: no action needed — _active_map_id is already set correctly
+                #       by the coordinator constructor from CONF_LAST_ACTIVE_MAP.
 
     async def async_select_option(self, option: str) -> None:
         map_id = self._name_to_id.get(option, option)
@@ -593,7 +593,7 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
         super().__init__(coordinator)
         self._area_id = area_id
         self._room_name = room_name
-        _map = map_id if map_id is not None else coordinator.committed_active_map_id
+        _map = map_id if map_id is not None else coordinator.active_map_id
         self._map_id = _map
         self._attr_unique_id = f"room_strategy_map{_map}_{area_id}_{coordinator.device_id}"
         self._attr_name = f"{room_name} Strategy"
@@ -602,7 +602,7 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
 
     @property
     def available(self) -> bool:
-        return self._map_id == self.coordinator.committed_active_map_id and super().available
+        return self._map_id == self.coordinator.active_map_id and super().available
 
     @property
     def current_option(self) -> str:

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time as _time
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -66,12 +67,12 @@ from .const import (
     MODE_RECHARGE_CONTINUE_POLL_S,
     MODE_RECHARGE_CONTINUE_WAIT_S,
     QUEUE_POST_DOCK_DELAY_S,
-    SCAN_INTERVAL_AREAS,
-    SCAN_INTERVAL_AREAS_INACTIVE,
+    SCAN_INTERVAL_BACKGROUND,
     SCAN_INTERVAL_EVENT_LOG,
     SCAN_INTERVAL_MAP_GEOMETRY,
     SCAN_INTERVAL_ROBOT_INFO,
     SCAN_INTERVAL_STATISTICS,
+    SIGNAL_ACTIVE_MAP_CHANGED,
     SIGNAL_AREAS_UPDATED,
     SIGNAL_MAPS_UPDATED,
     STRATEGY_DEFAULT,
@@ -96,6 +97,46 @@ _TERMINAL_COMMAND_RESULT_STATUSES = {
 _QUEUE_CONTROL_COMMANDS: frozenset[str] = frozenset(
     {"stop", "go_home", "clean_start_or_continue", "set_fan_speed"}
 )
+
+
+@dataclass(frozen=True)
+class AreaSnapshot:
+    """Point-in-time fingerprint of a map's areas.
+
+    Two snapshots compare equal iff (area_ids, names) are equal.  The raw
+    blob is retained for entities to read but is excluded from equality
+    so that statistics-only updates (e.g. cleaning_counter) do not trigger
+    spurious dashboard rebuilds.
+    """
+
+    area_ids: frozenset
+    names: tuple  # tuple of (area_id, name) pairs, sorted — hashable
+    blob: dict = field(compare=False, hash=False, default_factory=dict)
+
+    @classmethod
+    def from_blob(cls, blob: dict) -> "AreaSnapshot":
+        areas = blob.get("areas", []) if isinstance(blob, dict) else []
+        ids: set = set()
+        name_pairs: list = []
+        for a in areas:
+            aid = a.get("id")
+            if aid is None:
+                continue
+            ids.add(str(aid))
+            meta_raw = a.get("area_meta_data", "")
+            name = ""
+            if meta_raw:
+                try:
+                    name = json.loads(meta_raw).get("name", "").strip()
+                except Exception:
+                    pass
+            name_pairs.append((str(aid), name))
+        name_pairs.sort()
+        return cls(
+            area_ids=frozenset(ids),
+            names=tuple(name_pairs),
+            blob=blob,
+        )
 
 
 class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -135,14 +176,16 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_schedule: datetime | None = None
         self._consecutive_failures: int = 0
 
-        # Per-map areas cache: map_id -> /get/areas blob
-        self._areas_by_map: dict[str, dict] = {}
-        # Per-map last-fetch timestamps (replaces single _last_areas timer)
-        self._areas_fetched_at: dict[str, datetime] = {}
-        # Per-map known area id sets for SIGNAL_AREAS_UPDATED diffing
-        self._known_area_ids_by_map: dict[str, set[str]] = {}
-        # Track known permanent map IDs so we can detect when a map is deleted
-        self._known_map_ids: set = set()
+        # Snapshot model: single dict of per-map fingerprints.
+        # Map ID -> AreaSnapshot. Owns area_ids frozenset, names dict, and raw blob.
+        # Maintained exclusively by the background refresh job in _async_update_data.
+        self._areas_snapshot: dict[str, AreaSnapshot] = {}
+        # Known permanent map IDs from /get/maps (for add/delete detection).
+        self._known_map_ids: frozenset = frozenset()
+        # Single background timer for the uniform 600s maps+areas refresh.
+        self._last_background_fetch: datetime | None = None
+        # Edge-detect cleaning→idle transitions to force a refresh after a clean.
+        self._was_cleaning: bool = False
 
         # Cleaning strategy — set by strategy select or deep-clean switch; read by all clean operations
         self.cleaning_strategy: str = STRATEGY_DEFAULT
@@ -162,12 +205,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._brush_left_notified: bool = False
         self._brush_right_notified: bool = False
 
-        # Live session map tracking
-        self._manual_map_id: str | None = None  # user override via Select entity
-        # Single source of truth for entity availability: all per-map entities
-        # check self._map_id == coordinator.committed_active_map_id.
-        # Updated only after a successful areas commit for the new map.
-        self._committed_active_map_id: str = map_id
+        # Active map id — single source of truth.
+        # All per-room entities check self._map_id == coordinator.active_map_id.
+        # Set by async_set_active_map; never split into committed/manual variants.
+        self._active_map_id: str = map_id
 
         # Last-session replay state
         self._robot_path: list[tuple[float, float]] = []
@@ -214,11 +255,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Wakeup event: set whenever an immediate (priority-0) command is enqueued
         # so the worker exits poll-interval sleeps without waiting the full 5 s.
         self._immediate_wake: asyncio.Event = asyncio.Event()
-
-        # When async_set_active_map dispatches SIGNAL_AREAS_UPDATED as a fast
-        # path (areas already cached), this marker tells the fetch loop not to
-        # re-dispatch for the same map on the very next tick.
-        self._suppress_next_commit_dispatch_for: str | None = None
 
     def _is_immediate_command(self, coro_func: Any) -> bool:
         """Return True for commands that must bypass normal queue waiting."""
@@ -279,15 +315,18 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ── Active map tracking ─────────────────────────────────────────────
 
     @property
-    def committed_active_map_id(self) -> str:
-        """Single source of truth for entity availability.
+    def active_map_id(self) -> str:
+        """The currently displayed map id — single source of truth.
 
-        Updated only after /get/areas for a new map has been successfully
-        committed. Until then, entities for the previous map remain available
-        — no flicker. All per-map entities read this via
-        `self._map_id == coordinator.committed_active_map_id`.
+        All per-room entities check `self._map_id == coordinator.active_map_id`.
+        Set by `async_set_active_map`; never split into committed/manual variants.
         """
-        return self._committed_active_map_id
+        return self._active_map_id
+
+    @property
+    def committed_active_map_id(self) -> str:
+        """Deprecated alias for active_map_id. Kept for migration; remove later."""
+        return self._active_map_id
 
     @property
     def available_maps(self) -> list[dict]:
@@ -324,31 +363,28 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ── Active map switching ──────────────────────────────────────────
 
     def areas_for(self, map_id: str) -> list[dict]:
-        """Return areas for any permanent map — used at entity-build time and for
-        per-map entity availability checks.
-
-        In the new model, each map's areas are cached independently in
-        _areas_by_map. This allows all per-map entities to be created at setup
-        time for every known map, with availability gated by
-        committed_active_map_id rather than by whether entities exist.
-        """
-        blob = self._areas_by_map.get(str(map_id), {})
-        return blob.get("areas", []) if isinstance(blob, dict) else []
+        """Areas for any known map. Returns [] if no snapshot."""
+        snap = self._areas_snapshot.get(str(map_id))
+        return snap.blob.get("areas", []) if snap else []
 
     async def async_set_active_map(self, map_id: str) -> None:
-        """Switch the displayed map. Atomic from the user's perspective.
+        """Switch the displayed map. Pure local operation — zero network calls.
 
-        If areas for the destination map are already cached, the availability
-        flip is immediate (committed_active_map_id advances before the next
-        coordinator tick). Otherwise it waits for the next /get/areas fetch.
+        Maps and areas are maintained by the background refresh job. The user
+        switch only flips _active_map_id, notifies listeners (entity
+        availability flips instantly), and dispatches SIGNAL_ACTIVE_MAP_CHANGED
+        to trigger exactly one dashboard rebuild.
         """
-        if str(map_id) == self._committed_active_map_id and self._manual_map_id == str(map_id):
+        new_id = str(map_id)
+        if new_id == self._active_map_id:
             return
         LOGGER.info(
-            "RobEye: map switch requested %s -> %s",
-            self._committed_active_map_id, map_id,
+            "RobEye: map switch %s -> %s (local-only)",
+            self._active_map_id, new_id,
         )
-        self._manual_map_id = str(map_id)
+        self._active_map_id = new_id
+
+        # Reset session-derived state tied to the old map
         self.invalidate_schedule_cache()
         self._last_map_geometry = None
         self._last_live_map = None
@@ -358,73 +394,122 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_session_outline = []
         self._last_session_map_id = ""
         self._session_complete = False
-        # If we already have committed areas for this map, flip immediately —
-        # entities for the new map are already in hass.states and re-evaluate
-        # available on the next listener update.
-        if self.areas_for(str(map_id)):
-            self._committed_active_map_id = str(map_id)
-            if hasattr(self, "async_update_listeners"):
-                self.async_update_listeners()
-            # Fire SIGNAL_AREAS_UPDATED so the dashboard rebuilds for the new
-            # map's rooms.  The area fetch loop only fires this signal when area
-            # IDs change; when areas are already cached the IDs are identical and
-            # the signal would be silently skipped — leaving the dashboard showing
-            # the previous map's room cards.
-            # Mark that the next fetch-loop commit for this map should not
-            # re-dispatch (we're already doing it here as a fast path).
-            self._suppress_next_commit_dispatch_for = str(map_id)
-            _signal = f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}"
-            self.hass.loop.call_soon(
-                async_dispatcher_send, self.hass, _signal, str(map_id)
-            )
-        # Always request a refresh to pull fresh /get/areas for the new map.
-        await self.async_request_refresh()
 
-    async def async_load_all_map_areas(self) -> None:
-        """Fetch areas for every permanent map. Called once after first refresh.
+        self.async_update_listeners()
+        async_dispatcher_send(
+            self.hass,
+            f"{SIGNAL_ACTIVE_MAP_CHANGED}_{self.config_entry.entry_id}",
+            new_id,
+        )
 
-        Populates _areas_by_map so per-map entities can be built for inactive
-        maps at integration setup.  Errors on individual maps are non-fatal —
-        that map's entities are deferred until the next successful fetch.
+    async def _async_background_refresh(self, now: datetime) -> None:
+        """Snapshot-and-diff loop. Single source of map+area truth.
+
+        Runs from _async_update_data when not cleaning. Fetches /get/maps,
+        detects added/deleted permanent maps, fetches /get/areas for every
+        known map, diffs against the stored snapshot, and dispatches signals
+        on structural changes only (statistics changes are absorbed silently).
         """
+        # 1. /get/maps — detect added/removed permanent maps
         try:
             maps_blob = await self.client.get_maps()
         except CannotConnect:
-            LOGGER.debug("async_load_all_map_areas: get_maps failed")
+            LOGGER.debug("Background refresh: /get/maps failed, deferring")
             return
-        now = datetime.utcnow()
-        for entry in maps_blob.get("maps", []):
-            if str(entry.get("permanent_flag", "")).strip().lower() != "true":
-                continue
-            mid = str(entry.get("map_id"))
+
+        new_map_ids = frozenset(
+            str(m.get("map_id"))
+            for m in maps_blob.get("maps", [])
+            if isinstance(m, dict)
+            and m.get("map_id") is not None
+            and str(m.get("permanent_flag", "")).strip().lower() == "true"
+        )
+        if self.data is None:
+            self.data = {}
+        self.data[DATA_MAPS] = maps_blob
+
+        added = new_map_ids - self._known_map_ids
+        removed = self._known_map_ids - new_map_ids
+        # First-population case: don't treat the initial set as "added"
+        first_population = not self._known_map_ids
+        self._known_map_ids = new_map_ids
+
+        if removed:
+            for mid in removed:
+                self._areas_snapshot.pop(mid, None)
+            if self._active_map_id in removed:
+                fallback = next(iter(new_map_ids), self.map_id)
+                LOGGER.warning(
+                    "RobEye: active map %s was deleted — falling back to %s",
+                    self._active_map_id, fallback,
+                )
+                self._active_map_id = fallback
+
+        if not first_population and (added or removed):
+            LOGGER.info(
+                "RobEye: maps changed (added=%s removed=%s)", added, removed,
+            )
+            async_dispatcher_send(
+                self.hass,
+                f"{SIGNAL_MAPS_UPDATED}_{self.config_entry.entry_id}",
+                {"added": added, "removed": removed},
+            )
+
+        # 2. /get/areas for every known map
+        for mid in new_map_ids:
             try:
                 blob = await self.client.get_areas(mid)
             except CannotConnect:
-                LOGGER.debug("Pre-fetch get_areas(%s) failed, will retry later", mid)
+                LOGGER.debug("Background refresh: /get/areas(%s) failed", mid)
                 continue
-            if isinstance(blob, dict) and blob.get("areas"):
-                self._areas_by_map[mid] = blob
-                self._known_area_ids_by_map[mid] = {
-                    str(a["id"]) for a in blob["areas"] if a.get("id") is not None
-                }
-                self._areas_fetched_at[mid] = now
-                LOGGER.debug(
-                    "Pre-fetched areas for map %s (%d areas)",
-                    mid, len(blob["areas"]),
+            if not isinstance(blob, dict) or not blob.get("areas"):
+                # Transient empty response — preserve last good snapshot
+                continue
+            new_snap = AreaSnapshot.from_blob(blob)
+            old_snap = self._areas_snapshot.get(mid)
+            if old_snap is not None and old_snap == new_snap:
+                # No structural change — refresh blob silently so statistics
+                # (cleaning_counter, last_cleaned) stay current for entities
+                self._areas_snapshot[mid] = AreaSnapshot(
+                    area_ids=new_snap.area_ids,
+                    names=new_snap.names,
+                    blob=blob,
                 )
-        self._known_map_ids = {
-            str(entry.get("map_id"))
-            for entry in maps_blob.get("maps", [])
-            if str(entry.get("permanent_flag", "")).strip().lower() == "true"
-            and entry.get("map_id") is not None
-        }
-        LOGGER.debug("async_load_all_map_areas: known permanent maps = %s", self._known_map_ids)
+                continue
+            if old_snap is None:
+                LOGGER.info(
+                    "RobEye: snapshot created for map %s (%d areas)",
+                    mid, len(new_snap.area_ids),
+                )
+            else:
+                LOGGER.info(
+                    "RobEye: areas changed for map %s (added=%s removed=%s)",
+                    mid,
+                    new_snap.area_ids - old_snap.area_ids,
+                    old_snap.area_ids - new_snap.area_ids,
+                )
+            self._areas_snapshot[mid] = new_snap
+            async_dispatcher_send(
+                self.hass,
+                f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}",
+                mid,
+            )
 
-        # Mirror active map areas into legacy DATA_AREAS
-        if self._committed_active_map_id in self._areas_by_map:
-            if self.data is None:
-                self.data = {}
-            self.data[DATA_AREAS] = self._areas_by_map[self._committed_active_map_id]
+        # Mirror active map areas into legacy DATA_AREAS for read paths
+        # that haven't been migrated to coordinator.areas.
+        active_snap = self._areas_snapshot.get(self._active_map_id)
+        if active_snap is not None:
+            self.data[DATA_AREAS] = active_snap.blob
+
+    async def async_load_all_map_areas(self) -> None:
+        """Compatibility shim — delegates to background refresh.
+
+        Called once by __init__.py after first refresh. The actual fetching
+        is now part of the regular tick; this method exists only so the
+        existing __init__.py call site still works.
+        """
+        await self._async_background_refresh(datetime.utcnow())
+        self._last_background_fetch = datetime.utcnow()
 
     # ── Entity state helpers ───────────────────────────────────────────
 
@@ -541,9 +626,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             self._last_mode = mode
 
-            # Effective map ID for this update cycle — always HA-configured,
-            # never the device's dynamically reported active map.
-            _active_map_id: str = self._manual_map_id or self.map_id
+            # Effective map ID for this update cycle — always HA's selected map.
+            _active_map_id: str = self._active_map_id
 
             # ── Every 600 s: saved-map geometry (walls, rooms, outline) ──
             # Fetched BEFORE the live-map block so that feature_map / tile_map /
@@ -685,107 +769,48 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                     self._last_live_map = now
 
-            # ── Every 300 s: maps + map_status (own sub-timer) ──────────
-            if self._last_maps is None or (
-                now - self._last_maps
-            ) >= timedelta(seconds=SCAN_INTERVAL_AREAS):
-                try:
-                    data[DATA_MAP_STATUS] = await self.client.get_map_status()
-                except CannotConnect:
-                    LOGGER.debug("get_map_status unavailable, skipping")
-                try:
-                    data[DATA_MAPS] = await self.client.get_maps()
-                    self._async_handle_map_changes(data[DATA_MAPS])
-                except CannotConnect:
-                    LOGGER.debug("get_maps unavailable, skipping")
-                self._last_maps = now
+            # ── Background refresh: maps + areas (paused during cleaning) ─────
+            # The snapshot model fetches /get/maps + /get/areas for every known
+            # permanent map on a uniform 600s cycle, diffs against the stored
+            # snapshot, and dispatches SIGNAL_AREAS_UPDATED / SIGNAL_MAPS_UPDATED
+            # on structural changes only. Statistics-only changes are absorbed
+            # silently (no spurious dashboard rebuilds).
+            #
+            # Paused while cleaning — areas data is volatile during a clean and
+            # nothing structural can change while the robot is operationally
+            # active. A cleaning→idle edge resets the timer to force an
+            # immediate refresh (statistics will have updated).
+            _mode = data.get(DATA_STATUS, {}).get("mode", "")
+            _is_cleaning_now = _mode in ("cleaning", "go_home")
+            if self._was_cleaning and not _is_cleaning_now:
+                LOGGER.debug(
+                    "RobEye: cleaning ended — forcing background refresh"
+                )
+                self._last_background_fetch = None
+            self._was_cleaning = _is_cleaning_now
 
-            # ── Per-map areas: active every 300 s, inactive every 600 s ──
-            # Build the set of map IDs to consider: all previously cached maps
-            # plus the currently active map (in case it was never cached).
-            _active_map = self._manual_map_id or self.map_id
-            _maps_to_refresh: set[str] = (
-                set(self._areas_by_map.keys())
-                | set(self._known_map_ids)
-                | {_active_map}
-            )
+            _background_run = False
+            if not _is_cleaning_now:
+                _bg_due = (
+                    self._last_background_fetch is None
+                    or (now - self._last_background_fetch)
+                        >= timedelta(seconds=SCAN_INTERVAL_BACKGROUND)
+                )
+                if _bg_due:
+                    await self._async_background_refresh(now)
+                    self._last_background_fetch = now
+                    _background_run = True
+                    # Mirror active map's blob into legacy DATA_AREAS / DATA_MAPS
+                    # for any read paths not yet migrated to coordinator.areas.
+                    if self._active_map_id in self._areas_snapshot:
+                        data[DATA_AREAS] = self._areas_snapshot[
+                            self._active_map_id
+                        ].blob
+                    if DATA_MAPS in (self.data or {}):
+                        data[DATA_MAPS] = self.data[DATA_MAPS]
 
-            for _mid in _maps_to_refresh:
-                _is_active_map = _mid == _active_map
-                _interval = SCAN_INTERVAL_AREAS if _is_active_map else SCAN_INTERVAL_AREAS_INACTIVE
-                _last_fetch = self._areas_fetched_at.get(_mid)
-                _due = _last_fetch is None or (now - _last_fetch) >= timedelta(seconds=_interval)
-                if not _due:
-                    continue
-
-                try:
-                    _blob = await self.client.get_areas(_mid)
-                except CannotConnect:
-                    LOGGER.debug("RobEye: get_areas(%s) failed — will retry", _mid)
-                    continue
-
-                _area_list = _blob.get("areas", []) if isinstance(_blob, dict) else []
-                if not _area_list:
-                    # Transient empty response — do not overwrite known-good cache;
-                    # schedule a fast retry for the active map only.
-                    if _is_active_map:
-                        self.hass.loop.call_later(
-                            2.0,
-                            lambda: self.hass.async_create_task(
-                                self.async_request_refresh()
-                            ),
-                        )
-                    continue
-
-                _new_ids = {str(a["id"]) for a in _area_list if a.get("id") is not None}
-                _old_ids = self._known_area_ids_by_map.get(_mid, set())
-                self._areas_by_map[_mid] = _blob
-                self._known_area_ids_by_map[_mid] = _new_ids
-                self._areas_fetched_at[_mid] = now
-
-                # Advance committed_active_map_id when we get a fresh commit for
-                # the requested active map (atomic availability flip).
-                _committed_changed = False
-                if _is_active_map and self._committed_active_map_id != _mid:
-                    LOGGER.info(
-                        "RobEye: committing map switch %s -> %s (%d areas)",
-                        self._committed_active_map_id, _mid, len(_area_list),
-                    )
-                    self._committed_active_map_id = _mid
-                    _committed_changed = True
-
-                # Honour suppression marker from async_set_active_map's fast path:
-                # it already dispatched the signal for this map, so skip here to
-                # avoid a duplicate rebuild triggered on the very next tick.
-                if getattr(self, "_suppress_next_commit_dispatch_for", None) == _mid:
-                    self._suppress_next_commit_dispatch_for = None
-                    _committed_changed = False
-
-                # Fire SIGNAL_AREAS_UPDATED when EITHER:
-                #  - the area id set within this map changed (rename, add/remove room), or
-                #  - the committed active map advanced (map switch not yet seen by dashboard).
-                if _new_ids != _old_ids or _committed_changed:
-                    _signal = f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}"
-                    LOGGER.debug(
-                        "RobEye: dispatching SIGNAL_AREAS_UPDATED for map %s "
-                        "(area_set_changed=%s committed_changed=%s)",
-                        _mid, _new_ids != _old_ids, _committed_changed,
-                    )
-                    self.hass.loop.call_soon(
-                        async_dispatcher_send, self.hass, _signal, _mid
-                    )
-
-            # Mirror active map areas into legacy DATA_AREAS for backward compat
-            _committed = self._committed_active_map_id
-            if _committed in self._areas_by_map:
-                data[DATA_AREAS] = self._areas_by_map[_committed]
-
-            # ── Sensor status + robot flags (same 300 s cadence as active areas) ─
-            _active_areas_due = (
-                self._areas_fetched_at.get(_active_map) is None
-                or (now - self._areas_fetched_at[_active_map]) < timedelta(seconds=1)
-            )
-            if _active_areas_due:
+            # ── Sensor status + robot flags (same cadence as background refresh) ─
+            if _background_run:
                 try:
                     data[DATA_SENSOR_STATUS] = await self.client.get_sensor_status()
                 except CannotConnect:
@@ -794,6 +819,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     data[DATA_ROBOT_FLAGS] = await self.client.get_robot_flags()
                 except CannotConnect:
                     LOGGER.debug("get_robot_flags unavailable, skipping")
+                try:
+                    data[DATA_MAP_STATUS] = await self.client.get_map_status()
+                except CannotConnect:
+                    LOGGER.debug("get_map_status unavailable, skipping")
 
                 # Fallback seed for ha_fan_speed when /get/status returns 0
                 if self.ha_fan_speed is None:
@@ -913,78 +942,6 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             raise UpdateFailed(f"RobEye API error: {err}") from err
 
-    # ── Dynamic area discovery ────────────────────────────────────────
-    # Area diffing and SIGNAL_AREAS_UPDATED dispatch are now inlined in
-    # _async_update_data (the per-map areas loop) so that each map's signal
-    # carries the map_id.  _check_for_deleted_maps is kept for map deletion.
-
-    def _async_handle_map_changes(self, maps_blob: dict) -> None:
-        """Detect added/removed permanent maps and dispatch SIGNAL_MAPS_UPDATED.
-
-        Payload is a dict {"added": {...}, "removed": {...}} so handlers can
-        react to both events from one signal. Empty sets are valid (e.g. the
-        initial population fires {added: ..., removed: set()}).
-
-        For added maps: schedules a /get/areas fetch on the next coordinator
-        tick (handled by _maps_to_refresh in _async_update_data).
-        For removed maps: clears cached areas immediately so platform
-        listeners can purge their entity registry entries deterministically.
-        """
-        maps_list = (
-            maps_blob.get("maps", []) if isinstance(maps_blob, dict) else []
-        )
-        current_ids: set[str] = {
-            str(m["map_id"])
-            for m in maps_list
-            if isinstance(m, dict)
-            and m.get("map_id") is not None
-            and str(m.get("permanent_flag", "")).strip().lower() == "true"
-        }
-
-        if not current_ids:
-            # Empty response — transient API error; do nothing.
-            return
-
-        # First population — seed and return (handled at setup by
-        # async_load_all_map_areas, but kept as a safety net).
-        if not self._known_map_ids:
-            self._known_map_ids = current_ids
-            return
-
-        added_ids = current_ids - self._known_map_ids
-        removed_ids = self._known_map_ids - current_ids
-
-        if not added_ids and not removed_ids:
-            return
-
-        if removed_ids:
-            LOGGER.info("RobEye: maps removed from device — %s", removed_ids)
-            for mid in removed_ids:
-                self._areas_by_map.pop(mid, None)
-                self._known_area_ids_by_map.pop(mid, None)
-                self._areas_fetched_at.pop(mid, None)
-
-            if self._committed_active_map_id in removed_ids:
-                fallback = next(iter(current_ids - removed_ids), self.map_id)
-                LOGGER.warning(
-                    "RobEye: active map %s was deleted — falling back to %s",
-                    self._committed_active_map_id, fallback,
-                )
-                self._manual_map_id = fallback
-                self._committed_active_map_id = fallback
-
-        if added_ids:
-            LOGGER.info("RobEye: maps added to device — %s (will fetch areas next tick)", added_ids)
-
-        self._known_map_ids = current_ids
-
-        self.hass.loop.call_soon(
-            async_dispatcher_send,
-            self.hass,
-            f"{SIGNAL_MAPS_UPDATED}_{self.config_entry.entry_id}",
-            {"added": added_ids, "removed": removed_ids},
-        )
-
     # ── Convenience properties ────────────────────────────────────────
 
     @property
@@ -1001,7 +958,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def areas(self) -> list[dict[str, Any]]:
-        return self.areas_for(self._committed_active_map_id)
+        return self.areas_for(self._active_map_id)
 
     @property
     def live_parameters(self) -> dict[str, Any]:
@@ -1044,12 +1001,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Force areas re-fetch on next coordinator refresh.
 
         Call after /set/modify_area so that async_request_refresh() re-polls
-        /get/areas instead of serving the stale cached value.  Without this,
-        coordinator.data[DATA_AREAS] would remain stale for up to 300 s after
+        /get/areas via the background refresh path.  Without this, the snapshot
+        would remain stale for up to SCAN_INTERVAL_BACKGROUND seconds after
         a per-room fan-speed or strategy change.
         """
-        _active = self._manual_map_id or self.map_id
-        self._areas_fetched_at.pop(_active, None)
+        self._last_background_fetch = None
 
     @property
     def robot_info(self) -> dict[str, Any]:
