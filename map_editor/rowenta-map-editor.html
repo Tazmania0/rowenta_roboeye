@@ -1,0 +1,2952 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rowenta Map Editor</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Sora:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg:       #0d0f14;
+    --surface:  #151820;
+    --panel:    #1c2030;
+    --border:   #252a3a;
+    --accent:   #3b82f6;
+    --accent2:  #10b981;
+    --warn:     #f59e0b;
+    --danger:   #ef4444;
+    --text:     #e2e8f0;
+    --muted:    #64748b;
+    --clean:    rgba(59,130,246,0.18);
+    --clean-s:  #3b82f6;
+    --inactive: rgba(100,116,139,0.15);
+    --inactive-s:#475569;
+    --block:    rgba(239,68,68,0.18);
+    --block-s:  #ef4444;
+    --spot:     rgba(245,158,11,0.18);
+    --spot-s:   #f59e0b;
+    --select:   rgba(16,185,129,0.25);
+    --select-s: #10b981;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Sora', sans-serif;
+    font-size: 13px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 16px;
+    height: 48px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  header h1 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .header-sep { flex: 1; }
+
+  #ip-input {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    width: 160px;
+  }
+  #ip-input:focus { outline: none; border-color: var(--accent); }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    font-family: 'Sora', sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #2563eb; }
+  .btn.danger  { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .btn.danger:hover { background: #dc2626; }
+  .btn.success { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+  .btn.success:hover { background: #059669; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn svg { width: 14px; height: 14px; }
+
+  /* ── Map select bar ── */
+  #map-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    overflow-x: auto;
+  }
+  .map-chip {
+    padding: 3px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .map-chip:hover { border-color: var(--accent); color: var(--text); }
+  .map-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* ── Main layout ── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Toolbar (left) ── */
+  #toolbar {
+    width: 52px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 0;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .tool-btn {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+    position: relative;
+  }
+  .tool-btn:hover { background: var(--panel); color: var(--text); border-color: var(--border); }
+  .tool-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .tool-btn svg { width: 18px; height: 18px; }
+  .tool-sep { width: 28px; height: 1px; background: var(--border); margin: 4px 0; }
+
+  /* ── SVG canvas ── */
+  #canvas-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 50% 50%, #1a1f2e 0%, var(--bg) 100%);
+  }
+  #map-svg {
+    width: 100%; height: 100%;
+    cursor: crosshair;
+    display: block;
+    touch-action: none;
+  }
+  #map-svg.mode-select { cursor: default; }
+  #map-svg.mode-split  { cursor: crosshair; }
+  #map-svg.mode-block  { cursor: cell; }
+  #map-svg.mode-spot   { cursor: crosshair; }
+  #map-svg.mode-pan    { cursor: grab; }
+  #map-svg.mode-pan.panning { cursor: grabbing; }
+
+  /* SVG area styles injected dynamically */
+
+  /* ── Side panel (right) ── */
+  #side-panel {
+    width: 260px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow-y: auto;
+  }
+  .panel-section {
+    padding: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 10px;
+  }
+
+  .area-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.1s;
+    margin-bottom: 2px;
+  }
+  .area-item:hover { background: var(--panel); }
+  .area-item.selected { background: rgba(59,130,246,0.15); }
+  .area-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .area-name { flex: 1; font-size: 12px; }
+  .area-id { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted); }
+
+  /* Area detail editor */
+  #area-detail { display: none; }
+  #area-detail.visible { display: block; }
+
+  .field-row { margin-bottom: 10px; }
+  .field-label {
+    display: block;
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  input[type="text"], select {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-family: 'Sora', sans-serif;
+    font-size: 12px;
+  }
+  input[type="text"]:focus, select:focus {
+    outline: none; border-color: var(--accent);
+  }
+  select option { background: var(--panel); }
+
+  .action-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+
+  /* Merge selection indicator */
+  #merge-hint {
+    background: rgba(16,185,129,0.1);
+    border: 1px solid var(--accent2);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: var(--accent2);
+    display: none;
+    margin-bottom: 10px;
+  }
+  #merge-hint.visible { display: block; }
+
+  /* Status bar */
+  #status-bar {
+    height: 28px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px;
+    padding: 0 16px;
+    flex-shrink: 0;
+  }
+  .status-item {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    display: flex; align-items: center; gap: 5px;
+  }
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  .status-dot.ok  { background: var(--accent2); }
+  .status-dot.err { background: var(--danger); }
+  .status-dot.busy { background: var(--warn); animation: blink 1s infinite; }
+
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* Split line preview */
+  .split-preview { stroke: #10b981; stroke-width: 5; stroke-dasharray: 14 7; pointer-events: none;
+                   filter: drop-shadow(0 0 4px rgba(16,185,129,0.6)); }
+
+  /* Split dot at first point */
+  .split-dot { fill: #10b981; pointer-events: none;
+               filter: drop-shadow(0 0 8px #10b981); }
+
+  /* Merge first-selected pulse */
+  @keyframes merge-pulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
+  .merge-first-pulse { animation: merge-pulse 1s ease-in-out infinite; }
+
+  /* Instruction overlay (canvas-top banner) */
+  #instruction {
+    display: none;
+    position: absolute;
+    top: 12px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(21,24,32,0.95);
+    border-radius: 8px;
+    padding: 9px 20px 9px 14px;
+    font-size: 12px; font-weight: 500;
+    pointer-events: none; z-index: 20;
+    white-space: nowrap;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    display: none; align-items: center; gap: 10px;
+  }
+  #instruction.visible { display: flex !important; }
+  .instr-step {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; font-weight: 700;
+    padding: 2px 7px; border-radius: 4px;
+    background: rgba(59,130,246,0.2); color: var(--accent);
+    border: 1px solid var(--accent);
+  }
+  .instr-step.green { background: rgba(16,185,129,0.2); color: var(--accent2); border-color: var(--accent2); }
+  .instr-step.amber { background: rgba(245,158,11,0.2); color: var(--warn); border-color: var(--warn); }
+  #instruction span.instr-text { color: var(--text); }
+
+  /* Escape hint */
+  #instruction kbd {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px;
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted);
+  }
+
+  /* Toast */
+  #toast {
+    position: fixed;
+    bottom: 44px; left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 12px;
+    opacity: 0;
+    transition: all 0.25s;
+    pointer-events: none;
+    z-index: 100;
+    white-space: nowrap;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.error { border-color: var(--danger); color: var(--danger); }
+  #toast.success { border-color: var(--accent2); color: var(--accent2); }
+
+  /* ── Confirm modal ── */
+  #modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.65);
+    align-items: center; justify-content: center;
+    z-index: 200;
+    backdrop-filter: blur(3px);
+  }
+  #modal-overlay.visible { display: flex; }
+  #modal-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    width: 360px;
+    max-width: calc(100vw - 40px);
+    box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+    animation: modal-in 0.18s ease-out;
+  }
+  @keyframes modal-in {
+    from { transform: scale(0.92) translateY(8px); opacity: 0; }
+    to   { transform: scale(1)    translateY(0);   opacity: 1; }
+  }
+  #modal-title {
+    font-family: 'Sora', sans-serif;
+    font-size: 15px; font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text);
+  }
+  #modal-desc {
+    font-size: 12px; color: var(--muted);
+    margin-bottom: 18px; line-height: 1.6;
+  }
+  .modal-field { margin-bottom: 14px; }
+  .modal-field label {
+    display: block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.07em; color: var(--muted);
+    margin-bottom: 5px;
+  }
+  .modal-field input,
+  .modal-field select {
+    width: 100%;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); padding: 8px 12px; border-radius: 6px;
+    font-family: 'Sora', sans-serif; font-size: 13px;
+  }
+  .modal-field input:focus,
+  .modal-field select:focus { outline: none; border-color: var(--accent); }
+  #modal-actions {
+    display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;
+  }
+
+  /* Spinner overlay */
+  #spinner {
+    display: none;
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.5);
+    align-items: center; justify-content: center;
+    z-index: 50;
+  }
+  #spinner.visible { display: flex; }
+  .spin {
+    width: 36px; height: 36px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Empty state */
+  #empty-state {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 12px; color: var(--muted);
+    pointer-events: none;
+  }
+  #empty-state svg { width: 48px; height: 48px; opacity: 0.3; }
+  #empty-state p { font-size: 13px; }
+
+  /* Zoom controls */
+  #zoom-controls {
+    position: absolute;
+    bottom: 12px; right: 12px;
+    display: flex; flex-direction: column; gap: 4px;
+    z-index: 10;
+  }
+  .zoom-btn {
+    width: 32px; height: 32px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+  }
+  .zoom-btn:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2">
+    <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+    <polyline points="9 22 9 12 15 12 15 22"/>
+  </svg>
+  <h1>Rowenta Map Editor</h1>
+  <div class="header-sep"></div>
+  <span id="mode-badge" style="display:none;font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(16,185,129,0.15);border:1px solid #10b981;color:#10b981;font-family:'JetBrains Mono',monospace;">PROXY</span>
+  <label style="font-size:11px;color:var(--muted);margin-right:4px;" id="ip-label">Robot IP</label>
+  <input id="ip-input" type="text" placeholder="192.168.1.xx" />
+  <button class="btn primary" id="btn-connect">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M5 12h14M12 5l7 7-7 7"/>
+    </svg>
+    Connect
+  </button>
+</header>
+
+<!-- Map bar -->
+<div id="map-bar">
+  <span style="font-size:11px;color:var(--muted);margin-right:4px;">MAP:</span>
+  <span id="map-chips-placeholder" style="font-size:11px;color:var(--muted)">— connect to load maps —</span>
+</div>
+
+<!-- Main -->
+<div id="main">
+
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <button class="tool-btn active" id="tool-select" title="Select (S)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M5 3l14 9-7 2-2 7z"/>
+      </svg>
+    </button>
+    <button class="tool-btn" id="tool-pan" title="Pan (Space)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M12 12v.01"/>
+      </svg>
+    </button>
+    <div class="tool-sep"></div>
+    <button class="tool-btn" id="tool-split" title="Split room (X)" style="border-color: rgba(16,185,129,0.3)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="2" x2="12" y2="22"/>
+        <path d="M2 12h4M18 12h4"/>
+      </svg>
+    </button>
+    <button class="tool-btn" id="tool-merge" title="Merge rooms (M)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="3" width="8" height="18" rx="1"/>
+        <rect x="14" y="3" width="8" height="18" rx="1"/>
+        <path d="M10 12h4"/>
+      </svg>
+    </button>
+    <div class="tool-sep"></div>
+    <button class="tool-btn" id="tool-block" title="Draw no-go area (B)" style="border-color: rgba(239,68,68,0.3)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+      </svg>
+    </button>
+    <button class="tool-btn" id="tool-spot" title="Clean spot rectangle" style="border-color: rgba(245,158,11,0.3)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="8"/>
+        <circle cx="12" cy="12" r="2"/>
+        <path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>
+      </svg>
+    </button>
+    <div class="tool-sep"></div>
+    <button class="tool-btn" id="tool-fit" title="Fit to screen (F)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3M16 21h3a2 2 0 002-2v-3"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Canvas -->
+  <div id="canvas-wrap">
+    <div id="empty-state">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="3" y="3" width="18" height="18" rx="2"/>
+        <path d="M9 3v18M15 3v18M3 9h18M3 15h18"/>
+      </svg>
+      <p>Connect to robot and select a map</p>
+    </div>
+    <!-- Instruction banner -->
+    <div id="instruction">
+      <span class="instr-step" id="instr-step">STEP 1</span>
+      <span class="instr-text" id="instr-text">Select a room</span>
+      <kbd>Esc</kbd>
+    </div>
+    <svg id="map-svg" class="mode-select">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="1"/>
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#grid)"/>
+      <g id="map-group">
+        <!-- Rendered map layers injected here -->
+      </g>
+    </svg>
+    <div id="spinner">
+      <div class="spin"></div>
+    </div>
+    <div id="zoom-controls">
+      <button class="zoom-btn" id="zoom-in">+</button>
+      <button class="zoom-btn" id="zoom-out">−</button>
+    </div>
+  </div>
+
+  <!-- Side panel -->
+  <div id="side-panel">
+    <div class="panel-section">
+      <div class="panel-title">Areas</div>
+      <div id="area-list">
+        <span style="font-size:11px;color:var(--muted)">No map loaded</span>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">Robot Commands</div>
+      <div class="action-row">
+        <button class="btn primary" id="btn-clean-all" title="Start whole-home clean">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
+          Clean All
+        </button>
+        <button class="btn danger" id="btn-stop" title="Stop immediately">
+          <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+          Stop
+        </button>
+        <button class="btn" id="btn-home" title="Return to base">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+          Home
+        </button>
+        <button class="btn" id="btn-spot-clean" title="Draw a spot-clean rectangle">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="1"/><circle cx="12" cy="12" r="2"/></svg>
+          Clean Spot
+        </button>
+      </div>
+    </div>
+
+    <div class="panel-section" id="area-detail">
+      <div class="panel-title">Edit Area</div>
+
+      <div id="merge-hint" class="merge-hint">
+        Select a second area to merge with #<span id="merge-first-id"></span>
+      </div>
+
+      <div class="field-row">
+        <label class="field-label">Name</label>
+        <input type="text" id="field-name" placeholder="Room name..." />
+      </div>
+      <div class="field-row">
+        <label class="field-label">Room type</label>
+        <select id="field-room-type">
+          <option value="none">— none —</option>
+          <option value="living">Living room</option>
+          <option value="kitchen">Kitchen</option>
+          <option value="sleeping">Bedroom</option>
+          <option value="corridor">Corridor / Hallway</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <label class="field-label">State</label>
+        <select id="field-state">
+          <option value="clean">Active (clean)</option>
+          <option value="inactive">Unnamed (inactive)</option>
+          <option value="blocking">Blocked (no-go)</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <label class="field-label">Fan speed</label>
+        <select id="field-fan">
+          <option value="0">Default (per global)</option>
+          <option value="2">Eco</option>
+          <option value="3">Normal / High</option>
+          <option value="1">Silent</option>
+          <option value="4">Super Silent</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <label class="field-label">Strategy</label>
+        <select id="field-strategy">
+          <option value="normal">Normal</option>
+          <option value="deep">Deep clean</option>
+        </select>
+      </div>
+      <div class="action-row">
+        <button class="btn primary" id="btn-save-area">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save
+        </button>
+        <button class="btn" id="btn-split-area" title="Split this room">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="2" x2="12" y2="22"/><path d="M2 12h4M18 12h4"/></svg>
+          Split
+        </button>
+        <button class="btn" id="btn-merge-area" title="Merge with another room">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="8" height="18" rx="1"/><rect x="14" y="3" width="8" height="18" rx="1"/><path d="M10 12h4"/></svg>
+          Merge
+        </button>
+        <button class="btn danger" id="btn-block-area" title="Draw permanent no-go area">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+          No-go
+        </button>
+      </div>
+    </div>
+
+    <!-- Debug box: shows raw field names from device — hidden until data loads -->
+    <div id="debug-box" style="display:none;border-top:1px solid var(--border)">
+      <div class="panel-section">
+        <div class="panel-title" style="color:var(--warn)">⚠ Debug — raw area fields</div>
+        <pre id="debug-raw" style="font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--warn);white-space:pre-wrap;word-break:break-all;max-height:180px;overflow-y:auto;line-height:1.5"></pre>
+        <button class="btn" style="margin-top:6px;font-size:10px" onclick="$('debug-box').style.display='none'">Dismiss</button>
+      </div>
+    </div>
+
+    <div class="panel-section" style="margin-top:auto;border-top:1px solid var(--border);">
+      <div class="panel-title">Legend</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div style="display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted)">
+          <div style="width:12px;height:12px;background:var(--clean);border:1.5px solid var(--clean-s);border-radius:2px"></div> Active room
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted)">
+          <div style="width:12px;height:12px;background:var(--inactive);border:1.5px solid var(--inactive-s);border-radius:2px"></div> Unnamed segment
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted)">
+          <div style="width:12px;height:12px;background:var(--block);border:1.5px solid var(--block-s);border-radius:2px"></div> Blocked / No-go
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted)">
+          <div style="width:12px;height:12px;background:var(--spot);border:1.5px solid var(--spot-s);border-radius:2px"></div> Spot clean
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted)">
+          <div style="width:12px;height:12px;background:var(--select);border:1.5px solid var(--select-s);border-radius:2px"></div> Selected
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Status bar -->
+<div id="status-bar">
+  <div class="status-item"><div class="status-dot" id="status-dot"></div><span id="status-text">Disconnected</span></div>
+  <div class="status-item" id="status-mode">Mode: Select</div>
+  <div class="status-item" id="status-coords" style="margin-left:auto">—</div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- Confirm modal -->
+<div id="modal-overlay">
+  <div id="modal-card">
+    <div id="modal-title">Confirm</div>
+    <div id="modal-desc"></div>
+    <div id="modal-fields"></div>
+    <div id="modal-actions">
+      <button class="btn" id="modal-cancel">Cancel</button>
+      <button class="btn primary" id="modal-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIGURATION — three modes:
+//  1. DIRECT  — HA Webpage card (direct HTTP to robot — blocked by mixed content
+//               when HA is HTTPS; only works if HA runs on plain HTTP)
+//  2. PROXY   — Python server on localhost:8765 (standalone browser use)
+//  3. INGRESS — HA add-on behind HA ingress (HTTPS → proxy → robot)
+// ─────────────────────────────────────────────────────────────────────────────
+const ROBOT_PORT = 8080;
+let robotIP = localStorage.getItem('rowenta_ip') || '';
+
+// Detect mode from hostname
+const _host = window.location.hostname;
+const PROXY_MODE   = (_host === 'localhost' || _host === '127.0.0.1');
+const INGRESS_MODE = (!PROXY_MODE && window.location.pathname.includes('ingress'));
+const USE_PROXY    = PROXY_MODE || INGRESS_MODE;   // use relative URLs
+
+// When running via proxy server, we can set the robot IP dynamically
+async function setProxyRobotIP(ip) {
+  try {
+    await fetch('/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ robot_ip: ip }),
+    });
+  } catch(e) { /* best-effort */ }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────────────────────────────────────
+const state = {
+  maps: [],
+  activeMapId: null,
+  areas: [],
+  bbox: null,          // {minX,minY,maxX,maxY}
+  selectedAreaId: null,
+  mergeFirstId: null,
+  mode: 'select',      // select | pan | split | merge | block | spot
+  splitPoints: [],     // 0 or 1 SVG points for split line preview
+  connected: false,
+
+  // Pan/zoom
+  viewTx: 0, viewTy: 0, viewScale: 1,
+  panStart: null,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOM
+// ─────────────────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const ipInput      = $('ip-input');
+const mapBarEl     = $('map-bar');
+const mapGroup     = $('map-group');
+const mapSvg       = $('map-svg');
+const areaListEl   = $('area-list');
+const areaDetailEl = $('area-detail');
+const mergeHintEl  = $('merge-hint');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INSTRUCTION BANNER
+// ─────────────────────────────────────────────────────────────────────────────
+const instrEl   = $('instruction');
+const instrStep = $('instr-step');
+const instrText = $('instr-text');
+
+function showInstruction(step, text, variant='blue') {
+  instrStep.textContent = step;
+  instrStep.className = 'instr-step' +
+    (variant==='green' ? ' green' : variant==='amber' ? ' amber' : '');
+  instrText.textContent = text;
+  instrEl.classList.add('visible');
+}
+function hideInstruction() { instrEl.classList.remove('visible'); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPLIT / MERGE SVG OVERLAY HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+function getSplitGroup() {
+  let g = mapSvg.querySelector('#split-overlay');
+  if (!g) {
+    g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.id = 'split-overlay';
+    mapGroup.appendChild(g);
+  }
+  return g;
+}
+
+function clearSplitOverlay() {
+  const g = mapSvg.querySelector('#split-overlay');
+  if (g) g.innerHTML = '';
+}
+
+function setSplitDot(x, y) {
+  const g = getSplitGroup();
+  let dot = g.querySelector('.split-dot');
+  if (!dot) {
+    dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('class', 'split-dot');
+    g.appendChild(dot);
+  }
+  const vb  = mapSvg.viewBox.baseVal;
+  const r   = Math.max(15, (vb.width || 2000) * 0.009);
+  dot.setAttribute('r', r);
+  dot.setAttribute('cx', x); dot.setAttribute('cy', y);
+}
+
+function setSplitLine(x1, y1, x2, y2) {
+  const g = getSplitGroup();
+  let line = g.querySelector('.split-preview');
+  if (!line) {
+    line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('class', 'split-preview');
+    g.appendChild(line);
+  }
+  line.setAttribute('x1', x1); line.setAttribute('y1', y1);
+  line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+}
+
+function setSpotRect(x1, y1, x2, y2, kind='spot') {
+  const g = getSplitGroup();
+  let rect = g.querySelector('.spot-preview');
+  if (!rect) {
+    rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('class', 'split-preview spot-preview');
+    g.appendChild(rect);
+  }
+  rect.setAttribute('fill', kind === 'block' ? 'rgba(239,68,68,0.16)' : 'rgba(245,158,11,0.14)');
+  rect.setAttribute('stroke', kind === 'block' ? '#ef4444' : '#f59e0b');
+  rect.setAttribute('stroke-width', '8');
+  rect.setAttribute('stroke-dasharray', kind === 'block' ? '18 10' : 'none');
+  rect.setAttribute('x', Math.min(x1, x2));
+  rect.setAttribute('y', Math.min(y1, y2));
+  rect.setAttribute('width', Math.abs(x2 - x1));
+  rect.setAttribute('height', Math.abs(y2 - y1));
+}
+const statusDot    = $('status-dot');
+const statusText   = $('status-text');
+const statusMode   = $('status-mode');
+const statusCoords = $('status-coords');
+const emptyState   = $('empty-state');
+const spinner      = $('spinner');
+const toast        = $('toast');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODAL — promise-based confirmation dialog
+// showModal(options) → Promise<{values}> resolves on Confirm, rejects on Cancel
+// ─────────────────────────────────────────────────────────────────────────────
+const modalOverlay = $('modal-overlay');
+const modalTitle   = $('modal-title');
+const modalDesc    = $('modal-desc');
+const modalFields  = $('modal-fields');
+const modalConfirm = $('modal-confirm');
+const modalCancel  = $('modal-cancel');
+
+let _modalResolve = null, _modalReject = null;
+
+const ROOM_TYPE_OPTIONS = [
+  { value: 'none', label: '— none —' },
+  { value: 'living', label: 'Living room' },
+  { value: 'kitchen', label: 'Kitchen' },
+  { value: 'sleeping', label: 'Bedroom' },
+  { value: 'corridor', label: 'Corridor / Hallway' },
+];
+
+function escapeHTML(v) {
+  return String(v ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch]));
+}
+
+function showModal({ title, desc, fields = [], confirmLabel = 'Confirm', confirmClass = 'primary', danger = false }) {
+  return new Promise((resolve, reject) => {
+    _modalResolve = resolve;
+    _modalReject  = reject;
+
+    modalTitle.textContent = title;
+    modalDesc.textContent  = desc || '';
+    modalConfirm.textContent = confirmLabel;
+    modalConfirm.className = `btn ${danger ? 'danger' : confirmClass}`;
+
+    // Render input fields
+    modalFields.innerHTML = '';
+    for (const f of fields) {
+      const div = document.createElement('div');
+      div.className = 'modal-field';
+      const value = f.value ?? '';
+      if (f.type === 'select') {
+        const options = (f.options || []).map(opt =>
+          `<option value="${escapeHTML(opt.value)}"${String(opt.value) === String(value) ? ' selected' : ''}>${escapeHTML(opt.label)}</option>`
+        ).join('');
+        div.innerHTML = `<label>${escapeHTML(f.label)}</label>
+          <select id="modal-field-${escapeHTML(f.key)}">${options}</select>`;
+      } else {
+        div.innerHTML = `<label>${escapeHTML(f.label)}</label>
+          <input id="modal-field-${escapeHTML(f.key)}" type="text"
+                 value="${escapeHTML(value)}"
+                 placeholder="${escapeHTML(f.placeholder || '')}" />`;
+      }
+      modalFields.appendChild(div);
+    }
+
+    modalOverlay.classList.add('visible');
+
+    // Focus first input if present
+    const first = modalFields.querySelector('input, select');
+    if (first) setTimeout(() => first.focus(), 60);
+  });
+}
+
+function _closeModal(ok) {
+  modalOverlay.classList.remove('visible');
+  if (!ok) { _modalReject && _modalReject(new Error('cancelled')); return; }
+  const values = {};
+  modalFields.querySelectorAll('input, select').forEach(inp => {
+    const key = inp.id.replace('modal-field-', '');
+    values[key] = inp.value.trim();
+  });
+  _modalResolve && _modalResolve(values);
+}
+
+modalConfirm.addEventListener('click', () => _closeModal(true));
+modalCancel.addEventListener('click',  () => _closeModal(false));
+modalOverlay.addEventListener('click', e => { if (e.target === modalOverlay) _closeModal(false); });
+
+// Enter confirms, Escape cancels (when modal is open)
+document.addEventListener('keydown', e => {
+  if (!modalOverlay.classList.contains('visible')) return;
+  if (e.key === 'Enter')  { e.preventDefault(); _closeModal(true);  }
+  if (e.key === 'Escape') { e.preventDefault(); _closeModal(false); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UTILITIES
+// ─────────────────────────────────────────────────────────────────────────────
+function api(path) {
+  let url;
+  if (USE_PROXY) {
+    url = path;                                    // relative → proxy handles it
+  } else {
+    url = `http://${robotIP}:${ROBOT_PORT}${path}`; // direct → robot IP
+  }
+  return fetch(url)
+    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
+}
+
+async function apiText(path) {
+  const url = USE_PROXY ? path : `http://${robotIP}:${ROBOT_PORT}${path}`;
+  const resp = await fetch(url);
+  const body = await resp.text();
+  if (!resp.ok) {
+    const err = new Error(`HTTP ${resp.status}${body ? ': ' + body.substring(0, 160) : ''}`);
+    err.status = resp.status;
+    err.body = body;
+    throw err;
+  }
+  try { return JSON.parse(body); } catch { return body; }
+}
+
+function showToast(msg, type='info') {
+  toast.textContent = msg;
+  toast.className = 'show ' + type;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { toast.className = ''; }, 3000);
+}
+
+function setStatus(text, state='ok') {
+  statusText.textContent = text;
+  statusDot.className = 'status-dot ' + state;
+}
+
+function showSpinner(v) {
+  spinner.classList.toggle('visible', v);
+}
+
+async function pollCmd(cmdId, timeoutMs=15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 1500));
+    const res = await api(`/get/command_result`);
+    const cmds = res.commands || [];
+    const cmd = cmds.find(c => String(c.cmd_id) === String(cmdId));
+    if (!cmd) continue;
+    const st = cmd.state ?? cmd.status;
+    if (['done', 'success', 'completed', 'complete', 'finished'].includes(st)) return true;
+    if (cmd.error_code && cmd.error_code !== 0) throw new Error(`Command ${cmdId} error ${cmd.error_code}`);
+    if (['aborted', 'failed', 'error', 'rejected'].includes(st)) throw new Error(`Command ${cmdId} ${st}`);
+  }
+  throw new Error('Command timeout');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COORDINATE TRANSFORMS
+// ─────────────────────────────────────────────────────────────────────────────
+// Robot Y is math-convention (up). SVG Y is screen-convention (down).
+// Flip: svgY = (maxY + minY) - robotY
+
+function robotToSVG(rx, ry) {
+  const { minY, maxY } = state.bbox;
+  return { x: rx, y: (maxY + minY) - ry };
+}
+
+function svgToRobot(sx, sy) {
+  const { minY, maxY } = state.bbox;
+  return { x: Math.round(sx), y: Math.round((maxY + minY) - sy) };
+}
+
+function areaToSVGPoints(area) {
+  return area.points.map(p => {
+    const s = robotToSVG(p.x, p.y);
+    return `${s.x},${s.y}`;
+  }).join(' ');
+}
+
+// Get SVG point from mouse event (accounting for pan/zoom transform)
+function eventToSVGPoint(evt) {
+  // Use the SVG native coordinate transform — handles viewBox, preserveAspectRatio,
+  // CSS transforms and all other offsets correctly.
+  const pt = mapSvg.createSVGPoint();
+  pt.x = evt.clientX;
+  pt.y = evt.clientY;
+  return pt.matrixTransform(mapSvg.getScreenCTM().inverse());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LINE-SEGMENT INTERSECTION (for split)
+// ─────────────────────────────────────────────────────────────────────────────
+function lineIntersect(p1, p2, p3, p4) {
+  const d1x = p2.x - p1.x, d1y = p2.y - p1.y;
+  const d2x = p4.x - p3.x, d2y = p4.y - p3.y;
+  const denom = d1x * d2y - d1y * d2x;
+  if (Math.abs(denom) < 1e-9) return null;
+  const t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / denom;
+  const u = ((p3.x - p1.x) * d1y - (p3.y - p1.y) * d1x) / denom;
+  if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+    return { x: p1.x + t * d1x, y: p1.y + t * d1y };
+  }
+  return null;
+}
+
+function computeSplitPoints(area, lineA, lineB) {
+  // Work in SVG coords. Polygon points are in SVG coords after robotToSVG.
+  const pts = area.points.map(p => robotToSVG(p.x, p.y));
+  const hits = [];
+  const n = pts.length;
+  for (let i = 0; i < n && hits.length < 2; i++) {
+    const p1 = pts[i], p2 = pts[(i+1)%n];
+    const pt = lineIntersect(lineA, lineB, p1, p2);
+    if (pt) hits.push(pt);
+  }
+  if (hits.length < 2) return null;
+  // Convert back to robot integer coords
+  return hits.map(p => svgToRobot(p.x, p.y));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AREA NORMALIZATION
+// Handles both snake_case (area_id) and camelCase (areaId) field names,
+// and both top-level response keys (areas vs areaResponseList).
+// Logs the raw first area so exact field names can be confirmed in console.
+// ─────────────────────────────────────────────────────────────────────────────
+function normalizeArea(raw) {
+  // CONFIRMED from live device: area ID field is "id" (not area_id or areaId)
+  let area_id = raw.id ?? raw.area_id ?? raw.areaId ?? null;
+
+  // Last-resort: scan all integer fields (skip known non-ID integers)
+  if (area_id === null || area_id === undefined) {
+    const skip = new Set(['cleaning_parameter_set','cleaningParameterSet',
+                          'floor_type','floorType','area_size','cleaning_counter',
+                          'estimated_cleaning_time','average_cleaning_time']);
+    for (const [k, v] of Object.entries(raw)) {
+      if (!skip.has(k) && typeof v === 'number' && Number.isInteger(v) && v > 0 && v < 100000) {
+        console.warn(`[rowenta-editor] area_id fallback: using field "${k}" = ${v}`);
+        area_id = v;
+        break;
+      }
+    }
+  }
+
+  return {
+    area_id,
+    area_meta_data:         raw.area_meta_data  ?? raw.areaMetaData  ?? raw.metaData ?? '',
+    area_state:             raw.area_state  ?? raw.areaState  ?? 'inactive',
+    area_type:              raw.area_type   ?? raw.areaType   ?? 'room',
+    cleaning_parameter_set: raw.cleaning_parameter_set ?? raw.cleaningParameterSet ?? 0,
+    floor_type:             raw.floor_type  ?? raw.floorType  ?? 'default',
+    method:                 raw.method      ?? 'normal',
+    pump_volume:            raw.pump_volume ?? raw.pumpVolume ?? 'default',
+    room_type:              raw.room_type   ?? raw.roomType   ?? 'none',
+    strategy_mode:          raw.strategy_mode ?? raw.strategyMode ?? 'normal',
+    points: (raw.points || []).map(p => ({
+      x: p.x ?? p.x1 ?? 0,
+      y: p.y ?? p.y1 ?? 0,
+    })),
+    _raw: raw,
+  };
+}
+
+function extractAreas(res) {
+  const raw = res.areas ?? res.areaResponseList ?? res.area_list ?? [];
+  if (raw.length > 0) {
+    const keys = Object.keys(raw[0]);
+    console.log('[rowenta-editor] area field names from device:', keys);
+    console.log('[rowenta-editor] area[0] raw:', JSON.stringify(raw[0], null, 2));
+    // Show in the UI so it's visible without opening DevTools
+    const dbg = $('debug-raw');
+    if (dbg) {
+      dbg.textContent = 'RAW AREA KEYS: ' + keys.join(', ') + '\n\narea[0]: ' +
+        JSON.stringify(raw[0], null, 2);
+      const box = $('debug-box');
+      if (box) box.style.display = 'block';
+    }
+  }
+  return raw.map(normalizeArea);
+}
+
+
+async function loadMaps() {
+  setStatus('Loading maps…', 'busy');
+  const res = await api('/get/maps');
+  console.log('[rowenta-editor] /get/maps response:', JSON.stringify(res, null, 2));
+  state.maps = (res.maps || []).filter(m => m.permanent_flag === 'true' || m.permanent_flag === true);
+  renderMapChips();
+  setStatus(`Connected — ${state.maps.length} map(s)`, 'ok');
+  state.connected = true;
+  if (state.maps.length > 0) loadMap(state.maps[0].map_id);
+}
+
+function renderMapChips() {
+  const placeholder = $('map-chips-placeholder');
+  if (placeholder) placeholder.remove();
+
+  // Clear old chips
+  mapBarEl.querySelectorAll('.map-chip').forEach(e => e.remove());
+
+  state.maps.forEach((m, i) => {
+    const name = (m.map_meta_data || '').trim() || `Map ${i+1}`;
+    const chip = document.createElement('button');
+    chip.className = 'map-chip' + (m.map_id === state.activeMapId ? ' active' : '');
+    chip.textContent = name;
+    chip.dataset.mapId = m.map_id;
+    chip.addEventListener('click', () => loadMap(m.map_id));
+    mapBarEl.appendChild(chip);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOAD MAP DATA
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadMap(mapId) {
+  state.activeMapId = mapId;
+  state.selectedAreaId = null;
+  state.splitPoints = [];
+  renderMapChips();
+  showSpinner(true);
+  emptyState.style.display = 'none';
+  // Clear stale debug data from previous map load
+  const debugBox = $('debug-box');
+  if (debugBox) debugBox.style.display = 'none';
+
+  try {
+    const [areasRes, tileRes, featureRes] = await Promise.all([
+      api(`/get/areas?map_id=${mapId}`),
+      api(`/get/tile_map?map_id=${mapId}`),
+      api(`/get/feature_map?map_id=${mapId}`),
+    ]);
+
+    console.log('[rowenta-editor] /get/areas keys:', Object.keys(areasRes));
+    console.log('[rowenta-editor] /get/tile_map keys:', Object.keys(tileRes));
+    console.log('[rowenta-editor] /get/feature_map keys:', Object.keys(featureRes));
+
+    state.areas = extractAreas(areasRes);
+
+    // Compute bounding box — outline may be at different nesting levels
+    const outline = tileRes.outline
+                 ?? tileRes.map?.outline
+                 ?? tileRes.tileMap?.outline
+                 ?? [];
+    console.log('[rowenta-editor] outline length:', outline.length,
+                outline.length ? outline[0] : '(empty)');
+    if (outline.length > 0) {
+      const xs = outline.map(p => p.x);
+      const ys = outline.map(p => p.y);
+      state.bbox = {
+        minX: Math.min(...xs), maxX: Math.max(...xs),
+        minY: Math.min(...ys), maxY: Math.max(...ys),
+      };
+    } else if (state.areas.length > 0) {
+      // Fallback: compute from area points
+      const allPts = state.areas.flatMap(a => a.points || []);
+      state.bbox = {
+        minX: Math.min(...allPts.map(p=>p.x)),
+        maxX: Math.max(...allPts.map(p=>p.x)),
+        minY: Math.min(...allPts.map(p=>p.y)),
+        maxY: Math.max(...allPts.map(p=>p.y)),
+      };
+    } else {
+      state.bbox = { minX:0, maxX:1000, minY:0, maxY:1000 };
+    }
+
+    const featureMap = featureRes.map ?? featureRes.featureMap ?? featureRes;
+    const walls = featureMap.lines ?? featureMap.segments ?? [];
+    const dock  = featureMap.docking_pose ?? featureMap.dockingPose ?? featureMap.dockingPoseResponse ?? null;
+    console.log('[rowenta-editor] walls:', walls.length, '  dock:', dock);
+
+    renderMap(walls, dock);
+    renderAreaList();
+    fitToScreen();
+    showToast(`Loaded map ${mapId} — ${state.areas.length} areas`, 'success');
+  } catch(e) {
+    showToast('Failed to load map: ' + e.message, 'error');
+    emptyState.style.display = 'flex';
+  } finally {
+    showSpinner(false);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RENDER SVG
+// ─────────────────────────────────────────────────────────────────────────────
+function renderMap(walls=[], dock=null) {
+  const pad = 200;
+  const { minX, minY, maxX, maxY } = state.bbox;
+  const vbX = minX - pad, vbY = minY - pad;
+  const vbW = (maxX - minX) + pad*2;
+  const vbH = (maxY - minY) + pad*2;
+  mapSvg.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${vbH}`);
+
+  // Clear map group
+  mapGroup.innerHTML = '';
+
+  // ── Layer 1: Floor background
+  const floor = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  floor.setAttribute('x', minX); floor.setAttribute('y', minY);
+  floor.setAttribute('width', maxX-minX); floor.setAttribute('height', maxY-minY);
+  floor.setAttribute('fill', 'rgba(255,255,255,0.04)');
+  floor.setAttribute('rx', '4');
+  mapGroup.appendChild(floor);
+
+  // ── Layer 2: Area polygons
+  const areaGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  areaGroup.id = 'area-polygons';
+
+  // Render in Z-order: blocking → inactive → named (clean) on top so named
+  // rooms capture mouse events over any overlapping inactive segments.
+  const zOrder = ['inactive', 'declined_blocking', 'clean', 'blocking', 'proposed_blocking'];
+  const sorted = [...state.areas].sort((a, b) => {
+    const ai = isSpotArea(a) ? 98 : (zOrder.indexOf(a.area_state) === -1 ? 99 : zOrder.indexOf(a.area_state));
+    const bi = isSpotArea(b) ? 98 : (zOrder.indexOf(b.area_state) === -1 ? 99 : zOrder.indexOf(b.area_state));
+    return ai - bi;
+  });
+
+  sorted.forEach(area => {
+    if (!area.points || area.points.length < 3) return;
+
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    poly.setAttribute('points', areaToSVGPoints(area));
+    poly.dataset.areaId = area.area_id;
+
+    // Style by state
+    const st = area.area_state;
+    if (isSpotArea(area)) {
+      poly.setAttribute('fill', 'rgba(245,158,11,0.18)');
+      poly.setAttribute('stroke', '#f59e0b');
+      poly.setAttribute('stroke-width', '7');
+      poly.setAttribute('stroke-dasharray', '18 10');
+    } else if (st === 'clean') {
+      poly.setAttribute('fill', 'rgba(59,130,246,0.15)');
+      poly.setAttribute('stroke', '#3b82f6');
+      poly.setAttribute('stroke-width', '8');
+    } else if (st === 'blocking' || st === 'proposed_blocking') {
+      poly.setAttribute('fill', 'rgba(239,68,68,0.20)');
+      poly.setAttribute('stroke', '#ef4444');
+      poly.setAttribute('stroke-width', '6');
+      poly.setAttribute('stroke-dasharray', '10 8');
+      poly.style.pointerEvents = 'none';  // blocking zones not interactable
+    } else {
+      // inactive / unknown — render beneath named rooms, don't intercept clicks
+      poly.setAttribute('fill', 'rgba(100,116,139,0.08)');
+      poly.setAttribute('stroke', '#334155');
+      poly.setAttribute('stroke-width', '4');
+      poly.setAttribute('stroke-dasharray', '12 6');
+      poly.style.pointerEvents = 'none';  // inactive — cannot steal clicks
+    }
+
+    poly.setAttribute('stroke-linejoin', 'round');
+    if (st !== 'blocking' && st !== 'proposed_blocking') {
+      poly.style.pointerEvents = 'auto';
+      poly.style.cursor = 'pointer';
+      poly.style.transition = 'fill 0.15s';
+    }
+    if (st === 'clean') {
+      poly.style.cursor = 'pointer';
+      poly.style.transition = 'fill 0.15s';
+    }
+
+    // Only named (clean) rooms are interactable — inactive/blocking
+    // already have pointerEvents:none, so these events only fire for clean areas
+    poly.addEventListener('mouseenter', () => {
+      if (area.area_id !== state.selectedAreaId)
+        poly.setAttribute('fill', 'rgba(255,255,255,0.08)');
+    });
+    poly.addEventListener('mouseleave', () => {
+      if (area.area_id !== state.selectedAreaId)
+        setAreaPolyStyle(poly, area);
+    });
+    poly.addEventListener('click', e => {
+      if (state.mode === 'split' && state.selectedAreaId !== null) {
+        // In split mode with area selected: treat click as a point placement
+        // (don't stop propagation — let SVG handler place the point)
+        return;
+      }
+      if (state.mode === 'spot') {
+        e.preventDefault();
+        return;
+      }
+      if (state.mode === 'block') {
+        e.preventDefault();
+        return;
+      }
+      e.stopPropagation();
+      onAreaClick(area.area_id);
+    });
+
+    areaGroup.appendChild(poly);
+
+    // Room label
+    if (area.area_state === 'clean' && area.points.length >= 3) {
+      const cx = area.points.reduce((s,p) => s+p.x, 0) / area.points.length;
+      const cy = area.points.reduce((s,p) => s+p.y, 0) / area.points.length;
+      const sc = robotToSVG(cx, cy);
+
+      const name = getAreaName(area);
+      const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      txt.setAttribute('x', sc.x);
+      txt.setAttribute('y', sc.y);
+      txt.setAttribute('text-anchor', 'middle');
+      txt.setAttribute('dominant-baseline', 'central');
+      txt.setAttribute('fill', '#93c5fd');
+      txt.setAttribute('font-size', '60');
+      txt.setAttribute('font-family', 'Sora, sans-serif');
+      txt.setAttribute('font-weight', '500');
+      txt.setAttribute('pointer-events', 'none');
+      txt.textContent = name;
+      areaGroup.appendChild(txt);
+
+      const idTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      idTxt.setAttribute('x', sc.x);
+      idTxt.setAttribute('y', sc.y + 75);
+      idTxt.setAttribute('text-anchor', 'middle');
+      idTxt.setAttribute('fill', '#475569');
+      idTxt.setAttribute('font-size', '44');
+      idTxt.setAttribute('font-family', 'JetBrains Mono, monospace');
+      idTxt.setAttribute('pointer-events', 'none');
+      idTxt.textContent = `#${area.area_id}`;
+      areaGroup.appendChild(idTxt);
+    }
+  });
+  mapGroup.appendChild(areaGroup);
+
+  // ── Layer 3: Walls
+  if (walls.length > 0) {
+    const wallGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    walls.forEach(w => {
+      const a = robotToSVG(w.x1, w.y1);
+      const b = robotToSVG(w.x2, w.y2);
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+      line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+      line.setAttribute('stroke', '#94a3b8');
+      line.setAttribute('stroke-width', '6');
+      line.setAttribute('stroke-linecap', 'round');
+      wallGroup.appendChild(line);
+    });
+    mapGroup.appendChild(wallGroup);
+  }
+
+  // ── Layer 4: Dock icon
+  if (dock && dock.valid) {
+    const ds = robotToSVG(dock.x, dock.y);
+    const dockG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    dockG.setAttribute('transform', `translate(${ds.x},${ds.y})`);
+
+    // Dock symbol: filled D shape
+    const dockBg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    dockBg.setAttribute('x', -40); dockBg.setAttribute('y', -40);
+    dockBg.setAttribute('width', 80); dockBg.setAttribute('height', 80);
+    dockBg.setAttribute('rx', '10');
+    dockBg.setAttribute('fill', '#f59e0b');
+    dockBg.setAttribute('fill-opacity', '0.9');
+    dockBg.setAttribute('stroke', '#fbbf24');
+    dockBg.setAttribute('stroke-width', '4');
+
+    const dockTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    dockTxt.setAttribute('text-anchor', 'middle');
+    dockTxt.setAttribute('dominant-baseline', 'central');
+    dockTxt.setAttribute('fill', '#1c1917');
+    dockTxt.setAttribute('font-size', '48');
+    dockTxt.setAttribute('font-weight', '700');
+    dockTxt.textContent = '⌂';
+
+    dockG.appendChild(dockBg);
+    dockG.appendChild(dockTxt);
+    mapGroup.appendChild(dockG);
+  }
+
+  // Overlay group for split line/dot — appended last so it's always on top
+  const overlayG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  overlayG.id = 'split-overlay';
+  mapGroup.appendChild(overlayG);
+}
+
+function setAreaPolyStyle(poly, area) {
+  const st = area.area_state;
+  poly.removeAttribute('stroke-dasharray');
+  if (st === 'clean') {
+    if (isSpotArea(area)) {
+      poly.setAttribute('fill', 'rgba(245,158,11,0.18)');
+      poly.setAttribute('stroke', '#f59e0b');
+      poly.setAttribute('stroke-width', '7');
+      poly.setAttribute('stroke-dasharray', '18 10');
+      return;
+    }
+    poly.setAttribute('fill', 'rgba(59,130,246,0.15)');
+    poly.setAttribute('stroke', '#3b82f6');
+    poly.setAttribute('stroke-width', '8');
+  } else if (st === 'blocking' || st === 'proposed_blocking') {
+    poly.setAttribute('fill', 'rgba(239,68,68,0.20)');
+    poly.setAttribute('stroke', '#ef4444');
+    poly.setAttribute('stroke-width', '6');
+    poly.setAttribute('stroke-dasharray', '10 8');
+  } else {
+    poly.setAttribute('fill', 'rgba(100,116,139,0.08)');
+    poly.setAttribute('stroke', '#334155');
+    poly.setAttribute('stroke-width', '4');
+    poly.setAttribute('stroke-dasharray', '12 6');
+  }
+}
+
+function highlightArea(areaId) {
+  state.areas.forEach(a => {
+    const poly = mapSvg.querySelector(`polygon[data-area-id="${a.area_id}"]`);
+    if (poly) {
+      poly.classList.remove('merge-first-pulse', 'merge-candidate');
+      setAreaPolyStyle(poly, a);
+      poly.setAttribute('stroke-width', '8');
+    }
+  });
+  if (areaId !== null) {
+    const poly = mapSvg.querySelector(`polygon[data-area-id="${areaId}"]`);
+    if (poly) {
+      poly.setAttribute('fill', 'rgba(16,185,129,0.28)');
+      poly.setAttribute('stroke', '#10b981');
+      poly.setAttribute('stroke-width', '12');
+    }
+  }
+}
+
+function highlightAreaSplit(areaId) {
+  // Bright cyan highlight for the area being split
+  state.areas.forEach(a => {
+    const poly = mapSvg.querySelector(`polygon[data-area-id="${a.area_id}"]`);
+    if (poly) setAreaPolyStyle(poly, a);
+  });
+  const poly = mapSvg.querySelector(`polygon[data-area-id="${areaId}"]`);
+  if (poly) {
+    poly.setAttribute('fill', 'rgba(6,182,212,0.3)');
+    poly.setAttribute('stroke', '#06b6d4');
+    poly.setAttribute('stroke-width', '14');
+    poly.setAttribute('stroke-dasharray', '20 8');
+  }
+}
+
+function highlightMergeFirst(areaId) {
+  // Orange pulsing for first merge selection, tint others
+  state.areas.forEach(a => {
+    const poly = mapSvg.querySelector(`polygon[data-area-id="${a.area_id}"]`);
+    if (!poly) return;
+    poly.classList.remove('merge-first-pulse', 'merge-candidate');
+    setAreaPolyStyle(poly, a);
+    if (a.area_id === areaId) {
+      poly.setAttribute('fill', 'rgba(245,158,11,0.35)');
+      poly.setAttribute('stroke', '#f59e0b');
+      poly.setAttribute('stroke-width', '14');
+      poly.classList.add('merge-first-pulse');
+    } else if (a.area_state !== 'blocking') {
+      poly.classList.add('merge-candidate');
+    }
+  });
+}
+
+
+
+function getAreaName(area) {
+  if (area.area_meta_data) {
+    try {
+      const m = JSON.parse(area.area_meta_data);
+      if (m.name) return m.name;
+    } catch {}
+  }
+  return area.area_state === 'clean' ? `Room ${area.area_id}` : `Segment ${area.area_id}`;
+}
+
+function getAreaMeta(area) {
+  if (!area?.area_meta_data) return {};
+  try { return JSON.parse(area.area_meta_data); } catch { return {}; }
+}
+
+function isSpotArea(area) {
+  return area?.area_type === 'to_be_cleaned' && area?.area_state !== 'blocking';
+}
+
+function isBlockingArea(area) {
+  return area?.area_state === 'blocking' || area?.area_state === 'proposed_blocking';
+}
+
+function renderAreaList() {
+  areaListEl.innerHTML = '';
+  if (state.areas.length === 0) {
+    areaListEl.innerHTML = '<span style="font-size:11px;color:var(--muted)">No areas found</span>';
+    return;
+  }
+  state.areas.forEach(area => {
+    const item = document.createElement('div');
+    item.className = 'area-item' + (area.area_id === state.selectedAreaId ? ' selected' : '');
+    item.dataset.areaId = area.area_id;
+
+    const dot = document.createElement('div');
+    dot.className = 'area-dot';
+    const st = area.area_state;
+    dot.style.background = st==='clean' ? '#3b82f6' : st==='blocking'||st==='proposed_blocking' ? '#ef4444' : '#475569';
+
+    const name = document.createElement('span');
+    name.className = 'area-name';
+    name.textContent = getAreaName(area);
+
+    const idEl = document.createElement('span');
+    idEl.className = 'area-id';
+    idEl.textContent = `#${area.area_id}`;
+
+    item.appendChild(dot); item.appendChild(name); item.appendChild(idEl);
+    item.addEventListener('click', () => onAreaClick(area.area_id));
+    areaListEl.appendChild(item);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AREA SELECTION & DETAIL PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+function onAreaClick(areaId) {
+  if (state.mode === 'merge') {
+    handleMergeClick(areaId);
+    return;
+  }
+
+  if (state.mode === 'split') {
+    if (state.selectedAreaId === null) {
+      // Step 1: pick the area to split
+      state.selectedAreaId = areaId;
+      highlightAreaSplit(areaId);
+      updateSplitListUI(areaId);
+      showInstruction('STEP 2 of 3', 'Click first point of the split line', 'green');
+    }
+    // If area already selected, clicks place points (handled by SVG click handler)
+    return;
+  }
+
+  // Normal select mode
+  state.selectedAreaId = areaId;
+  highlightArea(areaId);
+  updateSplitListUI(areaId);
+
+  const area = state.areas.find(a => a.area_id === areaId);
+  if (!area) return;
+
+  areaDetailEl.classList.add('visible');
+  mergeHintEl.classList.remove('visible');
+
+  $('field-name').value      = getAreaName(area);
+  $('field-room-type').value = area.room_type || 'none';
+  $('field-state').value     = area.area_state || 'clean';
+  $('field-fan').value       = String(area.cleaning_parameter_set || 0);
+  $('field-strategy').value  = area.strategy_mode || 'normal';
+
+}
+
+function updateSplitListUI(areaId) {
+  areaListEl.querySelectorAll('.area-item').forEach(el => {
+    el.classList.toggle('selected', parseInt(el.dataset.areaId) === areaId);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SAVE AREA
+// ─────────────────────────────────────────────────────────────────────────────
+async function saveArea() {
+  const area = state.areas.find(a => a.area_id === state.selectedAreaId);
+  if (!area) return;
+
+  const name      = $('field-name').value.trim();
+  const roomType  = $('field-room-type').value;
+  const areaState = $('field-state').value;
+  const fanSpeed  = parseInt($('field-fan').value);
+  const strategy  = $('field-strategy').value;
+
+  const metaData = name ? JSON.stringify({ name }) : '';
+  const currentMetaData = area.area_meta_data || '';
+  const metadataChanged = metaData !== currentMetaData;
+  const modifyAreaUrl = params =>
+    `/set/modify_area?${new URLSearchParams({ map_id: state.activeMapId, ...params }).toString()}`;
+
+  // Build payload from the raw original + only patch the changed fields.
+  // This guarantees the robot gets exactly the same structure it sent us,
+  // with our modifications applied on top.
+  const payload = Object.assign({}, area._raw || {}, {
+    id:                    area.area_id,      // confirmed field name = "id"
+    area_meta_data:        metaData,
+    area_state:            areaState,
+    area_type:             area.area_type || 'room',
+    cleaning_parameter_set: fanSpeed,
+    floor_type:            area.floor_type || 'default',
+    method:                area.method    || 'normal',
+    pump_volume:           area.pump_volume || 'default',
+    room_type:             roomType,
+    strategy_mode:         strategy,
+    points:                area.points,
+    // Remove statistics from payload — robot doesn't want it back
+    statistics:            undefined,
+  });
+  // Remove undefined keys (e.g. statistics)
+  Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+
+  const modifyPayloads = [
+    {
+      label: 'params-metadata-settings',
+      url: modifyAreaUrl({
+        area_id: area.area_id,
+        area_meta_data: metaData,
+        area_state: areaState,
+        room_type: roomType,
+        cleaning_parameter_set: fanSpeed,
+        strategy_mode: strategy,
+      }),
+      changesMetadata: true,
+      localPatch: {
+        area_meta_data: metaData,
+        area_state: areaState,
+        room_type: roomType,
+        cleaning_parameter_set: fanSpeed,
+        strategy_mode: strategy,
+      },
+    },
+    {
+      label: 'params-metadata-only',
+      url: modifyAreaUrl({
+        area_id: area.area_id,
+        area_meta_data: metaData,
+        area_state: areaState,
+        room_type: roomType,
+      }),
+      changesMetadata: true,
+      localPatch: {
+        area_meta_data: metaData,
+        area_state: areaState,
+        room_type: roomType,
+      },
+    },
+    {
+      label: 'params-settings',
+      url: modifyAreaUrl({
+        area_id: area.area_id,
+        cleaning_parameter_set: fanSpeed,
+        strategy_mode: strategy,
+      }),
+      changesMetadata: false,
+      localPatch: {
+        cleaning_parameter_set: fanSpeed,
+        strategy_mode: strategy,
+      },
+    },
+    { label: 'full', payload, changesMetadata: true },
+    {
+      label: 'core',
+      changesMetadata: true,
+      payload: {
+        id: area.area_id,
+        points: area.points,
+        area_meta_data: metaData,
+        area_state: areaState,
+        room_type: roomType,
+      },
+    },
+    {
+      label: 'metadata-state',
+      changesMetadata: true,
+      payload: {
+        id: area.area_id,
+        area_meta_data: metaData,
+        area_state: areaState,
+        room_type: roomType,
+      },
+    },
+    {
+      label: 'metadata-only',
+      changesMetadata: true,
+      payload: {
+        id: area.area_id,
+        area_meta_data: metaData,
+      },
+    },
+  ];
+
+  showSpinner(true);
+  try {
+    let res;
+    let saved = false;
+    let savedPayload = null;
+    let lastErr;
+    for (const fmt of modifyPayloads) {
+      if (metadataChanged && !fmt.changesMetadata) continue;
+      const url = fmt.url || `/set/modify_area?map_id=${state.activeMapId}&area=${encodeURIComponent(JSON.stringify(fmt.payload))}`;
+      try {
+        res = await apiText(url);
+        console.log(`[modify_area] SUCCESS with ${fmt.label}`, res);
+        saved = true;
+        savedPayload = fmt.localPatch || fmt.payload || {};
+        break;
+      } catch (e) {
+        lastErr = e;
+        console.warn(`[modify_area] ${fmt.label} failed:`, e);
+        if (e.status !== 400) throw e;
+      }
+    }
+    if (!saved) throw lastErr || new Error('modify_area failed');
+
+    // Update local state
+    Object.assign(area, {
+      area_meta_data: metaData,
+      ...(Object.prototype.hasOwnProperty.call(savedPayload, 'area_state') ? { area_state: areaState } : {}),
+      ...(Object.prototype.hasOwnProperty.call(savedPayload, 'room_type') ? { room_type: roomType } : {}),
+      ...(Object.prototype.hasOwnProperty.call(savedPayload, 'cleaning_parameter_set') ? { cleaning_parameter_set: fanSpeed } : {}),
+      ...(Object.prototype.hasOwnProperty.call(savedPayload, 'strategy_mode') ? { strategy_mode: strategy } : {}),
+    });
+    renderAreaList();
+    renderMap();
+    showToast('Area saved', 'success');
+  } catch(e) {
+    showToast('Save failed: ' + e.message, 'error');
+  } finally {
+    showSpinner(false);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BLOCK / UNBLOCK AREA
+// ─────────────────────────────────────────────────────────────────────────────
+async function toggleBlock() {
+  const area = state.areas.find(a => a.area_id === state.selectedAreaId);
+  if (!area) return;
+
+  const isBlocked = area.area_state === 'blocking' || area.area_state === 'proposed_blocking';
+  $('field-state').value = isBlocked ? 'clean' : 'blocking';
+  await saveArea();
+}
+
+function startBlockZone() {
+  if (!state.activeMapId || !state.bbox) {
+    showToast('Load a map first', 'error');
+    return;
+  }
+  state.splitPoints = [];
+  clearSplitOverlay();
+  setMode('block');
+  showInstruction('NO-GO AREA', 'Click first corner of the blocked rectangle', 'red');
+}
+
+function blockAreaObject(points, camel=false, opts={}) {
+  const includeId = opts.includeId || false;
+  const includeExtra = opts.includeExtra !== false;
+  if (camel) {
+    return {
+      ...(includeId ? { areaId: 0 } : {}),
+      areaType: 'to_be_cleaned',
+      areaState: 'blocking',
+      metaData: '',
+      roomType: 'none',
+      cleaningParameterSet: 0,
+      ...(includeExtra ? { floorType: 'none', strategyMode: 'normal' } : {}),
+      points,
+    };
+  }
+  return {
+    ...(includeId ? { id: 0 } : {}),
+    area_type: 'to_be_cleaned',
+    area_state: 'blocking',
+    area_meta_data: '',
+    room_type: 'none',
+    cleaning_parameter_set: 0,
+    ...(includeExtra ? { floor_type: 'none', strategy_mode: 'normal' } : {}),
+    points,
+  };
+}
+
+function blockZoneFormats(mapId, points) {
+  const camelMinimal = blockAreaObject(points, true, { includeExtra: false });
+  const camelWithAreaId = blockAreaObject(points, true, { includeId: true });
+  const snakeArea = blockAreaObject(points);
+  const snakeWithId = blockAreaObject(points, false, { includeId: true });
+  const flatPoints = points.map(p => `${p.x},${p.y}`).join(',');
+  return [
+    { label: 'add_block+camel-minimal-reference', url: `/set/add_area?map_id=${mapId}&area=${encodeURIComponent(JSON.stringify(camelMinimal))}` },
+    { label: 'add_block+camel-areaId', url: `/set/add_area?map_id=${mapId}&area=${encodeURIComponent(JSON.stringify(camelWithAreaId))}` },
+    { label: 'add_block+snake-area', url: `/set/add_area?map_id=${mapId}&area=${encodeURIComponent(JSON.stringify(snakeArea))}` },
+    { label: 'add_block+snake-id', url: `/set/add_area?map_id=${mapId}&area=${encodeURIComponent(JSON.stringify(snakeWithId))}` },
+    { label: 'add_block+flat-points', url: `/set/add_area?map_id=${mapId}&area_type=to_be_cleaned&area_state=blocking&area_meta_data=&room_type=none&points=${encodeURIComponent(flatPoints)}` },
+  ];
+}
+
+async function executeBlockZone(svgA, svgB) {
+  const minX = Math.min(svgA.x, svgB.x);
+  const maxX = Math.max(svgA.x, svgB.x);
+  const minY = Math.min(svgA.y, svgB.y);
+  const maxY = Math.max(svgA.y, svgB.y);
+  const points = [
+    svgToRobot(minX, minY),
+    svgToRobot(minX, maxY),
+    svgToRobot(maxX, maxY),
+    svgToRobot(maxX, minY),
+  ];
+  const w = Math.abs(points[3].x - points[0].x);
+  const h = Math.abs(points[1].y - points[0].y);
+
+  try {
+    await showModal({
+      title: 'Create no-go area?',
+      desc: `Save a permanent blocked rectangle (${(w * 0.002).toFixed(2)}m x ${(h * 0.002).toFixed(2)}m).`,
+      fields: [],
+      confirmLabel: 'Create No-go',
+    });
+  } catch {
+    clearSplitOverlay();
+    state.splitPoints = [];
+    showInstruction('NO-GO AREA', 'Click first corner of the blocked rectangle', 'red');
+    return;
+  }
+
+  hideInstruction();
+  showSpinner(true);
+  const results = [];
+  try {
+    for (const fmt of blockZoneFormats(state.activeMapId, points)) {
+      try {
+        const resp = await fetch(USE_PROXY ? fmt.url : `http://${robotIP}:${ROBOT_PORT}${fmt.url}`);
+        const body = await resp.text();
+        results.push({ label: fmt.label, status: resp.status, body });
+        console.log(`[block] ${fmt.label} -> ${resp.status} body: ${body}`);
+        if (!resp.ok) {
+          if (resp.status === 400 || resp.status === 404) continue;
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        let res = {};
+        try { res = JSON.parse(body); } catch {}
+        const cmdId = res.cmd_id ?? res.cmdId ?? res.command_id;
+        if (cmdId) {
+          await pollCmd(cmdId, 30000).catch(e =>
+            console.warn('[block] add_area accepted, but polling did not confirm completion:', e)
+          );
+        }
+        await new Promise(r => setTimeout(r, 1500));
+        await loadMap(state.activeMapId);
+        showToast('No-go area created', 'success');
+        setMode('select');
+        state.splitPoints = [];
+        clearSplitOverlay();
+        return;
+      } catch (e) {
+        results.push({ label: fmt.label, status: 'ERR', body: String(e) });
+        console.warn(`[block] ${fmt.label} failed:`, e);
+      }
+    }
+    const dbgRaw = $('debug-raw');
+    const dbgBox = $('debug-box');
+    if (dbgRaw && dbgBox) {
+      dbgRaw.textContent =
+        `NO-GO AREA PROBE RESULTS (${results.length} formats tried)\n\n` +
+        results.map(r => `[${r.status}] ${r.label} ${r.body ? '- ' + r.body.substring(0, 120) : ''}`).join('\n');
+      dbgBox.style.display = 'block';
+    }
+    showToast('No-go area command not accepted by this firmware', 'error');
+  } finally {
+    showSpinner(false);
+    state.splitPoints = [];
+    clearSplitOverlay();
+    setMode('select');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MERGE AREAS
+// ─────────────────────────────────────────────────────────────────────────────
+function startMerge() {
+  if (state.selectedAreaId === null) { showToast('Select a room first', 'error'); return; }
+  state.mergeFirstId = state.selectedAreaId;
+  setMode('merge');
+  highlightMergeFirst(state.mergeFirstId);
+  mergeHintEl.classList.add('visible');
+  $('merge-first-id').textContent = state.mergeFirstId;
+  showInstruction('STEP 2 of 2', `Now click the second room to merge with #${state.mergeFirstId}`, 'amber');
+}
+
+function findMergedAreaAfterMerge(id1, id2, preIds) {
+  const oldIds = new Set([...preIds].map(id => String(id)));
+  const newArea = state.areas.find(a =>
+    a.area_id !== null &&
+    !oldIds.has(String(a.area_id)) &&
+    a.area_state !== 'blocking'
+  );
+  if (newArea) return newArea;
+
+  // Some firmware keeps one of the original area IDs for the merged room.
+  const survivingOriginals = state.areas.filter(a =>
+    (String(a.area_id) === String(id1) || String(a.area_id) === String(id2)) &&
+    a.area_state !== 'blocking'
+  );
+  return survivingOriginals.length === 1 ? survivingOriginals[0] : null;
+}
+
+async function handleMergeClick(areaId) {
+  if (areaId === state.mergeFirstId) {
+    showToast('Select a different room', 'error');
+    return;
+  }
+  const id1 = state.mergeFirstId;
+  const id2 = areaId;
+  const area1 = state.areas.find(a => a.area_id === id1);
+  const area2 = state.areas.find(a => a.area_id === id2);
+  const name1 = getAreaName(area1 || {});
+  const name2 = getAreaName(area2 || {});
+
+  // ── Confirmation modal ──────────────────────────────────────────────────
+  let vals;
+  try {
+    vals = await showModal({
+      title: 'Merge rooms?',
+      desc:  `"${name1}" and "${name2}" will be combined. This cannot be undone without re-splitting.`,
+      fields: [
+        { key: 'name',      label: 'Name for merged room', value: name1,
+          placeholder: 'e.g. Living room' },
+        { key: 'room_type', label: 'Room type',
+          type: 'select',
+          options: ROOM_TYPE_OPTIONS,
+          value: area1?.room_type || 'none',
+        },
+      ],
+      confirmLabel: 'Merge Rooms',
+    });
+  } catch {
+    // Cancelled — restore select mode without losing current selection
+    state.mergeFirstId = null;
+    setMode('select');
+    mergeHintEl.classList.remove('visible');
+    hideInstruction();
+    highlightArea(state.selectedAreaId);
+    return;
+  }
+  // ───────────────────────────────────────────────────────────────────────
+
+  state.mergeFirstId = null;
+  setMode('select');
+  mergeHintEl.classList.remove('visible');
+  hideInstruction();
+  showSpinner(true);
+
+  // Snapshot area IDs before merge so we can find the new merged area after
+  const preIds = new Set(state.areas.map(a => a.area_id));
+
+  try {
+    let res, mergeOk = false, workingFmt = '';
+    for (const [p1, p2] of [
+      ['area_id_1','area_id_2'],
+      ['areaId1','areaId2'],
+      ['area_id1','area_id2'],
+      ['id1','id2'],
+    ]) {
+      const url = `/set/merge_areas?map_id=${state.activeMapId}&${p1}=${id1}&${p2}=${id2}`;
+      const resp = await fetch(USE_PROXY ? url : `http://${robotIP}:${ROBOT_PORT}${url}`);
+      console.log(`[merge] ${p1}/${p2} → HTTP ${resp.status}`);
+      if (resp.ok) {
+        res = await resp.json();
+        mergeOk = true;
+        workingFmt = `${p1}/${p2}`;
+        break;
+      }
+      if (resp.status !== 400) break;
+    }
+    if (!mergeOk) throw new Error('All merge param formats returned 400 — check console');
+
+    const cmdId = res.cmd_id ?? res.cmdId ?? res.command_id;
+    if (cmdId) {
+      showToast(`Merging…`, 'info');
+      await pollCmd(cmdId, 30000).catch(async e => {
+        // The robot accepted the merge; keep going so the merged area can be named.
+        console.warn('[merge] command accepted, but polling did not confirm completion:', e);
+        showToast('Merge accepted; refreshing map...', 'info');
+        await new Promise(r => setTimeout(r, 3000));
+      });
+    } else {
+      await new Promise(r => setTimeout(r, 3000));
+    }
+    await new Promise(r => setTimeout(r, 1500));
+    await loadMap(state.activeMapId);
+
+    // Apply user-entered name to the merged result
+    if (vals.name) {
+      const merged = findMergedAreaAfterMerge(id1, id2, preIds);
+      if (merged) {
+        merged.area_meta_data = JSON.stringify({ name: vals.name });
+        merged.area_state     = 'clean';
+        if (vals.room_type) merged.room_type = vals.room_type;
+        state.selectedAreaId  = merged.area_id;
+        $('field-name').value       = vals.name;
+        $('field-room-type').value  = vals.room_type || 'none';
+        $('field-state').value      = 'clean';
+        areaDetailEl.classList.add('visible');
+        await saveArea();
+      } else {
+        showToast('Merged — could not find new area to name', 'info');
+      }
+    } else {
+      showToast('Merged successfully', 'success');
+    }
+  } catch(e) {
+    showToast('Merge failed: ' + e.message, 'error');
+    await loadMap(state.activeMapId);
+  } finally {
+    showSpinner(false);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPLIT AREA
+// ─────────────────────────────────────────────────────────────────────────────
+function startSplit() {
+  if (state.selectedAreaId === null) {
+    // No area pre-selected — enter split mode and ask user to pick
+    state.splitPoints = [];
+    clearSplitOverlay();
+    setMode('split');
+    showInstruction('STEP 1 of 3', 'Click the room you want to split', 'green');
+    return;
+  }
+  // Area already selected — go straight to drawing
+  state.splitPoints = [];
+  clearSplitOverlay();
+  setMode('split');
+  highlightAreaSplit(state.selectedAreaId);
+  showInstruction('STEP 2 of 3', 'Click first point of the split line', 'green');
+}
+
+// Build split_area URL in one of several point-encoding formats.
+// The Robart SDK GET param format for List<Point2D> is not documented;
+// probe sequentially until one succeeds.
+// Force explicit float notation — JS JSON.stringify drops ".0" for whole numbers.
+// Robot's Moshi Float parser may require "118.0" not "118".
+function asFloat(n) {
+  const f = parseFloat(n);
+  return Number.isInteger(f) ? f.toFixed(1) : String(f);
+}
+function jsonPoint(p) {
+  // e.g. {"x":118.0,"y":1349.0}
+  return `{"x":${asFloat(p.x)},"y":${asFloat(p.y)}}`;
+}
+
+function splitFormats(mapId, areaId, p0, p1) {
+  // Confirmed: area field in /get/areas response is "id".
+  // URL param name for the area may be area_id, areaId, or id.
+  // Points format is unknown — try every plausible encoding.
+  const pJsonF  = encodeURIComponent(`[${jsonPoint(p0)},${jsonPoint(p1)}]`); // JSON float array
+  const pJsonI  = encodeURIComponent(`[{"x":${p0.x},"y":${p0.y}},{"x":${p1.x},"y":${p1.y}}]`); // JSON int array
+  const pCsvF   = `${asFloat(p0.x)},${asFloat(p0.y)},${asFloat(p1.x)},${asFloat(p1.y)}`;
+  const pCsvI   = `${p0.x},${p0.y},${p1.x},${p1.y}`;
+  const p0jf    = encodeURIComponent(jsonPoint(p0));
+  const p1jf    = encodeURIComponent(jsonPoint(p1));
+  const p0ji    = encodeURIComponent(`{"x":${p0.x},"y":${p0.y}}`);
+  const p1ji    = encodeURIComponent(`{"x":${p1.x},"y":${p1.y}}`);
+
+  const rows = [];
+  for (const [aParam, aVal] of [
+    ['area_id', areaId],   // snake_case — what other set commands use
+    ['areaId',  areaId],   // camelCase  — Kotlin method param name
+    ['id',      areaId],   // raw        — confirmed field name in /get/areas
+  ]) {
+    const b = `/set/split_area?map_id=${mapId}&${aParam}=${aVal}`;
+    rows.push(
+      { label: `${aParam}+json-float`,   url: b + `&points=${pJsonF}` },
+      { label: `${aParam}+json-int`,     url: b + `&points=${pJsonI}` },
+      { label: `${aParam}+csv-float`,    url: b + `&points=${pCsvF}` },
+      { label: `${aParam}+csv-int`,      url: b + `&points=${pCsvI}` },
+      { label: `${aParam}+x1y1-float`,   url: b + `&x1=${asFloat(p0.x)}&y1=${asFloat(p0.y)}&x2=${asFloat(p1.x)}&y2=${asFloat(p1.y)}` },
+      { label: `${aParam}+x1y1-int`,     url: b + `&x1=${p0.x}&y1=${p0.y}&x2=${p1.x}&y2=${p1.y}` },
+      { label: `${aParam}+point×2-float`,url: b + `&point=${p0jf}&point=${p1jf}` },
+      { label: `${aParam}+point×2-int`,  url: b + `&point=${p0ji}&point=${p1ji}` },
+    );
+  }
+  return rows;  // 24 total combinations
+}
+
+async function executeSplit(lineA, lineB) {
+  const area = state.areas.find(a => a.area_id === state.selectedAreaId);
+  if (!area) return;
+
+  const pts = computeSplitPoints(area, lineA, lineB);
+  if (!pts || pts.length < 2) {
+    showToast('Line must cross the room boundary at two points — try again', 'error');
+    state.splitPoints = [];
+    clearSplitOverlay();
+    highlightAreaSplit(state.selectedAreaId);
+    showInstruction('STEP 2 of 3', 'Click first point of the split line', 'green');
+    return;
+  }
+
+  console.log('[split] computed boundary points:', pts);
+
+  // ── Confirmation modal ────────────────────────────────────────────────────
+  const areaName = getAreaName(area);
+  let modalValues;
+  try {
+    modalValues = await showModal({
+      title: `Split "${areaName}"?`,
+      desc: `The split line will divide this room into two new segments. ` +
+            `You can name them after the split completes.`,
+      fields: [],
+      confirmLabel: 'Split Room',
+      danger: false,
+    });
+  } catch {
+    // User cancelled — stay in split mode so they can redraw
+    state.splitPoints = [];
+    clearSplitOverlay();
+    highlightAreaSplit(state.selectedAreaId);
+    showInstruction('STEP 2 of 3', 'Click first point of the split line', 'green');
+    return;
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  hideInstruction();
+  showSpinner(true);
+
+  const formats = splitFormats(state.activeMapId, state.selectedAreaId, pts[0], pts[1]);
+  const results = [];   // collect {label, status, body} for diagnostics
+
+  for (const fmt of formats) {
+    let status = 0, body = '';
+    try {
+      const resp = await fetch(USE_PROXY ? fmt.url : `http://${robotIP}:${ROBOT_PORT}${fmt.url}`);
+      status = resp.status;
+      body   = await resp.text();   // always read body — it has the error message
+      console.log(`[split] ${fmt.label} → ${status}  body: ${body}`);
+      results.push({ label: fmt.label, status, body });
+
+      if (resp.ok) {
+        let res = {};
+        try { res = JSON.parse(body); } catch {}
+        state.splitFormat = fmt.label;
+        console.log(`[split] SUCCESS with "${fmt.label}"`, res);
+        showToast(`Splitting… (${fmt.label})`, 'info');
+        const cmdId = res.cmd_id ?? res.cmdId ?? res.command_id;
+        try {
+          if (cmdId) {
+            await pollCmd(cmdId, 30000);
+          } else {
+            await new Promise(r => setTimeout(r, 3000));
+          }
+        } catch (e) {
+          // The robot accepted the split; command polling is best-effort because
+          // some firmwares omit or quickly rotate command_result entries.
+          console.warn('[split] command accepted, but polling did not confirm completion:', e);
+          showToast('Split accepted; refreshing map...', 'info');
+          await new Promise(r => setTimeout(r, 3000));
+        }
+        await new Promise(r => setTimeout(r, 1500));
+        setMode('select');
+        state.splitPoints = [];
+        clearSplitOverlay();
+        const oldIds = new Set(state.areas.map(a => a.area_id));
+        try {
+          await loadMap(state.activeMapId);
+          showSpinner(false);
+          _promptNameNewAreas(oldIds);
+        } catch (e) {
+          showSpinner(false);
+          console.warn('[split] split accepted, but map refresh failed:', e);
+          showToast('Split accepted, but map refresh failed. Reload map to see changes.', 'error');
+        }
+        return;
+      }
+      // ← no break — always try all formats
+    } catch(e) {
+      console.warn(`[split] "${fmt.label}" threw:`, e);
+      results.push({ label: fmt.label, status: 'ERR', body: String(e) });
+    }
+  }
+
+  // All formats failed — show diagnostic table in debug box
+  showSpinner(false);
+  const dbgRaw = $('debug-raw');
+  const dbgBox = $('debug-box');
+  if (dbgRaw && dbgBox) {
+    // Find unique robot error messages
+    const msgs = [...new Set(results.filter(r => r.body).map(r => r.body.substring(0, 120)))];
+    dbgRaw.textContent =
+      `SPLIT PROBE RESULTS (${results.length} formats tried)\n\n` +
+      results.map(r => `[${r.status}] ${r.label}`).join('\n') +
+      `\n\nROBOT ERROR MESSAGES:\n` + msgs.join('\n');
+    dbgBox.style.display = 'block';
+  }
+
+  // First non-empty error body = most useful message
+  const firstErr = results.find(r => r.body)?.body || 'unknown';
+  showToast(`Split: all ${formats.length} formats → 400. Robot says: ${firstErr.substring(0, 80)}`, 'error');
+  state.splitPoints = [];
+  clearSplitOverlay();
+  setMode('select');
+  hideInstruction();
+}
+
+// After a split, find the new areas and offer to name them one by one
+async function _promptNameNewAreas(oldIds) {
+  const newAreas = state.areas.filter(a =>
+    a.area_id !== null && !oldIds.has(a.area_id) && a.area_state !== 'blocking'
+  );
+  if (newAreas.length === 0) {
+    showToast('Split complete', 'success');
+    return;
+  }
+  for (let i = 0; i < newAreas.length; i++) {
+    const a = newAreas[i];
+    let vals;
+    try {
+      vals = await showModal({
+        title: `Name new area ${i+1} of ${newAreas.length}`,
+        desc: `The split created area #${a.area_id}. Give it a name and type.`,
+        fields: [
+          { key: 'name',      label: 'Room name',  placeholder: 'e.g. Kitchen' },
+          { key: 'room_type', label: 'Room type',  type: 'select', options: ROOM_TYPE_OPTIONS, value: 'none' },
+        ],
+        confirmLabel: 'Save Name',
+      });
+    } catch {
+      // User skipped naming this area — that's fine
+      continue;
+    }
+    if (vals.name) {
+      // Apply name by patching the area and calling modify_area
+      const idx = state.areas.findIndex(x => x.area_id === a.area_id);
+      if (idx >= 0) {
+        state.areas[idx].area_meta_data = JSON.stringify({ name: vals.name });
+        state.areas[idx].area_state     = 'clean';
+        if (vals.room_type) state.areas[idx].room_type = vals.room_type;
+        state.selectedAreaId = a.area_id;
+        $('field-name').value      = vals.name;
+        $('field-room-type').value = vals.room_type || 'none';
+        $('field-state').value     = 'clean';
+        await saveArea();
+      }
+    }
+  }
+  showToast('Split complete', 'success');
+}
+
+// Legacy alias — now handled by clearSplitOverlay()
+function hideSplitPreview() { clearSplitOverlay(); }
+
+function startSpotClean() {
+  if (!state.activeMapId || !state.bbox) {
+    showToast('Load a map first', 'error');
+    return;
+  }
+  state.splitPoints = [];
+  clearSplitOverlay();
+  setMode('spot');
+  showInstruction('SPOT CLEAN', 'Click first corner of the rectangle', 'amber');
+}
+
+function spotAreaObject(points, areaId=null, camel=false) {
+  const meta = JSON.stringify({ name: '', customState: 'spot' });
+  if (camel) {
+    return {
+      ...(areaId !== null ? { id: areaId } : {}),
+      areaType: 'to_be_cleaned',
+      areaState: 'clean',
+      metaData: meta,
+      roomType: 'none',
+      cleaningParameterSet: 0,
+      floorType: 'none',
+      strategyMode: 'normal',
+      points,
+    };
+  }
+  return {
+    ...(areaId !== null ? { id: areaId } : {}),
+    area_type: 'to_be_cleaned',
+    area_state: 'clean',
+    area_meta_data: meta,
+    room_type: 'none',
+    cleaning_parameter_set: 0,
+    floor_type: 'none',
+    strategy_mode: 'normal',
+    points,
+  };
+}
+
+function spotCleanFormats(mapId, points) {
+  const snakeArea = spotAreaObject(points);
+  const camelArea = spotAreaObject(points, null, true);
+  const flatPoints = points.map(p => `${p.x},${p.y}`).join(',');
+  return [
+    { label: 'add_area+snake-area', url: `/set/add_area?map_id=${mapId}&area=${encodeURIComponent(JSON.stringify(snakeArea))}` },
+    { label: 'add_area+camel-area', url: `/set/add_area?map_id=${mapId}&area=${encodeURIComponent(JSON.stringify(camelArea))}` },
+    { label: 'add_area+flat-points', url: `/set/add_area?map_id=${mapId}&area_type=to_be_cleaned&area_state=clean&area_meta_data=${encodeURIComponent(snakeArea.area_meta_data)}&room_type=none&points=${encodeURIComponent(flatPoints)}` },
+  ];
+}
+
+function spotModifyFormats(mapId, spotAreaId, points) {
+  const snakeArea = spotAreaObject(points, spotAreaId);
+  const camelArea = spotAreaObject(points, spotAreaId, true);
+  const flatPoints = points.map(p => `${p.x},${p.y}`).join(',');
+  return [
+    { label: 'modify_area+snake-area', url: `/set/modify_area?map_id=${mapId}&area=${encodeURIComponent(JSON.stringify(snakeArea))}` },
+    { label: 'modify_area+camel-area', url: `/set/modify_area?map_id=${mapId}&area=${encodeURIComponent(JSON.stringify(camelArea))}` },
+    { label: 'modify_area+flat-points', url: `/set/modify_area?map_id=${mapId}&area_id=${spotAreaId}&area_type=to_be_cleaned&area_state=clean&area_meta_data=${encodeURIComponent(snakeArea.area_meta_data)}&cleaning_parameter_set=0&strategy_mode=normal&room_type=none&points=${encodeURIComponent(flatPoints)}` },
+  ];
+}
+
+function findReusableSpotArea(areas) {
+  const spots = areas.filter(a => {
+    const meta = getAreaMeta(a);
+    return isSpotArea(a) || meta.customState === 'spot';
+  });
+  return spots.find(a => getAreaMeta(a).customState === 'spot') || spots[0] || null;
+}
+
+function areaPointsMatch(area, points) {
+  if (!area || !Array.isArray(area.points)) return false;
+  const want = new Set(points.map(p => `${p.x},${p.y}`));
+  const got = new Set(area.points.map(p => `${p.x},${p.y}`));
+  return got.size === want.size && [...want].every(k => got.has(k));
+}
+
+async function tryUpdateSpotArea(mapId, spotAreaId, points, results) {
+  for (const fmt of spotModifyFormats(mapId, spotAreaId, points)) {
+    try {
+      const resp = await fetch(USE_PROXY ? fmt.url : `http://${robotIP}:${ROBOT_PORT}${fmt.url}`);
+      const body = await resp.text();
+      results.push({ label: fmt.label, status: resp.status, body });
+      console.log(`[spot] ${fmt.label} -> ${resp.status} body: ${body}`);
+      if (!resp.ok) {
+        if (resp.status === 400 || resp.status === 404) continue;
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      let res = {};
+      try { res = JSON.parse(body); } catch {}
+      const cmdId = res.cmd_id ?? res.cmdId ?? res.command_id;
+      if (cmdId) {
+        await pollCmd(cmdId, 30000).catch(e =>
+          console.warn('[spot] modify accepted, but polling did not confirm completion:', e)
+        );
+      }
+      await new Promise(r => setTimeout(r, 1500));
+      const afterAreas = await fetchAreasOnly(mapId);
+      const updated = afterAreas.find(a => String(a.area_id) === String(spotAreaId));
+      if (areaPointsMatch(updated, points)) return updated;
+    } catch (e) {
+      results.push({ label: fmt.label, status: 'ERR', body: String(e) });
+      console.warn(`[spot] ${fmt.label} failed:`, e);
+    }
+  }
+  return null;
+}
+
+async function fetchAreasOnly(mapId) {
+  const res = await api(`/get/areas?map_id=${mapId}`);
+  return extractAreas(res);
+}
+
+function extractAreaIdFromResponse(res) {
+  if (!res || typeof res !== 'object') return null;
+  return res.id ?? res.area_id ?? res.areaId ?? res.created_area_id ?? res.createdAreaId ?? null;
+}
+
+function findCreatedSpotArea(beforeIds, afterAreas, points) {
+  const newAreas = afterAreas.filter(a => a.area_id !== null && !beforeIds.has(String(a.area_id)));
+  const spotNew = newAreas.find(a => a.area_type === 'to_be_cleaned');
+  if (spotNew) return spotNew;
+  if (newAreas.length === 1) return newAreas[0];
+
+  const want = new Set(points.map(p => `${p.x},${p.y}`));
+  return afterAreas.find(a => {
+    if (a.area_type !== 'to_be_cleaned' || !Array.isArray(a.points)) return false;
+    const got = new Set(a.points.map(p => `${p.x},${p.y}`));
+    if (got.size !== want.size) return false;
+    return [...want].every(k => got.has(k));
+  }) || null;
+}
+
+function cleaningStrategyValue(mode) {
+  if (mode === 'deep') return '3';
+  if (mode === 'normal') return '1';
+  return '4';
+}
+
+async function startCleanMapArea(mapId, areaId, fanSpeed, strategyMode) {
+  const speed = fanSpeed && fanSpeed !== '0' ? fanSpeed : '2';
+  const strategy = cleaningStrategyValue(strategyMode);
+  const base =
+    `/set/clean_map?map_id=${mapId}` +
+    `&cleaning_parameter_set=${encodeURIComponent(speed)}` +
+    `&cleaning_strategy_mode=${encodeURIComponent(strategy)}`;
+  const formats = [
+    { label: 'clean_map+area_ids', url: `${base}&area_ids=${encodeURIComponent(String(areaId))}` },
+    { label: 'clean_map+area_id',  url: `${base}&area_id=${encodeURIComponent(String(areaId))}` },
+  ];
+  let lastErr = null;
+  for (const fmt of formats) {
+    try {
+      const res = await apiText(fmt.url);
+      console.log(`[spot] ${fmt.label} accepted`, res);
+      const cmdId = res?.cmd_id ?? res?.cmdId ?? res?.command_id;
+      if (cmdId) {
+        await pollCmd(cmdId, 30000).catch(e =>
+          console.warn('[spot] clean_map accepted, but polling did not confirm completion:', e)
+        );
+      }
+      return res;
+    } catch (e) {
+      lastErr = e;
+      console.warn(`[spot] ${fmt.label} failed:`, e);
+      if (e.status !== 400 && e.status !== 404) throw e;
+    }
+  }
+  throw lastErr || new Error('clean_map failed');
+}
+
+async function sendRobotCommand(path, label) {
+  showSpinner(true);
+  try {
+    const res = await apiText(path);
+    const cmdId = res?.cmd_id ?? res?.cmdId ?? res?.command_id;
+    if (cmdId) {
+      await pollCmd(cmdId, 30000).catch(e =>
+        console.warn(`[command] ${label} accepted, but polling did not confirm completion:`, e)
+      );
+    }
+    showToast(`${label} sent`, 'success');
+    if (state.activeMapId) await loadMap(state.activeMapId);
+  } catch (e) {
+    console.warn(`[command] ${label} failed:`, e);
+    showToast(`${label} failed: ${e.message}`, 'error');
+  } finally {
+    showSpinner(false);
+  }
+}
+
+function startCleanAll() {
+  const speed = $('field-fan')?.value || '2';
+  const strategy = cleaningStrategyValue($('field-strategy')?.value || 'normal');
+  sendRobotCommand(
+    `/set/clean_all?cleaning_parameter_set=${encodeURIComponent(speed === '0' ? '2' : speed)}&cleaning_strategy_mode=${encodeURIComponent(strategy)}`,
+    'Clean all'
+  );
+}
+
+async function executeSpotClean(svgA, svgB) {
+  const beforeIds = new Set(state.areas.map(a => String(a.area_id)));
+  const minX = Math.min(svgA.x, svgB.x);
+  const maxX = Math.max(svgA.x, svgB.x);
+  const minY = Math.min(svgA.y, svgB.y);
+  const maxY = Math.max(svgA.y, svgB.y);
+  const points = [
+    svgToRobot(minX, minY),
+    svgToRobot(minX, maxY),
+    svgToRobot(maxX, maxY),
+    svgToRobot(maxX, minY),
+  ];
+  const w = Math.abs(points[3].x - points[0].x);
+  const h = Math.abs(points[1].y - points[0].y);
+
+  let opts;
+  try {
+    opts = await showModal({
+      title: 'Spot clean rectangle?',
+      desc: `Create and clean a rectangle (${(w * 0.002).toFixed(2)}m x ${(h * 0.002).toFixed(2)}m).`,
+      fields: [
+        {
+          key: 'fan',
+          label: 'Fan speed',
+          type: 'select',
+          value: '2',
+          options: [
+            { value: '2', label: 'Eco' },
+            { value: '1', label: 'Normal' },
+            { value: '3', label: 'High' },
+            { value: '4', label: 'Silent' },
+          ],
+        },
+        {
+          key: 'strategy',
+          label: 'Strategy',
+          type: 'select',
+          value: 'normal',
+          options: [
+            { value: 'normal', label: 'Normal' },
+            { value: 'deep', label: 'Deep clean' },
+          ],
+        },
+      ],
+      confirmLabel: 'Clean Spot',
+    });
+  } catch {
+    clearSplitOverlay();
+    state.splitPoints = [];
+    showInstruction('SPOT CLEAN', 'Click first corner of the rectangle', 'amber');
+    return;
+  }
+
+  hideInstruction();
+  showSpinner(true);
+  const results = [];
+  try {
+    const reusableSpot = findReusableSpotArea(state.areas);
+    if (reusableSpot?.area_id !== null && reusableSpot?.area_id !== undefined) {
+      const updatedSpot = await tryUpdateSpotArea(state.activeMapId, reusableSpot.area_id, points, results);
+      if (updatedSpot) {
+        try {
+          await startCleanMapArea(state.activeMapId, updatedSpot.area_id, opts.fan, opts.strategy);
+        } catch (cleanErr) {
+          console.warn('[spot] clean_map failed after spot area update:', cleanErr);
+          await loadMap(state.activeMapId);
+          showToast(`Spot area #${updatedSpot.area_id} updated, but clean command failed`, 'error');
+          setMode('select');
+          state.splitPoints = [];
+          clearSplitOverlay();
+          return;
+        }
+        await loadMap(state.activeMapId);
+        showToast(`Spot clean started for area #${updatedSpot.area_id}`, 'success');
+        setMode('select');
+        state.splitPoints = [];
+        clearSplitOverlay();
+        return;
+      }
+      console.warn(`[spot] could not update existing spot area #${reusableSpot.area_id}; falling back to add_area`);
+    }
+
+    for (const fmt of spotCleanFormats(state.activeMapId, points)) {
+      try {
+        const resp = await fetch(USE_PROXY ? fmt.url : `http://${robotIP}:${ROBOT_PORT}${fmt.url}`);
+        const body = await resp.text();
+        results.push({ label: fmt.label, status: resp.status, body });
+        console.log(`[spot] ${fmt.label} -> ${resp.status} body: ${body}`);
+        if (!resp.ok) {
+          if (resp.status === 400 || resp.status === 404) continue;
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        let res = {};
+        try { res = JSON.parse(body); } catch {}
+        let createdAreaId = extractAreaIdFromResponse(res);
+        const cmdId = res.cmd_id ?? res.cmdId ?? res.command_id;
+        if (cmdId) {
+          await pollCmd(cmdId, 30000).catch(e =>
+            console.warn('[spot] command accepted, but polling did not confirm completion:', e)
+          );
+        }
+        await new Promise(r => setTimeout(r, 1500));
+        const afterAreas = await fetchAreasOnly(state.activeMapId);
+        if (!createdAreaId) {
+          createdAreaId = findCreatedSpotArea(beforeIds, afterAreas, points)?.area_id ?? null;
+        }
+        if (!createdAreaId) {
+          state.areas = afterAreas;
+          await loadMap(state.activeMapId);
+          showToast('Spot area created, but new area id was not found', 'error');
+          setMode('select');
+          state.splitPoints = [];
+          clearSplitOverlay();
+          return;
+        }
+        try {
+          await startCleanMapArea(state.activeMapId, createdAreaId, opts.fan, opts.strategy);
+        } catch (cleanErr) {
+          console.warn('[spot] clean_map failed after spot area creation:', cleanErr);
+          await loadMap(state.activeMapId);
+          showToast(`Spot area #${createdAreaId} created, but clean command failed`, 'error');
+          setMode('select');
+          state.splitPoints = [];
+          clearSplitOverlay();
+          return;
+        }
+        await loadMap(state.activeMapId);
+        showToast(`Spot clean started for area #${createdAreaId}`, 'success');
+        setMode('select');
+        state.splitPoints = [];
+        clearSplitOverlay();
+        return;
+      } catch (e) {
+        results.push({ label: fmt.label, status: 'ERR', body: String(e) });
+        console.warn(`[spot] ${fmt.label} failed:`, e);
+      }
+    }
+    const dbgRaw = $('debug-raw');
+    const dbgBox = $('debug-box');
+    if (dbgRaw && dbgBox) {
+      dbgRaw.textContent =
+        `SPOT CLEAN PROBE RESULTS (${results.length} formats tried)\n\n` +
+        results.map(r => `[${r.status}] ${r.label} ${r.body ? '- ' + r.body.substring(0, 120) : ''}`).join('\n');
+      dbgBox.style.display = 'block';
+    }
+    showToast('Spot area command not accepted by this firmware', 'error');
+  } finally {
+    showSpinner(false);
+    state.splitPoints = [];
+    clearSplitOverlay();
+    setMode('select');
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SVG MOUSE EVENTS
+// ─────────────────────────────────────────────────────────────────────────────
+function handleSpotClick(e) {
+  e.preventDefault();
+  e.stopPropagation();
+
+  const pt = eventToSVGPoint(e);
+  state.splitPoints.push(pt);
+  if (state.splitPoints.length === 1) {
+    setSplitDot(pt.x, pt.y);
+    setSpotRect(pt.x, pt.y, pt.x, pt.y);
+    showInstruction('SPOT CLEAN', 'Click opposite corner of the rectangle', 'amber');
+  } else if (state.splitPoints.length === 2) {
+    executeSpotClean(state.splitPoints[0], state.splitPoints[1]);
+  }
+}
+
+function handleBlockClick(e) {
+  e.preventDefault();
+  e.stopPropagation();
+
+  const pt = eventToSVGPoint(e);
+  state.splitPoints.push(pt);
+  if (state.splitPoints.length === 1) {
+    setSplitDot(pt.x, pt.y);
+    setSpotRect(pt.x, pt.y, pt.x, pt.y, 'block');
+    showInstruction('NO-GO AREA', 'Click opposite corner of the blocked rectangle', 'red');
+  } else if (state.splitPoints.length === 2) {
+    executeBlockZone(state.splitPoints[0], state.splitPoints[1]);
+  }
+}
+
+mapSvg.addEventListener('click', e => {
+  if (state.mode === 'spot') handleSpotClick(e);
+  if (state.mode === 'block') handleBlockClick(e);
+}, true);
+
+mapSvg.addEventListener('click', e => {
+  if (state.mode === 'spot' || state.mode === 'block') {
+    return;
+  }
+
+  if (state.mode === 'split') {
+    // Only place points if an area is already selected
+    if (state.selectedAreaId === null) return;
+    const pt = eventToSVGPoint(e);
+    state.splitPoints.push(pt);
+
+    if (state.splitPoints.length === 1) {
+      // Show dot at first point + update instruction
+      setSplitDot(pt.x, pt.y);
+      setSplitLine(pt.x, pt.y, pt.x, pt.y);
+      showInstruction('STEP 3 of 3', 'Click second point to complete the split line', 'green');
+    } else if (state.splitPoints.length === 2) {
+      executeSplit(state.splitPoints[0], state.splitPoints[1]);
+    }
+    return;
+  }
+
+  // Deselect on empty-space click in select mode
+  if (state.mode === 'select') {
+    const tag = e.target.tagName;
+    if (tag === 'svg' || tag === 'rect' || tag === 'g') {
+      state.selectedAreaId = null;
+      highlightArea(null);
+      areaDetailEl.classList.remove('visible');
+      areaListEl.querySelectorAll('.area-item').forEach(el => el.classList.remove('selected'));
+    }
+  }
+});
+
+mapSvg.addEventListener('mousemove', e => {
+  const pt = eventToSVGPoint(e);
+  const robotPt = state.bbox ? svgToRobot(pt.x, pt.y) : null;
+  if (robotPt) {
+    statusCoords.textContent = `x:${robotPt.x}  y:${robotPt.y}  (${(robotPt.x*0.002).toFixed(2)}m, ${(robotPt.y*0.002).toFixed(2)}m)`;
+  }
+
+  // Split line: track cursor from first point
+  if (state.mode === 'split' && state.splitPoints.length === 1) {
+    const p0 = state.splitPoints[0];
+    setSplitLine(p0.x, p0.y, pt.x, pt.y);
+  }
+
+  if (state.mode === 'spot' && state.splitPoints.length === 1) {
+    const p0 = state.splitPoints[0];
+    setSpotRect(p0.x, p0.y, pt.x, pt.y);
+  }
+
+  if (state.mode === 'block' && state.splitPoints.length === 1) {
+    const p0 = state.splitPoints[0];
+    setSpotRect(p0.x, p0.y, pt.x, pt.y, 'block');
+  }
+
+  // Pan
+  if (state.panStart) {
+    const dx = e.clientX - state.panStart.cx;
+    const dy = e.clientY - state.panStart.cy;
+    const vb = mapSvg.viewBox.baseVal;
+    const rect = mapSvg.getBoundingClientRect();
+    const scaleX = vb.width  / rect.width;
+    const scaleY = vb.height / rect.height;
+    mapSvg.setAttribute('viewBox',
+      `${state.panStart.vbx - dx*scaleX} ${state.panStart.vby - dy*scaleY} ${vb.width} ${vb.height}`);
+  }
+});
+
+mapSvg.addEventListener('mousedown', e => {
+  if (state.mode === 'pan' || e.button === 1) {
+    state.panStart = {
+      cx: e.clientX, cy: e.clientY,
+      vbx: mapSvg.viewBox.baseVal.x,
+      vby: mapSvg.viewBox.baseVal.y,
+    };
+    mapSvg.classList.add('panning');
+    e.preventDefault();
+  }
+});
+window.addEventListener('mouseup', () => { state.panStart = null; mapSvg.classList.remove('panning'); });
+
+// Scroll zoom
+mapSvg.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY > 0 ? 1.12 : 1/1.12;
+  const pt = eventToSVGPoint(e);
+  const vb = mapSvg.viewBox.baseVal;
+  const nw = vb.width * factor;
+  const nh = vb.height * factor;
+  const nx = pt.x - (pt.x - vb.x) * factor;
+  const ny = pt.y - (pt.y - vb.y) * factor;
+  mapSvg.setAttribute('viewBox', `${nx} ${ny} ${nw} ${nh}`);
+}, { passive: false });
+
+$('zoom-in').addEventListener('click', () => {
+  const vb = mapSvg.viewBox.baseVal;
+  const cx = vb.x + vb.width/2, cy = vb.y + vb.height/2;
+  const nw = vb.width/1.3, nh = vb.height/1.3;
+  mapSvg.setAttribute('viewBox', `${cx-nw/2} ${cy-nh/2} ${nw} ${nh}`);
+});
+$('zoom-out').addEventListener('click', () => {
+  const vb = mapSvg.viewBox.baseVal;
+  const cx = vb.x + vb.width/2, cy = vb.y + vb.height/2;
+  const nw = vb.width*1.3, nh = vb.height*1.3;
+  mapSvg.setAttribute('viewBox', `${cx-nw/2} ${cy-nh/2} ${nw} ${nh}`);
+});
+
+// Space = pan mode (hold)
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' && state.mode !== 'pan') { e.preventDefault(); setMode('pan'); }
+  if (e.code === 'Escape') {
+    setMode('select');
+    state.splitPoints = [];
+    state.mergeFirstId = null;
+    clearSplitOverlay();
+    hideInstruction();
+    mergeHintEl.classList.remove('visible');
+    // Restore normal highlights
+    if (state.selectedAreaId !== null) highlightArea(state.selectedAreaId);
+    else highlightArea(null);
+  }
+  if (e.code === 'KeyS') setMode('select');
+  if (e.code === 'KeyX') startSplit();
+  if (e.code === 'KeyM') startMerge();
+  if (e.code === 'KeyF') fitToScreen();
+});
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space') setMode('select');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODE MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+function setMode(mode) {
+  state.mode = mode;
+  mapSvg.className = `mode-${mode}`;
+
+  // Update toolbar
+  ['select','pan','split','merge','block','spot'].forEach(m => {
+    const btn = $('tool-' + (m==='merge'?'merge':m==='block'?'block':m));
+    if (btn) btn.classList.toggle('active', m === mode);
+  });
+
+  const modeNames = { select:'Select', pan:'Pan', split:'Split', merge:'Merge', block:'Block', spot:'Spot' };
+  statusMode.textContent = `Mode: ${modeNames[mode] || mode}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIT TO SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+function fitToScreen() {
+  if (!state.bbox) return;
+  const pad = 300;
+  const { minX, minY, maxX, maxY } = state.bbox;
+  mapSvg.setAttribute('viewBox', `${minX-pad} ${minY-pad} ${(maxX-minX)+pad*2} ${(maxY-minY)+pad*2}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TOOLBAR WIRING
+// ─────────────────────────────────────────────────────────────────────────────
+$('tool-select').addEventListener('click', () => setMode('select'));
+$('tool-pan').addEventListener('click', () => setMode('pan'));
+$('tool-split').addEventListener('click', startSplit);
+$('tool-merge').addEventListener('click', startMerge);
+$('tool-block').addEventListener('click', startBlockZone);
+$('tool-spot').addEventListener('click', startSpotClean);
+$('tool-fit').addEventListener('click', fitToScreen);
+
+$('btn-clean-all').addEventListener('click', startCleanAll);
+$('btn-stop').addEventListener('click', () => sendRobotCommand('/set/stop', 'Stop'));
+$('btn-home').addEventListener('click', () => sendRobotCommand('/set/go_home', 'Return home'));
+$('btn-spot-clean').addEventListener('click', startSpotClean);
+
+$('btn-save-area').addEventListener('click', saveArea);
+$('btn-split-area').addEventListener('click', startSplit);
+$('btn-merge-area').addEventListener('click', startMerge);
+$('btn-block-area').addEventListener('click', startBlockZone);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONNECTION
+// ─────────────────────────────────────────────────────────────────────────────
+$('btn-connect').addEventListener('click', async () => {
+  const ip = ipInput.value.trim();
+
+  if (USE_PROXY) {
+    if (!ip || ip === 'via proxy server') {
+      showToast('Enter robot IP first', 'error');
+      return;
+    }
+    robotIP = ip;
+    localStorage.setItem('rowenta_ip', ip);
+    // Push IP to the running proxy server so it knows where to forward
+    await setProxyRobotIP(ip);
+    setStatus('Connecting via proxy…', 'busy');
+  } else {
+    if (!ip) { showToast('Enter robot IP address', 'error'); return; }
+    robotIP = ip;
+    localStorage.setItem('rowenta_ip', ip);
+    setStatus('Connecting…', 'busy');
+  }
+
+  try {
+    await loadMaps();
+  } catch(e) {
+    setStatus('Connection failed', 'err');
+    showToast('Cannot reach robot: ' + e.message, 'error');
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INIT — detect mode and configure UI accordingly
+// ─────────────────────────────────────────────────────────────────────────────
+(async function init() {
+  if (USE_PROXY) {
+    // Show PROXY badge
+    const badge = $('mode-badge');
+    if (badge) badge.style.display = '';
+
+    // Fetch what IP the server already knows (passed as CLI arg or last set)
+    try {
+      const cfg = await fetch('/config').then(r => r.json());
+      if (cfg.robot_ip) {
+        robotIP = cfg.robot_ip;
+        ipInput.value = robotIP;
+        ipInput.disabled = false;   // allow changing it
+      } else {
+        ipInput.placeholder = '192.168.1.xx';
+        ipInput.value = localStorage.getItem('rowenta_ip') || '';
+      }
+    } catch(e) {
+      ipInput.value = localStorage.getItem('rowenta_ip') || '';
+    }
+
+    // Auto-connect if we already have an IP
+    if (robotIP) {
+      setStatus('Connecting via proxy…', 'busy');
+      try { await loadMaps(); }
+      catch(e) { setStatus('Connection failed', 'err'); showToast(e.message, 'error'); }
+    }
+  } else {
+    // Direct mode — HA webpage card or plain file
+    if (robotIP) ipInput.value = robotIP;
+    // Show mixed-content warning if page is HTTPS
+    if (window.location.protocol === 'https:') {
+      showToast('⚠ HTTPS→HTTP blocked. Use the HA add-on or Python server instead.', 'error');
+      setStatus('Mixed content blocked — use add-on or python server', 'err');
+    }
+  }
+
+  statusMode.title = 'S=Select  Space=Pan  X=Split  M=Merge  F=Fit  Esc=Cancel';
+})();
+</script>
+</body>
+</html>
