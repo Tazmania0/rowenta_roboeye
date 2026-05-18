@@ -769,6 +769,8 @@ const state = {
   mergeFirstId: null,
   mode: 'select',      // select | pan | split | merge | block | spot
   splitPoints: [],     // 0 or 1 SVG points for split line preview
+  rectStart:   null,   // {x,y} SVG coords of first rect corner (drag-to-draw)
+  rectMode:    null,   // 'block' | 'spot' | null
   connected: false,
 
   // Pan/zoom
@@ -854,6 +856,7 @@ function setSpotRect(x1, y1, x2, y2, kind='spot') {
   if (!rect) {
     rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
     rect.setAttribute('class', 'split-preview spot-preview');
+    rect.setAttribute('pointer-events', 'none');
     g.appendChild(rect);
   }
   rect.setAttribute('fill', kind === 'block' ? 'rgba(239,68,68,0.16)' : 'rgba(245,158,11,0.14)');
@@ -1805,6 +1808,30 @@ function startBlockZone() {
   showInstruction('NO-GO AREA', 'Click first corner of the blocked rectangle', 'red');
 }
 
+function startBlock() {
+  if (!state.activeMapId || !state.bbox) {
+    showToast('Load a map first', 'error');
+    return;
+  }
+  state.splitPoints = [];
+  state.rectStart   = null;
+  clearSplitOverlay();
+  setMode('block');
+  showInstruction('BLOCK', 'Click and drag to draw a no-go rectangle', 'blue');
+}
+
+function startSpot() {
+  if (!state.activeMapId || !state.bbox) {
+    showToast('Load a map first', 'error');
+    return;
+  }
+  state.splitPoints = [];
+  state.rectStart   = null;
+  clearSplitOverlay();
+  setMode('spot');
+  showInstruction('SPOT', 'Click and drag to draw a spot-clean rectangle', 'amber');
+}
+
 function blockAreaObject(points, camel=false, opts={}) {
   const includeId = opts.includeId || false;
   const includeExtra = opts.includeExtra !== false;
@@ -2657,6 +2684,199 @@ async function executeSpotClean(svgA, svgB) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// NO-GO / SPOT DRAG-TO-DRAW HELPERS
+// CONFIRMED: id must be absent; area_type must be "to_be_cleaned" for blocking
+// ─────────────────────────────────────────────────────────────────────────────
+function buildAreaPayload(p0, p1, kind = 'block') {
+  const minX = Math.min(p0.x, p1.x);
+  const maxX = Math.max(p0.x, p1.x);
+  const minY = Math.min(p0.y, p1.y);
+  const maxY = Math.max(p0.y, p1.y);
+  return {
+    area_type:              'to_be_cleaned',
+    area_state:             kind === 'block' ? 'blocking' : 'clean',
+    area_meta_data:         '',
+    room_type:              'none',
+    floor_type:             'none',
+    cleaning_parameter_set: 0,
+    method:                 'normal',
+    pump_volume:            'default',
+    strategy_mode:          'normal',
+    points: [
+      { x: minX, y: maxY },
+      { x: maxX, y: maxY },
+      { x: maxX, y: minY },
+      { x: minX, y: minY },
+    ],
+  };
+}
+
+async function executeAddArea(payload, mapId) {
+  const clean = Object.assign({}, payload);
+  delete clean.id;
+  delete clean.area_id;
+  delete clean.statistics;
+  delete clean._raw;
+
+  const areaJson = encodeURIComponent(JSON.stringify(clean));
+  const path     = `/set/add_area?map_id=${mapId}&area=${areaJson}`;
+  const url      = USE_PROXY ? path : `http://${robotIP}:${ROBOT_PORT}${path}`;
+
+  const resp = await fetch(url);
+  const body = await resp.text();
+  console.log(`[add_area] HTTP ${resp.status}  body: ${body}`);
+
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}: ${body.substring(0, 200)}`);
+  }
+
+  let res = {};
+  try { res = JSON.parse(body); } catch {}
+  return res;
+}
+
+async function executeNogo(svgX1, svgY1, svgX2, svgY2) {
+  const p0 = svgToRobot(svgX1, svgY1);
+  const p1 = svgToRobot(svgX2, svgY2);
+
+  if (Math.abs(p1.x - p0.x) < 20 || Math.abs(p1.y - p0.y) < 20) {
+    showToast('Draw a larger rectangle', 'error');
+    clearSplitOverlay();
+    state.rectStart = null;
+    state.rectMode  = null;
+    return;
+  }
+
+  try {
+    await showModal({
+      title:        'Add no-go zone?',
+      desc:         'A permanent blocked area will be added to this map. The robot will avoid it during cleaning.',
+      confirmLabel: 'Add No-Go Zone',
+      danger:       true,
+    });
+  } catch {
+    clearSplitOverlay();
+    state.rectStart = null;
+    showInstruction('BLOCK', 'Click and drag to draw a no-go rectangle', 'blue');
+    return;
+  }
+
+  clearSplitOverlay();
+  state.rectStart = null;
+  state.rectMode  = null;
+  showSpinner(true);
+
+  try {
+    const payload = buildAreaPayload(p0, p1, 'block');
+    const res     = await executeAddArea(payload, state.activeMapId);
+
+    const cmdId = res.cmd_id ?? res.cmdId ?? res.command_id;
+    if (cmdId) {
+      showToast('Adding no-go zone…', 'info');
+      await pollCmd(cmdId, 15000);
+    } else {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    await new Promise(r => setTimeout(r, 1000));
+    await loadMap(state.activeMapId);
+    showToast('No-go zone added', 'success');
+    setMode('select');
+  } catch (e) {
+    console.error('[nogo]', e);
+    showToast('Failed: ' + e.message.substring(0, 100), 'error');
+    setMode('select');
+  } finally {
+    showSpinner(false);
+    hideInstruction();
+  }
+}
+
+async function executeSpot(svgX1, svgY1, svgX2, svgY2) {
+  const p0 = svgToRobot(svgX1, svgY1);
+  const p1 = svgToRobot(svgX2, svgY2);
+
+  if (Math.abs(p1.x - p0.x) < 20 || Math.abs(p1.y - p0.y) < 20) {
+    showToast('Draw a larger rectangle', 'error');
+    clearSplitOverlay();
+    state.rectStart = null;
+    state.rectMode  = null;
+    return;
+  }
+
+  const cx = Math.round((p0.x + p1.x) / 2);
+  const cy = Math.round((p0.y + p1.y) / 2);
+  const rw = Math.abs(p1.x - p0.x);
+  const rh = Math.abs(p1.y - p0.y);
+  const r  = Math.round(Math.max(rw, rh) / 2);
+
+  try {
+    await showModal({
+      title:        'Start spot clean?',
+      desc:         'Robot will immediately clean the selected rectangle area.',
+      confirmLabel: 'Start Spot Clean',
+    });
+  } catch {
+    clearSplitOverlay();
+    state.rectStart = null;
+    showInstruction('SPOT', 'Click and drag to draw a spot-clean rectangle', 'amber');
+    return;
+  }
+
+  clearSplitOverlay();
+  state.rectStart = null;
+  state.rectMode  = null;
+
+  const minX = Math.min(p0.x, p1.x);
+  const maxX = Math.max(p0.x, p1.x);
+  const minY = Math.min(p0.y, p1.y);
+  const maxY = Math.max(p0.y, p1.y);
+
+  // Probe parameter formats — first 200 response logs the working format
+  const candidates = [
+    `/set/clean_spot?map_id=${state.activeMapId}&x=${cx}&y=${cy}&r=${r}`,
+    `/set/clean_spot?map_id=${state.activeMapId}&x1=${minX}&y1=${minY}&x2=${maxX}&y2=${maxY}`,
+    `/set/clean_spot?map_id=${state.activeMapId}&point=${encodeURIComponent(
+      JSON.stringify({x: parseFloat(cx.toFixed(1)), y: parseFloat(cy.toFixed(1))}))}&radius=${r}`,
+    `/set/clean_spot?map_id=${state.activeMapId}&area=${encodeURIComponent(
+      JSON.stringify(buildAreaPayload(p0, p1, 'spot')))}`,
+    `/set/clean_spot?map_id=${state.activeMapId}&x=${cx}&y=${cy}&r=${r}&cleaning_parameter_set=0`,
+  ];
+
+  showSpinner(true);
+  let success = false;
+
+  for (const path of candidates) {
+    const url  = USE_PROXY ? path : `http://${robotIP}:${ROBOT_PORT}${path}`;
+    try {
+      const resp = await fetch(url);
+      const body = await resp.text();
+      console.log(`[clean_spot] ${path.split('?')[1].substring(0, 60)} → ${resp.status} ${body}`);
+
+      if (resp.ok) {
+        let res = {};
+        try { res = JSON.parse(body); } catch {}
+        console.log(`[clean_spot] SUCCESS: ${path}`);
+        const cmdId = res.cmd_id ?? res.cmdId;
+        if (cmdId) await pollCmd(cmdId, 30000);
+        showToast('Spot clean started', 'success');
+        success = true;
+        break;
+      }
+    } catch (e) {
+      console.warn(`[clean_spot] threw: ${e}`);
+    }
+  }
+
+  showSpinner(false);
+  hideInstruction();
+  setMode('select');
+
+  if (!success) {
+    showToast('clean_spot: all formats failed — check console', 'error');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SVG MOUSE EVENTS
 // ─────────────────────────────────────────────────────────────────────────────
 function handleSpotClick(e) {
@@ -2741,12 +2961,12 @@ mapSvg.addEventListener('mousemove', e => {
     setSplitLine(p0.x, p0.y, pt.x, pt.y);
   }
 
-  if (state.mode === 'spot' && state.splitPoints.length === 1) {
+  if ((state.mode === 'block' || state.mode === 'spot') && state.rectStart) {
+    setSpotRect(state.rectStart.x, state.rectStart.y, pt.x, pt.y, state.mode);
+  } else if (state.mode === 'spot' && state.splitPoints.length === 1) {
     const p0 = state.splitPoints[0];
     setSpotRect(p0.x, p0.y, pt.x, pt.y);
-  }
-
-  if (state.mode === 'block' && state.splitPoints.length === 1) {
+  } else if (state.mode === 'block' && state.splitPoints.length === 1) {
     const p0 = state.splitPoints[0];
     setSpotRect(p0.x, p0.y, pt.x, pt.y, 'block');
   }
@@ -2765,7 +2985,7 @@ mapSvg.addEventListener('mousemove', e => {
 });
 
 mapSvg.addEventListener('mousedown', e => {
-  if (state.mode === 'pan' || e.button === 1) {
+  if (e.button === 1 || state.mode === 'pan') {
     state.panStart = {
       cx: e.clientX, cy: e.clientY,
       vbx: mapSvg.viewBox.baseVal.x,
@@ -2773,9 +2993,43 @@ mapSvg.addEventListener('mousedown', e => {
     };
     mapSvg.classList.add('panning');
     e.preventDefault();
+    return;
+  }
+
+  if (state.mode === 'block' || state.mode === 'spot') {
+    const pt = eventToSVGPoint(e);
+    state.rectStart = pt;
+    state.rectMode  = state.mode;
+    e.preventDefault();
+    return;
   }
 });
-window.addEventListener('mouseup', () => { state.panStart = null; mapSvg.classList.remove('panning'); });
+window.addEventListener('mouseup', e => {
+  state.panStart = null;
+  mapSvg.classList.remove('panning');
+
+  if (state.rectStart && state.rectMode) {
+    const pt = eventToSVGPoint(e);
+    const rs = state.rectStart;
+    state.rectStart = null;
+
+    const dx = Math.abs(pt.x - rs.x);
+    const dy = Math.abs(pt.y - rs.y);
+    if (dx < 10 && dy < 10) {
+      clearSplitOverlay();
+      state.rectMode = null;
+      return;
+    }
+
+    if (state.rectMode === 'block') {
+      state.rectMode = null;
+      executeNogo(rs.x, rs.y, pt.x, pt.y);
+    } else if (state.rectMode === 'spot') {
+      state.rectMode = null;
+      executeSpot(rs.x, rs.y, pt.x, pt.y);
+    }
+  }
+});
 
 // Scroll zoom
 mapSvg.addEventListener('wheel', e => {
@@ -2807,13 +3061,14 @@ $('zoom-out').addEventListener('click', () => {
 window.addEventListener('keydown', e => {
   if (e.code === 'Space' && state.mode !== 'pan') { e.preventDefault(); setMode('pan'); }
   if (e.code === 'Escape') {
-    setMode('select');
-    state.splitPoints = [];
+    state.splitPoints  = [];
     state.mergeFirstId = null;
+    state.rectStart    = null;
+    state.rectMode     = null;
     clearSplitOverlay();
     hideInstruction();
     mergeHintEl.classList.remove('visible');
-    // Restore normal highlights
+    setMode('select');
     if (state.selectedAreaId !== null) highlightArea(state.selectedAreaId);
     else highlightArea(null);
   }
@@ -2839,7 +3094,7 @@ function setMode(mode) {
     if (btn) btn.classList.toggle('active', m === mode);
   });
 
-  const modeNames = { select:'Select', pan:'Pan', split:'Split', merge:'Merge', block:'Block', spot:'Spot' };
+  const modeNames = { select: 'Select', pan: 'Pan', split: 'Split', merge: 'Merge', block: 'No-Go Draw', spot: 'Spot Draw' };
   statusMode.textContent = `Mode: ${modeNames[mode] || mode}`;
 }
 
@@ -2860,14 +3115,14 @@ $('tool-select').addEventListener('click', () => setMode('select'));
 $('tool-pan').addEventListener('click', () => setMode('pan'));
 $('tool-split').addEventListener('click', startSplit);
 $('tool-merge').addEventListener('click', startMerge);
-$('tool-block').addEventListener('click', startBlockZone);
-$('tool-spot').addEventListener('click', startSpotClean);
+$('tool-block').addEventListener('click', startBlock);
+$('tool-spot').addEventListener('click',  startSpot);
 $('tool-fit').addEventListener('click', fitToScreen);
 
 $('btn-clean-all').addEventListener('click', startCleanAll);
 $('btn-stop').addEventListener('click', () => sendRobotCommand('/set/stop', 'Stop'));
 $('btn-home').addEventListener('click', () => sendRobotCommand('/set/go_home', 'Return home'));
-$('btn-spot-clean').addEventListener('click', startSpotClean);
+$('btn-spot-clean')?.addEventListener('click', startSpot);
 
 $('btn-save-area').addEventListener('click', saveArea);
 $('btn-split-area').addEventListener('click', startSplit);
