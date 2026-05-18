@@ -16,7 +16,7 @@ def _make_vacuum(status: dict):
     coord = MagicMock()
     coord.status = status
     coord.config_entry = entry
-    coord.committed_active_map_id = "3"
+    coord.active_map_id = "3"
     coord.ha_fan_speed = None  # explicit None so fallback to status value works
     coord.is_paused = False    # pause state owned by coordinator, not entity
     coord.is_recharging_mid_clean = False  # recharge state (Fix B)

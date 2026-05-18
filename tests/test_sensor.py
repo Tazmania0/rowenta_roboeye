@@ -290,7 +290,7 @@ def test_active_map_sensor_exists():
 
 def test_active_map_sensor_shows_map_name():
     coord = _make_coordinator()
-    coord.committed_active_map_id = "3"
+    coord.active_map_id = "3"
     coord.available_maps = [
         {"map_id": "3", "display_name": "Ground Floor"},
         {"map_id": "4", "display_name": "First Floor"},
@@ -301,7 +301,7 @@ def test_active_map_sensor_shows_map_name():
 
 def test_active_map_sensor_falls_back_when_no_name():
     coord = _make_coordinator()
-    coord.committed_active_map_id = "4"
+    coord.active_map_id = "4"
     coord.available_maps = []
     result = _resolve_active_map_name(coord)
     assert result == "Map 4"
@@ -309,15 +309,15 @@ def test_active_map_sensor_falls_back_when_no_name():
 
 def test_active_map_sensor_none_when_empty_id():
     coord = _make_coordinator()
-    coord.committed_active_map_id = ""
+    coord.active_map_id = ""
     result = _resolve_active_map_name(coord)
     assert result is None
 
 
 def test_active_map_sensor_shows_committed_map():
-    """Sensor shows the committed map, not the pending manual selection."""
+    """Sensor shows the active map (committed_active_map_id is an alias for active_map_id)."""
     coord = _make_coordinator()
-    coord.committed_active_map_id = "3"   # still committed to old map
+    coord.active_map_id = "3"
     coord.available_maps = [
         {"map_id": "3", "display_name": "Ground Floor"},
         {"map_id": "4", "display_name": "First Floor"},
@@ -379,7 +379,7 @@ def _call_remove_stale(entries, active_map_id, current_area_ids):
     config_entry = MagicMock()
     config_entry.entry_id = "entry1"
     coordinator = MagicMock()
-    coordinator.committed_active_map_id = active_map_id
+    coordinator.active_map_id = active_map_id
 
     mock_ent_reg = MagicMock()
     with patch.object(_er, "async_get", return_value=mock_ent_reg), \
@@ -453,7 +453,7 @@ def test_remove_stale_returns_removed_set():
     config_entry = MagicMock()
     config_entry.entry_id = "entry1"
     coordinator = MagicMock()
-    coordinator.committed_active_map_id = "3"
+    coordinator.active_map_id = "3"
 
     mock_ent_reg = MagicMock()
     with patch.object(_er, "async_get", return_value=mock_ent_reg), \
@@ -495,7 +495,7 @@ CONFIRMED_SCHEDULE = {
 
 def _make_sched_coordinator():
     coord = _make_coordinator()
-    coord.committed_active_map_id = "3"
+    coord.active_map_id = "3"
     coord.schedule = CONFIRMED_SCHEDULE
     coord.available_maps = [
         {"map_id": "3",  "display_name": "Дружба", "is_active": True,  "statistics": {}},
@@ -579,7 +579,7 @@ def test_schedule_fan_zero_is_default():
 def test_schedule_second_floor_map_name():
     """Schedules for the active map resolve the correct map display name."""
     coord = _make_sched_coordinator()
-    coord.committed_active_map_id = "18"
+    coord.active_map_id = "18"
     coord.available_maps = [
         {"map_id": "3",  "display_name": "Дружба", "is_active": False, "statistics": {}},
         {"map_id": "18", "display_name": "Map 2",  "is_active": True,  "statistics": {}},
@@ -609,7 +609,7 @@ def _make_count_sensor(coord=None):
     if coord is None:
         coord = _make_coordinator()
         coord.device_id = "dev123"
-        coord.committed_active_map_id = "3"
+        coord.active_map_id = "3"
         coord.hass = MagicMock()
         coord.hass.states = MagicMock()
         coord.hass.states.get = MagicMock(return_value=None)
@@ -631,7 +631,7 @@ def test_selected_room_count_counts_on_booleans():
     """Returns count of input_booleans in 'on' state."""
     coord = _make_coordinator()
     coord.device_id = "dev123"
-    coord.committed_active_map_id = "3"
+    coord.active_map_id = "3"
     coord.areas = [
         {"id": 3,  "area_meta_data": '{"name":"Bedroom"}', "area_state": "clean"},
         {"id": 11, "area_meta_data": '{"name":"Kitchen"}', "area_state": "clean"},

@@ -209,14 +209,14 @@ def test_room_button_available_same_map():
 
 
 def test_room_button_unavailable_on_map_switch():
-    # Entity becomes unavailable when committed_active_map_id changes away from its map.
+    # Entity becomes unavailable when active_map_id changes away from its map.
     # It returns to available when the user switches back.
     coord = _make_coordinator(active_map_id="3")
     btn = _make_room_button(coord=coord)
     assert btn.available is True
-    coord.committed_active_map_id = "4"
+    coord.active_map_id = "4"
     assert btn.available is False
-    coord.committed_active_map_id = "3"
+    coord.active_map_id = "3"
     assert btn.available is True
 
 

@@ -273,13 +273,13 @@ def test_room_switch_available_same_map():
 
 
 def test_room_switch_unavailable_on_map_switch():
-    # Entity becomes unavailable when committed active map changes away from its map.
+    # Entity becomes unavailable when active_map_id changes away from its map.
     coord = _make_coordinator(active_map_id="3")
     sw = _make_room_switch(coord=coord)
     assert sw.available is True
-    coord.committed_active_map_id = "4"
+    coord.active_map_id = "4"
     assert sw.available is False
-    coord.committed_active_map_id = "3"
+    coord.active_map_id = "3"
     assert sw.available is True
 
 
