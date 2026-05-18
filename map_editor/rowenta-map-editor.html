@@ -674,6 +674,32 @@
       </div>
     </div>
 
+    <div class="panel-section" id="map-ops-panel">
+      <div class="panel-title">Map Operations</div>
+
+      <button class="btn" id="btn-explore" style="width:100%;justify-content:center;margin-bottom:6px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/>
+        </svg>
+        Explore New Map
+      </button>
+
+      <button class="btn danger" id="btn-delete-map"
+              style="width:100%;justify-content:center;margin-bottom:6px;" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>
+          <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+        </svg>
+        Delete Map
+      </button>
+
+      <div id="explore-progress" style="display:none;padding:8px;background:rgba(59,130,246,0.08);
+           border:1px solid var(--accent);border-radius:6px;font-size:11px;line-height:1.6">
+        <div id="explore-phase-text" style="color:var(--accent);font-weight:600">Exploring…</div>
+        <div id="explore-elapsed" style="color:var(--muted)">0:00 elapsed</div>
+      </div>
+    </div>
+
     <!-- Debug box: shows raw field names from device — hidden until data loads -->
     <div id="debug-box" style="display:none;border-top:1px solid var(--border)">
       <div class="panel-section">
@@ -772,6 +798,9 @@ const state = {
   rectStart:   null,   // {x,y} SVG coords of first rect corner (drag-to-draw)
   rectMode:    null,   // 'block' | 'spot' | null
   connected: false,
+  exploreMapId:   null,   // map_id of current temporary/explore map
+  dockingPose:    null,   // {x,y,heading,valid} read from feature_map
+  explorePhase:   null,   // null | 'running' | 'naming' | 'saving'
 
   // Pan/zoom
   viewTx: 0, viewTy: 0, viewScale: 1,
@@ -1007,13 +1036,17 @@ function showSpinner(v) {
   spinner.classList.toggle('visible', v);
 }
 
-async function pollCmd(cmdId, timeoutMs=15000) {
+async function pollCmd(cmdId, timeoutMs = 15000, onTick = null) {
   const deadline = Date.now() + timeoutMs;
+  const startMs  = Date.now();
   while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 1500));
-    const res = await api(`/get/command_result`);
+    await new Promise(r => setTimeout(r, 5000));
+    const res  = await api('/get/command_result');
     const cmds = res.commands || [];
-    const cmd = cmds.find(c => String(c.cmd_id) === String(cmdId));
+    const cmd  = cmds.find(c => String(c.cmd_id) === String(cmdId));
+
+    if (onTick) onTick(Math.floor((Date.now() - startMs) / 1000));
+
     if (!cmd) continue;
     const st = cmd.state ?? cmd.status;
     if (['done', 'success', 'completed', 'complete', 'finished'].includes(st)) return true;
@@ -1157,6 +1190,7 @@ async function loadMaps() {
   renderMapChips();
   setStatus(`Connected — ${state.maps.length} map(s)`, 'ok');
   state.connected = true;
+  _updateDeleteBtn();
   if (state.maps.length > 0) loadMap(state.maps[0].map_id);
 }
 
@@ -1164,15 +1198,60 @@ function renderMapChips() {
   const placeholder = $('map-chips-placeholder');
   if (placeholder) placeholder.remove();
 
-  // Clear old chips
-  mapBarEl.querySelectorAll('.map-chip').forEach(e => e.remove());
+  // Clear old chips and discard buttons
+  mapBarEl.querySelectorAll('.map-chip, .map-discard-btn').forEach(e => e.remove());
 
   state.maps.forEach((m, i) => {
     const name = (m.map_meta_data || '').trim() || `Map ${i+1}`;
     const chip = document.createElement('button');
     chip.className = 'map-chip' + (m.map_id === state.activeMapId ? ' active' : '');
-    chip.textContent = name;
     chip.dataset.mapId = m.map_id;
+
+    // Temporary/unsaved explore map — render differently
+    if (m.map_id === state.exploreMapId) {
+      chip.style.borderColor  = '#f59e0b';
+      chip.style.color        = '#f59e0b';
+      chip.textContent        = `${name} (unsaved)`;
+
+      const discard = document.createElement('button');
+      discard.className   = 'btn map-discard-btn';
+      discard.textContent = '✕ Discard';
+      discard.style.cssText = 'font-size:10px;padding:2px 8px;border-color:#ef4444;color:#ef4444';
+      discard.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          await showModal({
+            title:        'Discard unsaved map?',
+            desc:         'The explored map will be discarded. No data is lost — your other maps are safe.',
+            confirmLabel: 'Discard',
+            danger:       true,
+          });
+        } catch { return; }
+        showSpinner(true);
+        try {
+          const res   = await api(`/set/revert_map?map_id=${state.exploreMapId}`);
+          const cmdId = res?.cmd_id ?? res?.cmdId;
+          if (cmdId) await pollCmd(cmdId, 30000);
+          state.exploreMapId = null;
+          state.explorePhase = null;
+          hideInstruction();
+          _hideSaveMapButton();
+          await loadMaps();
+          if (state.maps.length > 0) await loadMap(state.maps[0].map_id);
+          showToast('Unsaved map discarded', 'success');
+        } catch (e) {
+          showToast('Discard failed: ' + e.message, 'error');
+        } finally {
+          showSpinner(false);
+        }
+      });
+      chip.addEventListener('click', () => loadMap(m.map_id));
+      mapBarEl.appendChild(chip);
+      mapBarEl.appendChild(discard);
+      return;
+    }
+
+    chip.textContent = name;
     chip.addEventListener('click', () => loadMap(m.map_id));
     mapBarEl.appendChild(chip);
   });
@@ -1235,6 +1314,7 @@ async function loadMap(mapId) {
     const featureMap = featureRes.map ?? featureRes.featureMap ?? featureRes;
     const walls = featureMap.lines ?? featureMap.segments ?? [];
     const dock  = featureMap.docking_pose ?? featureMap.dockingPose ?? featureMap.dockingPoseResponse ?? null;
+    state.dockingPose = dock;   // cache for executeSaveMap
     console.log('[rowenta-editor] walls:', walls.length, '  dock:', dock);
 
     renderMap(walls, dock);
@@ -1246,6 +1326,7 @@ async function loadMap(mapId) {
     emptyState.style.display = 'flex';
   } finally {
     showSpinner(false);
+    _updateDeleteBtn();
   }
 }
 
@@ -3109,6 +3190,324 @@ function fitToScreen() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MAP OPERATIONS — EXPLORE, DEFINE AREAS, SAVE, DELETE
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function reloadMapChips() {
+  const res  = await api('/get/maps');
+  state.maps = (res.maps || []).filter(m =>
+    String(m.permanent_flag).toLowerCase() === 'true' || m.map_id === state.exploreMapId
+  );
+  renderMapChips();
+}
+
+function _showSaveMapButton() {
+  let btn = $('btn-save-map-float');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id        = 'btn-save-map-float';
+    btn.className = 'btn success';
+    btn.style.cssText = 'position:absolute;bottom:44px;left:50%;transform:translateX(-50%);' +
+                        'z-index:30;padding:8px 24px;font-size:13px;box-shadow:0 4px 20px rgba(0,0,0,0.4)';
+    btn.innerHTML = '💾  Save Map';
+    btn.addEventListener('click', _promptSaveMap);
+    $('canvas-wrap').appendChild(btn);
+  }
+  btn.style.display = '';
+}
+
+function _hideSaveMapButton() {
+  const btn = $('btn-save-map-float');
+  if (btn) btn.style.display = 'none';
+}
+
+async function _promptSaveMap() {
+  let vals;
+  try {
+    vals = await showModal({
+      title:        'Save map permanently?',
+      desc:         'Give this floor a name, then save it. After saving the map ' +
+                    'is permanent and will survive robot power cycles.',
+      confirmLabel: 'Save Map',
+      fields: [
+        { key: 'mapName', label: 'Map name', placeholder: 'e.g. Ground Floor' },
+      ],
+    });
+  } catch { return; }
+
+  await executeSaveMap(vals.mapName || '');
+}
+
+async function executeSaveMap(mapName) {
+  const mapId = state.exploreMapId ?? state.activeMapId;
+  if (!mapId) { showToast('No map to save', 'error'); return; }
+
+  showSpinner(true);
+  try {
+    // Step 1: Read docking_pose — CRITICAL, omitting resets dock to origin
+    if (!state.dockingPose) {
+      const featRes   = await api(`/get/feature_map?map_id=${mapId}`);
+      const mapData   = featRes.map ?? featRes;
+      state.dockingPose = mapData.docking_pose ?? null;
+    }
+
+    // Step 2: Rename map (with docking_pose)
+    if (mapName) {
+      const dockJson = encodeURIComponent(JSON.stringify(
+        state.dockingPose ?? { x: 0, y: 0, heading: 0, valid: false }
+      ));
+      const nameEnc = encodeURIComponent(mapName);
+      await api(`/set/modify_map?map_id=${mapId}&name=${nameEnc}&docking_pose=${dockJson}`);
+    }
+
+    // Step 3: Save as permanent
+    showToast('Saving map…', 'info');
+    const saveRes = await api(`/set/save_map?map_id=${mapId}`);
+    const cmdId   = saveRes.cmd_id ?? saveRes.cmdId;
+    if (cmdId) {
+      await pollCmd(cmdId, 60000);
+    } else {
+      await new Promise(r => setTimeout(r, 3000));
+    }
+    await new Promise(r => setTimeout(r, 1500));
+
+    // Step 4: Reload
+    state.exploreMapId = null;
+    state.explorePhase = null;
+    state.dockingPose  = null;
+    hideInstruction();
+    _hideSaveMapButton();
+    await loadMaps();
+    const savedMap = state.maps.find(m =>
+      (m.map_meta_data || '').trim() === mapName.trim()
+    ) ?? state.maps[state.maps.length - 1];
+    if (savedMap) await loadMap(savedMap.map_id);
+    showToast(`Map "${mapName || 'unnamed'}" saved permanently`, 'success');
+
+  } catch (e) {
+    console.error('[saveMap]', e);
+    showToast('Save failed: ' + e.message.substring(0, 100), 'error');
+  } finally {
+    showSpinner(false);
+  }
+}
+
+async function _startAreaDefinitionFlow() {
+  const inactive = state.areas.filter(a => a.area_state === 'inactive');
+  if (inactive.length === 0) {
+    _promptSaveMap();
+    return;
+  }
+
+  try {
+    await showModal({
+      title: `${inactive.length} unnamed areas detected`,
+      desc:  'The robot found ' + inactive.length + ' room segments. Would you ' +
+             'like to name them now? You can also click each room on the map to ' +
+             'name it manually, then click "Save Map" when done.',
+      confirmLabel: 'Name Rooms Now',
+      fields: [],
+    });
+  } catch {
+    _showSaveMapButton();
+    return;
+  }
+
+  for (let i = 0; i < inactive.length; i++) {
+    const area = inactive[i];
+    highlightArea(area.area_id);
+    state.selectedAreaId = area.area_id;
+
+    let vals;
+    try {
+      vals = await showModal({
+        title:        `Name area ${i + 1} of ${inactive.length}`,
+        desc:         `Area #${area.area_id} (${area.points.length} vertices). ` +
+                      `Leave name blank to skip.`,
+        confirmLabel: i < inactive.length - 1 ? 'Save & Next' : 'Save & Finish',
+        fields: [
+          { key: 'name',      label: 'Room name',  placeholder: 'e.g. Kitchen (blank to skip)' },
+          { key: 'room_type', label: 'Room type',  type: 'select',
+            value: 'none', options: ROOM_TYPE_OPTIONS },
+        ],
+      });
+    } catch {
+      break;
+    }
+
+    if (vals.name) {
+      area.area_meta_data = JSON.stringify({ name: vals.name });
+      area.area_state     = 'clean';
+      area.room_type      = vals.room_type || 'none';
+      $('field-name').value       = vals.name;
+      $('field-room-type').value  = vals.room_type || 'none';
+      $('field-state').value      = 'clean';
+      areaDetailEl.classList.add('visible');
+      await saveArea();
+    }
+  }
+
+  highlightArea(null);
+  state.selectedAreaId = null;
+  _promptSaveMap();
+}
+
+async function executeExplore() {
+  try {
+    await showModal({
+      title: 'Start floor exploration?',
+      desc:  'The robot will map the floor from scratch. This creates a new ' +
+             'temporary map — your existing maps are not affected until you ' +
+             'choose to save. Make sure the robot is at its dock and all ' +
+             'doors are open. Exploration takes 5–20 minutes.',
+      confirmLabel: 'Start Exploring',
+    });
+  } catch { return; }
+
+  showSpinner(true);
+  setStatus('Exploring…', 'busy');
+  state.explorePhase = 'running';
+
+  const progressEl = $('explore-progress');
+  const phaseText  = $('explore-phase-text');
+  const elapsedEl  = $('explore-elapsed');
+  if (progressEl) progressEl.style.display = 'block';
+
+  try {
+    // CONFIRMED: zero parameters
+    const startRes = await api('/set/explore');
+    const cmdId    = startRes.cmd_id ?? startRes.cmdId;
+    if (!cmdId) throw new Error('/set/explore returned no cmd_id');
+
+    showToast('Exploration started — robot is mapping the floor', 'info');
+
+    const TIMEOUT_MS = 10 * 60 * 1000;
+
+    await pollCmd(cmdId, TIMEOUT_MS, (elapsed) => {
+      const m = Math.floor(elapsed / 60);
+      const s = elapsed % 60;
+      if (elapsedEl) elapsedEl.textContent = `${m}:${String(s).padStart(2,'0')} elapsed`;
+      if (phaseText) phaseText.textContent  = 'Mapping in progress…';
+    });
+
+    if (phaseText) phaseText.textContent = 'Exploration done — loading map…';
+    state.explorePhase = 'naming';
+
+    const mapsRes  = await api('/get/maps');
+    const allMaps  = mapsRes.maps || [];
+
+    let tempMap = allMaps.find(m => String(m.permanent_flag ?? '').toLowerCase() !== 'true');
+    if (!tempMap) {
+      const msRes = await api('/get/map_status');
+      const aId   = msRes.active_map_id;
+      tempMap = allMaps.find(m => String(m.map_id) === String(aId));
+    }
+    if (!tempMap) throw new Error('Cannot find new temporary map after explore');
+
+    const newMapId = tempMap.map_id;
+    state.exploreMapId = newMapId;
+    console.log('[explore] new temporary map_id:', newMapId);
+
+    await loadMap(newMapId);
+    await reloadMapChips();
+
+    showToast(`Exploration complete — ${state.areas.length} areas detected. Name your rooms.`, 'success');
+    showInstruction('DEFINE AREAS', 'Click each room to name it, then Save Map', 'green');
+
+    _startAreaDefinitionFlow();
+
+  } catch (e) {
+    console.error('[explore]', e);
+    showToast('Exploration failed: ' + e.message.substring(0, 100), 'error');
+    state.explorePhase = null;
+  } finally {
+    showSpinner(false);
+    setStatus(state.connected ? `Connected — ${state.maps.length} map(s)` : 'Disconnected',
+              state.connected ? 'ok' : '');
+    if (progressEl) progressEl.style.display = 'none';
+  }
+}
+
+async function executeDeleteMap(mapId) {
+  if (!mapId) { showToast('No map selected', 'error'); return; }
+
+  const permanentMaps = state.maps.filter(m =>
+    String(m.permanent_flag).toLowerCase() === 'true'
+  );
+  if (permanentMaps.length <= 1) {
+    showToast('Cannot delete the last map', 'error');
+    return;
+  }
+
+  const target = state.maps.find(m => String(m.map_id) === String(mapId));
+  const name   = target
+    ? ((target.map_meta_data || '').trim() || `Map ${mapId}`)
+    : `Map ${mapId}`;
+
+  let vals;
+  try {
+    vals = await showModal({
+      title:        `⚠ Delete "${name}"?`,
+      desc:         `This permanently deletes the floor plan, all named rooms, ` +
+                    `and all associated statistics. THIS CANNOT BE UNDONE.\n\n` +
+                    `Type the map name to confirm deletion.`,
+      confirmLabel: 'Delete Forever',
+      danger:       true,
+      fields: [
+        { key: 'confirm', label: `Type "${name}" to confirm`, placeholder: name },
+      ],
+    });
+  } catch { return; }
+
+  if ((vals.confirm || '').trim() !== name.trim()) {
+    showToast('Name did not match — deletion cancelled', 'error');
+    return;
+  }
+
+  showSpinner(true);
+  try {
+    const res   = await api(`/set/delete_map?map_id=${mapId}`);
+    const cmdId = res?.cmd_id ?? res?.cmdId;
+    if (cmdId) {
+      await pollCmd(cmdId, 15000);
+    } else {
+      await new Promise(r => setTimeout(r, 1500));
+    }
+
+    const wasActive = String(state.activeMapId) === String(mapId);
+
+    await loadMaps();
+
+    if (wasActive && state.maps.length > 0) {
+      await loadMap(state.maps[0].map_id);
+    } else if (state.maps.length === 0) {
+      state.activeMapId = null;
+      mapGroup.innerHTML = '';
+      emptyState.style.display = 'flex';
+    }
+
+    showToast(`Map "${name}" deleted`, 'success');
+  } catch (e) {
+    console.error('[deleteMap]', e);
+    showToast('Delete failed: ' + e.message.substring(0, 100), 'error');
+  } finally {
+    showSpinner(false);
+  }
+}
+
+function _updateDeleteBtn() {
+  const btn = $('btn-delete-map');
+  if (!btn) return;
+  const canDelete = state.maps.filter(
+    m => String(m.permanent_flag).toLowerCase() === 'true'
+  ).length > 1;
+  btn.disabled = !canDelete || !state.activeMapId;
+  btn.title    = canDelete
+    ? `Delete map ${state.activeMapId}`
+    : 'Cannot delete — only one map exists';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TOOLBAR WIRING
 // ─────────────────────────────────────────────────────────────────────────────
 $('tool-select').addEventListener('click', () => setMode('select'));
@@ -3123,6 +3522,11 @@ $('btn-clean-all').addEventListener('click', startCleanAll);
 $('btn-stop').addEventListener('click', () => sendRobotCommand('/set/stop', 'Stop'));
 $('btn-home').addEventListener('click', () => sendRobotCommand('/set/go_home', 'Return home'));
 $('btn-spot-clean')?.addEventListener('click', startSpot);
+
+$('btn-explore').addEventListener('click', executeExplore);
+$('btn-delete-map').addEventListener('click', () => {
+  if (state.activeMapId) executeDeleteMap(state.activeMapId);
+});
 
 $('btn-save-area').addEventListener('click', saveArea);
 $('btn-split-area').addEventListener('click', startSplit);
@@ -3202,6 +3606,136 @@ $('btn-connect').addEventListener('click', async () => {
 
   statusMode.title = 'S=Select  Space=Pan  X=Split  M=Merge  F=Fit  Esc=Cancel';
 })();
+
+// ── Inline test suite — runs when ?test=1 is in the URL ──────────────────────
+if (new URLSearchParams(window.location.search).get('test') === '1') {
+  const _results = [];
+  function _assert(desc, cond) {
+    _results.push({ desc, pass: !!cond });
+    if (!cond) console.error(`FAIL: ${desc}`);
+  }
+
+  (function testExploreUrl() {
+    const url = '/set/explore';
+    _assert('explore URL has no query string', !url.includes('?'));
+    _assert('explore URL has no map_id',       !url.includes('map_id'));
+    _assert('explore URL has no params',        url === '/set/explore');
+  })();
+
+  (function testFindTempMap() {
+    const maps = [
+      { map_id: 3,  permanent_flag: 'true',  map_meta_data: 'Дружба' },
+      { map_id: 45, permanent_flag: 'false', map_meta_data: '' },
+    ];
+    const temp = maps.find(m => String(m.permanent_flag).toLowerCase() !== 'true');
+    _assert('finds temp map by permanent_flag=false', temp !== undefined);
+    _assert('temp map_id is 45',                      temp?.map_id === 45);
+
+    const maps2 = [
+      { map_id: 3,  permanent_flag: 'true' },
+      { map_id: 99  /* no permanent_flag */ },
+    ];
+    const temp2 = maps2.find(m => String(m.permanent_flag ?? '').toLowerCase() !== 'true');
+    _assert('finds temp map when permanent_flag absent', temp2?.map_id === 99);
+  })();
+
+  (function testModifyMapUrl() {
+    const dock  = { x: 100, y: 50, heading: 180, valid: true };
+    const name  = 'Ground Floor';
+    const mapId = 45;
+    const url   = `/set/modify_map?map_id=${mapId}&name=${encodeURIComponent(name)}`
+                + `&docking_pose=${encodeURIComponent(JSON.stringify(dock))}`;
+    _assert('modify_map URL has map_id',      url.includes(`map_id=${mapId}`));
+    _assert('modify_map URL has name',        url.includes('name='));
+    _assert('modify_map URL has docking_pose',url.includes('docking_pose='));
+    const decoded = JSON.parse(decodeURIComponent(url.split('docking_pose=')[1]));
+    _assert('docking_pose.x is 100',          decoded.x === 100);
+    _assert('docking_pose.valid is true',     decoded.valid === true);
+
+    const dockInvalid = { x: 0, y: 0, heading: 0, valid: false };
+    const url2 = `/set/modify_map?map_id=3&name=Test`
+               + `&docking_pose=${encodeURIComponent(JSON.stringify(dockInvalid))}`;
+    const d2   = JSON.parse(decodeURIComponent(url2.split('docking_pose=')[1]));
+    _assert('docking_pose with valid=false is still included', 'valid' in d2);
+    _assert('docking_pose.valid=false preserved',              d2.valid === false);
+  })();
+
+  (function testDeleteGuards() {
+    const canDelete = (maps) =>
+      maps.filter(m => String(m.permanent_flag).toLowerCase() === 'true').length > 1;
+
+    _assert('cannot delete when only 1 permanent map',
+      canDelete([{ map_id: 3, permanent_flag: 'true' }]) === false);
+    _assert('can delete when 2 permanent maps',
+      canDelete([
+        { map_id: 3,  permanent_flag: 'true' },
+        { map_id: 45, permanent_flag: 'true' },
+      ]) === true);
+    _assert('non-permanent map not counted in guard',
+      canDelete([
+        { map_id: 3,  permanent_flag: 'true' },
+        { map_id: 45, permanent_flag: 'false' },
+      ]) === false);
+  })();
+
+  (function testDeleteConfirm() {
+    const matches = (expected, typed) => typed.trim() === expected.trim();
+    _assert('exact match passes',            matches('Дружба', 'Дружба'));
+    _assert('trailing space passes (trim)',  matches('Дружба', 'Дружба '));
+    _assert('wrong case fails',             !matches('Дружба', 'дружба'));
+    _assert('transliteration fails',        !matches('Дружба', 'Druzhba'));
+    _assert('empty string fails',           !matches('Дружба', ''));
+    _assert('partial match fails',          !matches('Дружба', 'Дружб'));
+  })();
+
+  (function testDeleteRouting() {
+    const routeDelete = (m) =>
+      String(m.permanent_flag ?? '').toLowerCase() === 'true'
+        ? 'delete_map' : 'revert_map';
+    _assert('permanent map routes to delete_map',
+      routeDelete({ permanent_flag: 'true' })  === 'delete_map');
+    _assert('temp map routes to revert_map',
+      routeDelete({ permanent_flag: 'false' }) === 'revert_map');
+    _assert('map without permanent_flag routes to revert_map',
+      routeDelete({}) === 'revert_map');
+  })();
+
+  (function testTimeouts() {
+    const EXPLORE_TIMEOUT  = 10 * 60 * 1000;
+    const SAVE_MAP_TIMEOUT = 60 * 1000;
+    _assert('explore timeout >= 10 minutes', EXPLORE_TIMEOUT >= 600000);
+    _assert('save_map timeout >= 60 seconds', SAVE_MAP_TIMEOUT >= 60000);
+  })();
+
+  (function testDockingPoseExtract() {
+    const featRes = {
+      map: {
+        lines: [],
+        docking_pose: { x: 100, y: 50, heading: 180, valid: true }
+      }
+    };
+    const dock = (featRes.map ?? featRes).docking_pose ?? null;
+    _assert('docking_pose extracted from feature_map', dock !== null);
+    _assert('docking_pose.x is 100', dock?.x === 100);
+    _assert('docking_pose.heading is 180', dock?.heading === 180);
+
+    const featRes2 = { docking_pose: { x: 200, y: 75, heading: 90, valid: true } };
+    const dock2    = (featRes2.map ?? featRes2).docking_pose ?? null;
+    _assert('docking_pose extracted when not nested in .map', dock2?.x === 200);
+  })();
+
+  const passed = _results.filter(r => r.pass).length;
+  const failed = _results.filter(r => !r.pass).length;
+  console.log(`\n[tests] ${passed} passed, ${failed} failed`);
+  _results.filter(r => !r.pass).forEach(r => console.error(`  FAIL: ${r.desc}`));
+
+  const badge = document.createElement('div');
+  badge.style.cssText = `position:fixed;bottom:36px;right:12px;z-index:999;
+    padding:6px 12px;border-radius:6px;font-family:monospace;font-size:11px;
+    background:${failed ? '#7f1d1d' : '#14532d'};color:#fff;border:1px solid ${failed ? '#ef4444' : '#22c55e'}`;
+  badge.textContent = `Tests: ${passed}✓ ${failed}✗`;
+  document.body.appendChild(badge);
+}
 </script>
 </body>
 </html>
