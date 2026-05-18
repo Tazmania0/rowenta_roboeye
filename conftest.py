@@ -56,6 +56,10 @@ class DataUpdateCoordinator:
     def async_set_updated_data(self, data):
         self.data = data
 
+    def async_update_listeners(self):
+        for cb in list(self._listeners):
+            cb()
+
     @property
     def last_update_success(self):
         return True

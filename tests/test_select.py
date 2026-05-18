@@ -101,18 +101,18 @@ def test_current_option_matches_active_map():
 
 
 def test_current_option_second_map():
-    """current_option returns 'First Floor' when committed map is 4."""
+    """current_option returns 'First Floor' when active map is 4."""
     coord = _make_coordinator()
-    coord.committed_active_map_id = "4"
+    coord.active_map_id = "4"
     entity = _entity(coord)
     entity._build_options()
     assert entity.current_option == "First Floor"
 
 
 def test_current_option_falls_back_to_id_when_name_unknown():
-    """If committed map ID has no name, return the ID string directly."""
+    """If active map ID has no name, return the ID string directly."""
     coord = _make_coordinator()
-    coord.committed_active_map_id = "99"
+    coord.active_map_id = "99"
     entity = _entity(coord)
     entity._build_options()
     assert entity.current_option == "99"
@@ -600,13 +600,13 @@ def test_room_fan_speed_available_same_map():
 
 
 def test_room_fan_speed_unavailable_on_map_switch():
-    # Entity becomes unavailable when committed_active_map_id changes away from its map.
+    # Entity becomes unavailable when active_map_id changes away from its map.
     coord = _make_room_coordinator(active_map_id="3")
     entity = _room_fan_entity(coord=coord)
     assert entity.available is True
-    coord.committed_active_map_id = "4"
+    coord.active_map_id = "4"
     assert entity.available is False
-    coord.committed_active_map_id = "3"
+    coord.active_map_id = "3"
     assert entity.available is True
 
 
@@ -937,13 +937,13 @@ def test_room_strategy_available_same_map():
 
 
 def test_room_strategy_unavailable_on_map_switch():
-    # Entity becomes unavailable when committed_active_map_id changes away from its map.
+    # Entity becomes unavailable when active_map_id changes away from its map.
     coord = _make_room_coordinator(active_map_id="3")
     entity = _room_strategy_entity(coord=coord)
     assert entity.available is True
-    coord.committed_active_map_id = "4"
+    coord.active_map_id = "4"
     assert entity.available is False
-    coord.committed_active_map_id = "3"
+    coord.active_map_id = "3"
     assert entity.available is True
 
 
