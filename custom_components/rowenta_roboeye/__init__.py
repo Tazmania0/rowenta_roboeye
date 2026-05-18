@@ -13,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
-from .const import AREA_STATE_BLOCKING, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_ACTIVE_MAP_CHANGED, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION, room_selection_entity_id
+from .const import AREA_STATES_SKIP, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_ACTIVE_MAP_CHANGED, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION, room_selection_entity_id
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
@@ -86,7 +86,7 @@ async def _async_sync_room_selection_booleans(
         area_id = area.get("id")
         if area_id is None:
             continue
-        if area.get("area_state") == AREA_STATE_BLOCKING:
+        if area.get("area_state") in AREA_STATES_SKIP:
             continue
         meta_raw = area.get("area_meta_data", "")
         if not meta_raw:

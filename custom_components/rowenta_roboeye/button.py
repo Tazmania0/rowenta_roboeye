@@ -14,7 +14,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
-    AREA_STATE_BLOCKING,
+    AREA_STATES_SKIP,
     DOMAIN,
     FAN_SPEED_MAP,
     FAN_SPEED_REVERSE_MAP,
@@ -194,7 +194,7 @@ def _build_room_button_entities(
         room_name = _parse_area_name(area)
         if not room_name:
             continue
-        if area.get("area_state") == AREA_STATE_BLOCKING:
+        if area.get("area_state") in AREA_STATES_SKIP:
             continue
         new_entities.append(
             RobEyeRoomCleanButton(
@@ -276,7 +276,7 @@ class RobEyeCleanAllButton(RobEyeBaseButton):
         #    we compute the effective global setting here and apply it uniformly.
         areas = [
             a for a in self.coordinator.areas
-            if a.get("id") is not None and a.get("area_state") != AREA_STATE_BLOCKING
+            if a.get("id") is not None and a.get("area_state") not in AREA_STATES_SKIP
         ]
 
         if areas:

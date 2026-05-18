@@ -434,15 +434,13 @@ async def test_async_update_serializes_concurrent_callers():
 
 # ── Blocking area filter in _extract_rooms ────────────────────────────
 
-def test_extract_rooms_excludes_blocking_areas():
-    """Blocking areas (virtual walls / forbidden zones) must not appear in the
-    rooms list even when they have a name.
+def test_extract_rooms_excludes_blocking_and_inactive_areas():
+    """Blocking and inactive areas must not appear in the rooms list even when
+    they have a name.
 
-    Root cause of the 30-60 s dashboard-delay regression: _extract_rooms used
-    to include blocking areas, so _room_entities_registered waited 8 s for
-    entities that the platform builders never create (they skip
-    area_state == 'blocking').  Each timeout pushed the retry 15 s into the
-    future via the coordinator-tick schedule.
+    Platform builders skip both area_state == 'blocking' and 'inactive', so
+    _extract_rooms must match to avoid _room_entities_registered waiting for
+    entities that will never be created.
     """
     areas = [
         {"id": 1, "area_meta_data": '{"name": "Living Room"}', "area_state": "clean"},
@@ -452,7 +450,8 @@ def test_extract_rooms_excludes_blocking_areas():
     rooms = _extract_rooms(areas)
     ids = {r["id"] for r in rooms}
     assert 2 not in ids, "blocking area must be excluded"
-    assert 1 in ids and 3 in ids, "non-blocking named areas must be included"
+    assert 3 not in ids, "inactive area must be excluded"
+    assert 1 in ids, "clean area must be included"
 
 
 def test_registered_returns_true_when_only_normal_rooms_have_entities():

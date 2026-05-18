@@ -20,7 +20,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
-    AREA_STATE_BLOCKING,
+    AREA_STATES_SKIP,
     CONF_LAST_ACTIVE_MAP,
     DOMAIN,
     FAN_SPEED_MAP,
@@ -220,7 +220,7 @@ def _build_room_select_entities(
         if not room_name:
             continue
         # Skip areas disabled for cleaning in the RobEye app
-        if area.get("area_state") == AREA_STATE_BLOCKING:
+        if area.get("area_state") in AREA_STATES_SKIP:
             continue
         entities_for_area = [
             RobEyeRoomFanSpeedSelect(

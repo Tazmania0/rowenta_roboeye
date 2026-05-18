@@ -140,6 +140,9 @@ AREA_STATE_CLEAN    = "clean"
 AREA_STATE_INACTIVE = "inactive"
 AREA_STATE_BLOCKING = "blocking"
 
+# States for which no HA entities should be created (avoidance zones + inactive segments).
+AREA_STATES_SKIP: frozenset[str] = frozenset({AREA_STATE_BLOCKING, AREA_STATE_INACTIVE})
+
 # ── Fan speed mapping  API value (str) -> human label ─────────────────
 FAN_SPEED_MAP: dict[str, str] = {
     "1": "normal",
