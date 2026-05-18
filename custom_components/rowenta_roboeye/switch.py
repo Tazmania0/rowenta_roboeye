@@ -29,7 +29,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
-    AREA_STATE_BLOCKING,
+    AREA_STATES_SKIP,
     CLEANING_MODE_ALL,
     DOMAIN,
     FAN_SPEED_LABELS,
@@ -89,7 +89,7 @@ async def async_setup_entry(
             room_name = _parse_switch_area_name(area)
             if not room_name:
                 continue
-            if area.get("area_state") == AREA_STATE_BLOCKING:
+            if area.get("area_state") in AREA_STATES_SKIP:
                 continue
             entities_for_area = [
                 RobEyeRoomDeepCleanSwitch(

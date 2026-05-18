@@ -25,7 +25,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import CannotConnect, RobEyeApiClient
 from .const import (
-    AREA_STATE_BLOCKING,
+    AREA_STATES_SKIP,
     AREA_TYPE_AVOIDANCE,
     CHARGING_CHARGING,
     CMD_POLL_INTERVAL_S,
@@ -2306,14 +2306,13 @@ def _parse_live_outline(seen_polygon_raw: dict) -> list:
 def _classify_areas(areas: list[dict]) -> tuple[list[dict], list[dict]]:
     """Split areas into (rooms, avoidance_zones).
 
-    Avoidance zones: area_state == "blocking" or area_type == "to_be_cleaned".
-    Everything else is treated as a room (including redundant inactive segments).
+    Avoidance zones: area_state in AREA_STATES_SKIP or area_type == "to_be_cleaned".
     """
     rooms: list[dict] = []
     avoidance: list[dict] = []
     for area in areas:
         if (
-            area.get("area_state") == AREA_STATE_BLOCKING
+            area.get("area_state") in AREA_STATES_SKIP
             or area.get("area_type") == AREA_TYPE_AVOIDANCE
         ):
             avoidance.append(area)

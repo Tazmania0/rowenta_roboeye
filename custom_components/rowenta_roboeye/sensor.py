@@ -47,7 +47,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
-    AREA_STATE_BLOCKING,
+    AREA_STATES_SKIP,
     CLEANING_MODE_ALL,
     CLEANING_MODE_ROOMS,
     DOMAIN,
@@ -876,7 +876,7 @@ def _build_room_sensor_entities(
             LOGGER.debug("Skipping area with no name: id=%s", area_id)
             continue
         # Skip areas disabled for cleaning in the RobEye app
-        if area.get("area_state") == AREA_STATE_BLOCKING:
+        if area.get("area_state") in AREA_STATES_SKIP:
             continue
         sensors = _build_room_sensors(
             coordinator, config_entry, area_id, room_name,
