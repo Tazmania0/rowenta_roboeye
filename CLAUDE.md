@@ -103,7 +103,7 @@ Robot Vacuum (LAN:8080)
 
 2. **Adaptive poll interval**: The base coordinator interval is 5 s during active cleaning, 15 s when idle. This is set dynamically inside `_async_update_data` based on the current mode.
 
-3. **Dynamic entity discovery**: Room-based entities (per-room sensor, button, select, switch) are created at runtime. The coordinator compares `_known_area_ids` after each `/get/areas` call and fires `f"{SIGNAL_AREAS_UPDATED}_{entry_id}"` when the room set changes. Platform listeners add new entities without a full integration reload. Map deletion fires `f"{SIGNAL_MAPS_UPDATED}_{entry_id}"` with the deleted map ID set.
+3. **Dynamic entity discovery**: Room-based entities (per-room sensor, button, select, switch) are created at setup time for **all** known permanent maps via `async_load_all_map_areas()`. The background refresh (`_async_background_refresh`) later diffs `AreaSnapshot` per map and fires `f"{SIGNAL_AREAS_UPDATED}_{entry_id}"` (with the changed `map_id`) when room structure changes. Platform listeners add new entities without a full integration reload. Map add/delete fires `f"{SIGNAL_MAPS_UPDATED}_{entry_id}"` with `{"added": set, "removed": set}`.
 
 4. **Per-map entity tracking**: All dynamic room entities are stored in a `known_entities_by_map: dict[str, dict]` closure keyed by `map_id → {area_id → entities}`. Entities for inactive maps stay registered in HA but show as unavailable. This avoids the async_remove/async_add race that caused duplicate entity ID errors when switching maps.
 
@@ -125,24 +125,26 @@ Robot Vacuum (LAN:8080)
 
 13. **Pause/resume lifecycle**: When `stop()` is called mid-clean the coordinator sets `_is_paused = True`, drains pending queue jobs into `_paused_jobs`, and snapshots the interrupted command as `_paused_clean_command`. On `clean_start_or_continue()` the paused jobs are re-enqueued and the snapshot is cleared. `go_home()` discards the snapshot entirely.
 
-14. **Multi-map support**: `active_map_id` resolves as: manual HA selection (`_manual_map_id`) → setup-time `CONF_MAP_ID`. The device's own `/get/map_status` is intentionally ignored so HA does not silently follow native-app floor switches. `/get/maps` (polled every 300 s) provides the full map list for `RobEyeActiveMapSelect`. `available_maps` returns normalised permanent-only map entries.
+14. **Multi-map support (snapshot model)**: At setup time `async_load_all_map_areas()` pre-fetches `/get/areas` for every permanent map. Areas are stored in `_areas_snapshot: dict[str, AreaSnapshot]` keyed by map ID. `async_set_active_map()` is a pure local operation — it flips `_active_map_id`, calls `async_update_listeners()` to flip entity availability instantly, and fires `SIGNAL_ACTIVE_MAP_CHANGED`. No network calls are made on switch. The device's own `/get/map_status` is intentionally ignored. A uniform background refresh (`SCAN_INTERVAL_BACKGROUND = 600 s`, paused during cleaning) keeps all maps' snapshots current and fires `SIGNAL_AREAS_UPDATED` only on structural changes. A cleaning→idle edge triggers an immediate refresh so per-clean statistics propagate promptly.
 
-15. **Map-switch grace period**: When `async_set_active_map()` is called, `_prev_committed_map_id` is set to the previous map's ID. `map_available_for(entity_map_id)` returns `True` for this ID until the next coordinator tick clears `_prev_committed_map_id`. This prevents a flash of "unavailable" entities while new-map areas are being fetched. The grace period is skipped when switching back to a map that already has committed areas in this session (`_maps_with_committed_areas`).
+15. **AreaSnapshot**: `AreaSnapshot` is a frozen dataclass with structural equality — two snapshots are equal iff `area_ids` and room `names` match. Statistics-only updates (e.g. `cleaning_counter`) compare equal and do not trigger dashboard rebuilds. The `blob` field carries the raw API response but is excluded from equality. `coordinator.areas_for(map_id)` returns the area list for any known map; returns `[]` if no snapshot exists.
 
-16. **Entity registry housekeeping** (entity.py): Three cleanup functions keep the registry clean:
+16. **Entity availability for per-map entities**: Per-map entities override `available` to return `self._map_id == self.coordinator.active_map_id and super().available`. There is no longer a grace-period or `map_available_for()` helper — all maps' entities are pre-created and availability flips instantly on switch. `async_enable_all_room_entities()` in `entity.py` is a one-time migration helper that re-enables any entities disabled by the old disable/enable model.
+
+17. **Entity registry housekeeping** (entity.py): Three cleanup functions keep the registry clean:
     - `async_remove_stale_room_entities()`: Removes entities for area IDs that no longer exist on the active map (e.g. after room redraw). Guards against empty area lists (transient network failures).
     - `async_remove_entities_for_deleted_maps()`: Removes entities for maps that were deleted from the device. Called when `SIGNAL_MAPS_UPDATED` fires.
     - `async_remove_duplicate_room_entities()`: Removes orphaned registry entries with old `device_id`-based unique_ids when `CONF_SERIAL` becomes available after a first-boot fallback to `entry_id`.
 
-17. **Room selection toggles**: Per-room `RobEyeRoomSelectSwitch` entities (in switch.py) allow the user to select/deselect rooms for the "Clean Selected Rooms" command. Each entity ID follows the pattern `switch.{device_id}_map{map_id}_room_{area_id}_selected` (generated by `room_selection_entity_id()` in const.py). `SIGNAL_ROOM_SELECTION_CHANGED` is fired on every toggle so `RobEyeCleanSelectedButton` can update its availability immediately.
+18. **Room selection toggles**: Per-room `RobEyeRoomSelectSwitch` entities (in switch.py) allow the user to select/deselect rooms for the "Clean Selected Rooms" command. Each entity ID follows the pattern `switch.{device_id}_map{map_id}_room_{area_id}_selected` (generated by `room_selection_entity_id()` in const.py). `SIGNAL_ROOM_SELECTION_CHANGED` is fired on every toggle so `RobEyeCleanSelectedButton` can update its availability immediately.
 
-18. **Cleaning strategy**: Global `RobEyeStrategySelect` (4 modes: Default/Normal/Walls & Corners/Deep). Per-room `RobEyeRoomStrategySelect` stores desired strategy per room (no Deep option — use per-room deep-clean switch). Global `RobEyeDeepCleanSwitch` is kept for backwards compatibility. `coordinator.cleaning_strategy` and `coordinator.last_non_deep_strategy` track state. The firmware only accepts `"normal"` or `"deep"` for `strategy_mode`; Default/Walls & Corners map to `"normal"` in API calls.
+19. **Cleaning strategy**: Global `RobEyeStrategySelect` (4 modes: Default/Normal/Walls & Corners/Deep). Per-room `RobEyeRoomStrategySelect` stores desired strategy per room (no Deep option — use per-room deep-clean switch). Global `RobEyeDeepCleanSwitch` is kept for backwards compatibility. `coordinator.cleaning_strategy` and `coordinator.last_non_deep_strategy` track state. The firmware only accepts `"normal"` or `"deep"` for `strategy_mode`; Default/Walls & Corners map to `"normal"` in API calls.
 
-19. **Incremental event log**: `/get/event_log` is polled every 30 s with a cursor (`_last_event_log_id`). The first fetch seeds the cursor without surfacing historical entries. Subsequent fetches deliver only new events; `_process_new_events` maps them to HA logbook entries and persistent notifications using the `EVENT_TYPE_*` constants in `const.py`.
+20. **Incremental event log**: `/get/event_log` is polled every 30 s with a cursor (`_last_event_log_id`). The first fetch seeds the cursor without surfacing historical entries. Subsequent fetches deliver only new events; `_process_new_events` maps them to HA logbook entries and persistent notifications using the `EVENT_TYPE_*` constants in `const.py`.
 
-20. **Recharge-and-continue**: During firmware-initiated recharge cycles (mode=`cleaning` + charging=`charging`), the command worker waits up to `MODE_RECHARGE_CONTINUE_WAIT_S` (3 hours) polling every `MODE_RECHARGE_CONTINUE_POLL_S` (30 s) before giving up. This prevents the queue from treating a mid-clean charge as a stalled command.
+21. **Recharge-and-continue**: During firmware-initiated recharge cycles (mode=`cleaning` + charging=`charging`), the command worker waits up to `MODE_RECHARGE_CONTINUE_WAIT_S` (3 hours) polling every `MODE_RECHARGE_CONTINUE_POLL_S` (30 s) before giving up. This prevents the queue from treating a mid-clean charge as a stalled command.
 
-21. **Schedule enable/disable**: `RobEyeScheduleSwitch` entities bypass the serial command queue — `api.set_schedule_enabled()` is called directly (GET /set/modify_scheduled_task), followed by `async_request_refresh()`. Settings writes must not be delayed by pending motion commands.
+22. **Schedule enable/disable**: `RobEyeScheduleSwitch` entities bypass the serial command queue — `api.set_schedule_enabled()` is called directly (GET /set/modify_scheduled_task), followed by `async_request_refresh()`. Settings writes must not be delayed by pending motion commands.
 
 ---
 
@@ -156,7 +158,8 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 | `/get/sensor_values` | Every tick | Parses GPIO for brush stuck + dustbin flags |
 | `/get/rob_pose` | Every tick when `live_map` entity enabled | Staleness detected via `timestamp` field |
 | `/get/seen_polygon`, `/get/cleaning_grid_map` (live) | 5 s when cleaning, 60 s idle | Live map polygon only during active session |
-| `/get/areas`, `/get/sensor_status`, `/get/robot_flags`, `/get/map_status`, `/get/maps` | Every 300 s | Area discovery + map list; `_check_for_new_areas` called here |
+| `/get/maps`, `/get/areas` (for every known permanent map) | Every 600 s (`SCAN_INTERVAL_BACKGROUND`), paused during cleaning; forced once on cleaning→idle edge | Snapshot model: `_async_background_refresh` diffs `AreaSnapshot` per map and fires `SIGNAL_AREAS_UPDATED` only on structural change |
+| `/get/sensor_status`, `/get/robot_flags`, `/get/map_status` | Every 600 s | Sensor health and map metadata |
 | `/get/statistics`, `/get/permanent_statistics` | Every 600 s | Lifetime totals |
 | `/get/feature_map`, `/get/tile_map`, `/get/areas` (saved map), `/get/seen_polygon` (saved map), `/get/cleaning_grid_map` (saved map) | Every 600 s | Map geometry for SVG card; also loaded at startup |
 | `/get/schedule` | Every 60 s | Cleaning schedule |
@@ -192,7 +195,7 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 - All entities inherit `RobEyeEntity` from `entity.py`.
 - `unique_id` must be stable and globally unique: `f"{suffix}_{coordinator.device_id}"` for global entities; room entities embed both `map_id` and `device_id` (e.g. `f"room_fan_speed_map{map_id}_{area_id}_{device_id}"`).
 - `device_info` is set on the base class (`RobEyeEntity.__init__`) — do not override it per-entity.
-- Per-map entities must override `available` to call `coordinator.map_available_for(self._map_id)` so they go unavailable when a different map is active.
+- Per-map entities must override `available` to `return self._map_id == self.coordinator.active_map_id and super().available` so they go unavailable when a different map is active. Do **not** call the removed `coordinator.map_available_for()` helper.
 - Use `coordinator.data.get(KEY)` defensively; data keys may be absent if an API call failed on a particular cycle.
 - `available` property must return `False` when coordinator data is stale (inherits from `CoordinatorEntity`).
 
@@ -210,12 +213,14 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 - Add new API endpoints to `_async_update_data` with the appropriate timing bucket.
 - Wrap optional/diagnostic endpoints in `try/except CannotConnect` so one missing endpoint does not fail the whole update.
 - When adding new data keys, add a matching constant to `const.py` in the `DATA_*` section and document what it contains with a comment.
-- Room discovery is tracked in `self._known_area_ids`; fire `f"{SIGNAL_AREAS_UPDATED}_{self.config_entry.entry_id}"` when the set changes.
-- Map deletion fires `f"{SIGNAL_MAPS_UPDATED}_{self.config_entry.entry_id}"` with the deleted map ID set.
+- Room discovery is handled by `_async_background_refresh`; it diffs `AreaSnapshot` per map and fires `f"{SIGNAL_AREAS_UPDATED}_{entry_id}"` with the `map_id` string only on structural changes (area IDs or names changed). Do not manually track `_known_area_ids`.
+- Map add/delete fires `f"{SIGNAL_MAPS_UPDATED}_{entry_id}"` with a `{"added": set, "removed": set}` dict.
+- User map switch fires `f"{SIGNAL_ACTIVE_MAP_CHANGED}_{entry_id}"` with the new `map_id` string. Listen to this in `__init__.py` to rebuild the dashboard; do not rebuild in platform files.
+- Read room areas via `coordinator.areas_for(map_id)` — returns `[]` if no snapshot; never access `coordinator._areas_snapshot` directly from entity code.
 - After `MAX_POLL_FAILURES` consecutive failures the coordinator logs a warning; it raises `UpdateFailed` on every failure regardless.
 - Convenience properties (`status`, `statistics`, `areas`, `robot_info`, `available_maps`, etc.) on the coordinator are the preferred way for entities to read frequently-accessed sub-keys.
 - `coordinator.device_id` is always stable; use it for all `unique_id` construction.
-- `coordinator.active_map_id` is the HA-selected map; `coordinator.areas_map_id` is the map for which `DATA_AREAS` was last fetched — compare them in entity builders to guard against stale-signal races.
+- `coordinator.active_map_id` is the single source of truth for the displayed map. `coordinator.committed_active_map_id` is a deprecated alias — use `active_map_id` for all new code.
 
 ### Adding a New Entity Platform
 
@@ -312,8 +317,9 @@ Skip entity creation for areas where `area.get("area_state") == AREA_STATE_BLOCK
 ### Signals
 
 ```python
-SIGNAL_AREAS_UPDATED         # f"{DOMAIN}_areas_updated"  — fired when room set changes
-SIGNAL_MAPS_UPDATED          # f"{DOMAIN}_maps_updated"   — fired with deleted_map_ids set
+SIGNAL_AREAS_UPDATED           # f"{DOMAIN}_areas_updated"          — fired with map_id when snapshot diff detects structural room change
+SIGNAL_MAPS_UPDATED            # f"{DOMAIN}_maps_updated"           — fired with {"added": set, "removed": set} on permanent-map add/delete
+SIGNAL_ACTIVE_MAP_CHANGED      # f"{DOMAIN}_active_map_changed"     — fired with new map_id when user switches maps (triggers dashboard rebuild)
 SIGNAL_ROOM_SELECTION_CHANGED  # f"{DOMAIN}_room_selection_changed" — fired on selection toggle
 ```
 
@@ -344,7 +350,7 @@ These functions keep the HA entity registry clean:
 
 | Function | When to call |
 |---|---|
-| `async_remove_stale_room_entities(hass, entry, coordinator, platform, current_ids)` | In `_async_on_areas_updated` when `areas_map_id == active_map_id`. Guards against empty `current_ids` (transient failures). |
+| `async_remove_stale_room_entities(hass, entry, coordinator, platform, current_ids)` | In `_async_on_areas_updated` when `map_id == coordinator.active_map_id`. Guards against empty `current_ids` (transient failures). |
 | `async_remove_entities_for_deleted_maps(hass, entry, platform, deleted_map_ids)` | In `_async_on_maps_updated` handler. Returns removed `(map_id, area_id)` tuples. |
 | `async_remove_duplicate_room_entities(hass, entry, platform, canonical_uids)` | At platform setup time, after the initial entities are built. Removes orphaned registry entries from prior runs with a different `device_id`. |
 | `find_room_registry_records(hass, entry, platform)` | To re-claim inactive-map entities from the registry at setup (builds stub entities for maps not currently active). |
@@ -457,10 +463,10 @@ Do not manually create tags or releases — let CI handle it.
 ### Working with Maps
 
 - `coordinator.active_map_id` — the map HA is using (user-selected). Never read `DATA_MAP_STATUS` to determine active map.
-- `coordinator.areas_map_id` — the map for which `DATA_AREAS` was last fetched. Compare to `active_map_id` in platform listeners to guard against stale signals.
+- `coordinator.active_map_id` — the single source of truth for which floor HA is displaying. Never use the removed `areas_map_id` or `map_available_for()`.
+- `coordinator.areas_for(map_id)` — areas list for any known map (active or inactive). Returns `[]` if no snapshot for that map yet. Use this instead of `coordinator.data[DATA_AREAS]` in entity code.
 - `coordinator.available_maps` — list of permanent maps with display names (position-based `"Map N"` if unnamed).
-- `coordinator.map_available_for(map_id)` — returns `True` if a per-map entity should be available. Handles grace period during map switches.
-- To switch maps programmatically: call `coordinator.async_set_active_map(map_id)`.
+- To switch maps programmatically: call `await coordinator.async_set_active_map(map_id)`. This is a pure local operation; background refresh keeps areas current on its own 600 s cadence.
 
 ### Debugging a Robot Integration
 

@@ -300,13 +300,15 @@ The robot does **not** auto-detect which floor it is on. The workflow for multi-
 
 1. Physically move the robot to the dock on the other floor.
 2. In HA, use **`select.active_map`** to select the correct floor map.
-3. The coordinator reloads rooms, areas, and map geometry for the selected floor.
+3. Room cards and entities for the new floor appear immediately — no reload needed.
 
 Room entity `unique_id` values include both the map ID and area ID, so rooms on different floors with identical area IDs never collide in the entity registry.
 
 The `select.active_map` entity lists all permanent saved maps by their user-assigned name (Cyrillic supported) or "Map 1", "Map 2" for unnamed maps. The `sensor.active_map` shows the name of the currently selected floor.
 
-> **Note:** `/set/use_map` returns error 101 on this firmware — the map can only be selected via the integration's `select.active_map` entity, which switches the coordinator's tracking context. The robot's own SLAM engine determines localisation from its physical position.
+> **Note:** `/set/use_map` returns error 101 on this firmware — the map can only be selected via the integration's `select.active_map` entity, which updates HA's tracking context. The robot's own SLAM engine determines localisation from its physical position.
+
+**How multi-map works internally:** At startup the integration fetches areas for every permanent map and pre-creates entities for all floors. Switching maps is a pure local operation — no extra HTTP calls — and entities for inactive floors are simply marked unavailable until selected. A uniform background refresh (every 600 s, paused during cleaning) keeps all maps' room data up to date.
 
 ---
 
@@ -319,7 +321,8 @@ The `select.active_map` entity lists all permanent saved maps by their user-assi
 | Robot position | 5 s cleaning / 60 s idle (live map enabled only) | `/get/rob_pose` |
 | Cleaned-area polygon + occupancy grid (live) | Every 5 s — **active cleaning only**, never polled when idle | `/get/seen_polygon`, `/get/cleaning_grid_map` |
 | Event log (incremental, `last_id` cursor) | Every 30 s | `/get/event_log` |
-| Rooms, areas, sensor health, maps, map status | Every 300 s | `/get/areas`, `/get/sensor_status`, `/get/robot_flags`, `/get/maps`, `/get/map_status` |
+| Rooms, areas, maps (all permanent floors) | Every 600 s (paused during cleaning; forced once on clean end) | `/get/maps`, `/get/areas` (fetched for every known permanent map) |
+| Sensor health, map status | Every 600 s | `/get/sensor_status`, `/get/robot_flags`, `/get/map_status` |
 | Cleaning schedule | Every 60 s | `/get/schedule` |
 | Lifetime statistics | Every 600 s | `/get/statistics`, `/get/permanent_statistics` |
 | Saved map geometry (walls, rooms, last-session grid) | Every 600 s | `/get/feature_map`, `/get/tile_map`, `/get/areas` (saved), `/get/seen_polygon` (saved), `/get/cleaning_grid_map` (saved) |
@@ -431,7 +434,7 @@ The schedule sensor (`sensor.<serial>_schedule`) reads `/get/schedule` every 60 
 | Dashboard not in sidebar | Reload the integration; check HA logs for Lovelace errors |
 | Auto-discovery not working | Use manual IP entry; open an issue with the mDNS service name your vacuum advertises |
 | Map view missing from dashboard | Enable `sensor.<serial>_live_map` in the entity list, then reload the integration |
-| Map shows wrong floor after robot moved | The integration detects floor changes on the 300-second areas poll; wait one cycle or reload |
+| Map shows wrong floor after robot moved | The robot does not auto-detect floor changes; manually select the correct floor via `select.active_map`. Room entities for the new floor appear immediately; area statistics refresh within 600 s |
 | Vacuum shows `error` state | Check dustbin is seated and brushes are not stuck — the `error` attribute shows the specific cause |
 | Mode sensor shows `cleaning` while docked | Robot is in **recharge-and-continue** — battery was low mid-clean; it will resume automatically when charged |
 | `queue_eta` sensor shows `unavailable` | Normal during recharge-and-continue; ETA resumes once the robot leaves the dock |
@@ -523,8 +526,10 @@ All communication is plain HTTP to port 8080 on the local network — no authent
 |---------|-------|
 | **Schedule create / edit from HA** | Schedules are read + toggle-only from HA. Create and edit schedule entries in the RobEye mobile app. |
 | **No-go zone / spot clean entities** | `area_type: "to_be_cleaned"` areas are skipped during entity creation; no HA entities are built for avoidance or spot zones yet. |
-| **Event log as HA events** | `/get/event_log` is consumed internally (recharge-and-continue detection, `type_id` 2000/1040) but events are not yet surfaced as HA events or sensors. |
-| **HACS default list** | Integration targets the HACS default list once `v1.0.0` is released. |
+| **Event log as HA events** | `/get/event_log` is consumed internally (recharge-and-continue detection, `type_id` 2000/1040) and drives `sensor.last_event` and `sensor.cleaning_queue.recent_events`, but events are not yet surfaced as native HA logbook events. |
+| **Schedule create / edit from HA** | Schedules are read + toggle-only from HA. Create and edit schedule entries in the RobEye mobile app. |
+| **No-go zone / spot clean entities** | `area_type: "to_be_cleaned"` areas are skipped during entity creation; no HA entities are built for avoidance or spot zones yet. |
+| **HACS default list** | Integration targets the HACS default list in a future release. |
 
 ---
 
