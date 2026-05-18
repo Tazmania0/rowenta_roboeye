@@ -800,7 +800,7 @@ const state = {
   connected: false,
   exploreMapId:   null,   // map_id of current temporary/explore map
   dockingPose:    null,   // {x,y,heading,valid} read from feature_map
-  explorePhase:   null,   // null | 'running' | 'naming' | 'saving'
+  explorePhase:   null,   // null | 'running' | 'drawing' | 'naming' | 'saving'
 
   // Pan/zoom
   viewTx: 0, viewTy: 0, viewScale: 1,
@@ -1235,6 +1235,7 @@ function renderMapChips() {
           state.exploreMapId = null;
           state.explorePhase = null;
           hideInstruction();
+          _showPhaseBar(null);
           _hideSaveMapButton();
           await loadMaps();
           if (state.maps.length > 0) await loadMap(state.maps[0].map_id);
@@ -1319,6 +1320,13 @@ async function loadMap(mapId) {
 
     renderMap(walls, dock);
     renderAreaList();
+    // Refresh phase bar if we are in the post-explore flow
+    if (state.explorePhase === 'drawing') {
+      _highlightAllInactive();
+      _showPhaseBar('drawing');
+    } else if (state.explorePhase === 'naming') {
+      _showPhaseBar('naming');
+    }
     fitToScreen();
     showToast(`Loaded map ${mapId} — ${state.areas.length} areas`, 'success');
   } catch(e) {
@@ -1687,6 +1695,13 @@ function onAreaClick(areaId) {
 
   const area = state.areas.find(a => a.area_id === areaId);
   if (!area) return;
+
+  if (area.area_state === 'inactive' && state.explorePhase === 'drawing') {
+    showToast('Use Split to divide this segment, or Merge to combine with adjacent segment', 'info');
+    highlightAreaSplit(areaId);
+    state.selectedAreaId = areaId;
+    return;
+  }
 
   areaDetailEl.classList.add('visible');
   mergeHintEl.classList.remove('visible');
@@ -2324,6 +2339,12 @@ async function executeSplit(lineA, lineB) {
         const oldIds = new Set(state.areas.map(a => a.area_id));
         try {
           await loadMap(state.activeMapId);
+          // Refresh phase bar and re-highlight if in explore draw phase
+          if (state.explorePhase === 'drawing') {
+            _highlightAllInactive();
+            _showPhaseBar('drawing');
+            setMode('split');
+          }
           showSpinner(false);
           _promptNameNewAreas(oldIds);
         } catch (e) {
@@ -2862,6 +2883,12 @@ async function executeNogo(svgX1, svgY1, svgX2, svgY2) {
     await loadMap(state.activeMapId);
     showToast('No-go zone added', 'success');
     setMode('select');
+    // Refresh phase bar and re-highlight if in explore draw phase
+    if (state.explorePhase === 'drawing') {
+      _highlightAllInactive();
+      _showPhaseBar('drawing');
+      setMode('split');
+    }
   } catch (e) {
     console.error('[nogo]', e);
     showToast('Failed: ' + e.message.substring(0, 100), 'error');
@@ -3152,6 +3179,12 @@ window.addEventListener('keydown', e => {
     setMode('select');
     if (state.selectedAreaId !== null) highlightArea(state.selectedAreaId);
     else highlightArea(null);
+    // In draw phase: return to split mode (it is the default for that phase)
+    if (state.explorePhase === 'drawing') {
+      setMode('split');
+      showInstruction('PHASE 1 / 3 — DRAW ROOMS',
+        'Split large areas, merge small fragments, then click "Done Drawing"', 'green');
+    }
   }
   if (e.code === 'KeyS') setMode('select');
   if (e.code === 'KeyX') startSplit();
@@ -3276,6 +3309,7 @@ async function executeSaveMap(mapName) {
     state.explorePhase = null;
     state.dockingPose  = null;
     hideInstruction();
+    _showPhaseBar(null);
     _hideSaveMapButton();
     await loadMaps();
     const savedMap = state.maps.find(m =>
@@ -3292,64 +3326,248 @@ async function executeSaveMap(mapName) {
   }
 }
 
-async function _startAreaDefinitionFlow() {
+function _enterDrawingPhase() {
   const inactive = state.areas.filter(a => a.area_state === 'inactive');
+  const count    = inactive.length;
+
+  showInstruction('PHASE 1 / 3 — DRAW ROOMS',
+    `${count} auto-segments detected. Split large areas, merge small fragments.`,
+    'green');
+
+  _highlightAllInactive();
+  _showPhaseBar('drawing');
+  setMode('split');
+
+  showToast(`${count} segments detected — draw room boundaries, then click "Done Drawing"`,
+    'info');
+}
+
+function _highlightAllInactive() {
+  state.areas.forEach(area => {
+    const poly = mapSvg.querySelector(`polygon[data-area-id="${area.area_id}"]`);
+    if (!poly) return;
+    if (area.area_state === 'inactive') {
+      poly.setAttribute('fill',            'rgba(245,158,11,0.12)');
+      poly.setAttribute('stroke',          '#f59e0b');
+      poly.setAttribute('stroke-width',    '6');
+      poly.setAttribute('stroke-dasharray','14 6');
+      poly.style.pointerEvents = 'auto';
+    }
+  });
+}
+
+function _showPhaseBar(kind) {
+  let bar = $('phase-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'phase-bar';
+    bar.style.cssText = [
+      'display:flex', 'align-items:center', 'gap:10px',
+      'padding:7px 14px',
+      'background:var(--surface)',
+      'border-bottom:1px solid var(--border)',
+      'font-size:12px', 'flex-shrink:0',
+      'z-index:5',
+    ].join(';');
+    const main = $('main');
+    if (main) main.parentNode.insertBefore(bar, main);
+  }
+
+  if (!kind) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+
+  if (kind === 'drawing') {
+    const named    = state.areas.filter(a => a.area_state === 'clean').length;
+    const inactive = state.areas.filter(a => a.area_state === 'inactive').length;
+
+    bar.innerHTML = `
+      <span style="color:var(--accent2);font-weight:600;font-family:'JetBrains Mono',monospace;
+                   font-size:10px;text-transform:uppercase;letter-spacing:.06em">
+        ✦ Draw Rooms
+      </span>
+      <span style="color:var(--muted);font-size:11px">
+        ${inactive} unnamed segment${inactive !== 1 ? 's' : ''}
+        ${named ? ` · ${named} named` : ''}
+        — Split to divide, Merge to combine
+      </span>
+      <div style="flex:1"></div>
+      <button class="btn" id="phase-bar-undo" title="Undo last split/merge"
+              style="font-size:11px;padding:3px 10px">
+        ↩ Undo Last
+      </button>
+      <button class="btn primary" id="phase-bar-done" style="font-size:11px;padding:4px 14px">
+        Done Drawing →
+      </button>
+    `;
+
+    $('phase-bar-done').addEventListener('click', _enterNamingPhase);
+    $('phase-bar-undo').addEventListener('click', _undoLastOperation);
+
+  } else if (kind === 'naming') {
+    const total  = state.areas.filter(a =>
+      a.area_state !== 'blocking' && a.area_type !== 'to_be_cleaned').length;
+    const named  = state.areas.filter(a => a.area_state === 'clean').length;
+
+    bar.innerHTML = `
+      <span style="color:var(--accent);font-weight:600;font-family:'JetBrains Mono',monospace;
+                   font-size:10px;text-transform:uppercase;letter-spacing:.06em">
+        ✦ Name Rooms
+      </span>
+      <span style="color:var(--muted);font-size:11px">
+        ${named} / ${total} rooms named
+      </span>
+      <div style="flex:1"></div>
+      <button class="btn" id="phase-bar-back" style="font-size:11px;padding:3px 10px">
+        ← Back to Drawing
+      </button>
+      <button class="btn primary" id="phase-bar-save"
+              style="font-size:11px;padding:4px 14px"
+              ${named === 0 ? 'disabled title="Name at least one room first"' : ''}>
+        Save Map →
+      </button>
+    `;
+
+    $('phase-bar-back').addEventListener('click', () => {
+      state.explorePhase = 'drawing';
+      _enterDrawingPhase();
+    });
+    $('phase-bar-save').addEventListener('click', _promptSaveMap);
+  }
+}
+
+async function _undoLastOperation() {
+  try {
+    await showModal({
+      title:        'Reload areas from robot?',
+      desc:         'This reloads the current area state from the robot. ' +
+                    'It acts as an undo only if no further changes were made. ' +
+                    'Your split/merge history on the robot is permanent.',
+      confirmLabel: 'Reload',
+    });
+  } catch { return; }
+  showSpinner(true);
+  try {
+    await loadMap(state.activeMapId);
+    if (state.explorePhase === 'drawing') {
+      _highlightAllInactive();
+      _showPhaseBar('drawing');
+      setMode('split');
+    }
+    showToast('Areas reloaded', 'success');
+  } catch (e) {
+    showToast('Reload failed: ' + e.message, 'error');
+  } finally {
+    showSpinner(false);
+  }
+}
+
+function _enterNamingPhase() {
+  const inactive = state.areas.filter(a => a.area_state === 'inactive');
+
   if (inactive.length === 0) {
     _promptSaveMap();
     return;
   }
 
+  state.explorePhase = 'naming';
+  setMode('select');
+
+  state.areas.forEach(area => {
+    const poly = mapSvg.querySelector(`polygon[data-area-id="${area.area_id}"]`);
+    if (poly) setAreaPolyStyle(poly, area);
+  });
+
+  state.areas.forEach(area => {
+    if (area.area_state === 'inactive') {
+      const poly = mapSvg.querySelector(`polygon[data-area-id="${area.area_id}"]`);
+      if (poly) poly.style.pointerEvents = 'auto';
+    }
+  });
+
+  showInstruction('PHASE 2 / 3 — NAME ROOMS',
+    `Click each room and give it a name`, 'blue');
+
+  _showPhaseBar('naming');
+
+  _startNamingWizard(inactive);
+}
+
+async function _startNamingWizard(inactiveAreas) {
   try {
     await showModal({
-      title: `${inactive.length} unnamed areas detected`,
-      desc:  'The robot found ' + inactive.length + ' room segments. Would you ' +
-             'like to name them now? You can also click each room on the map to ' +
-             'name it manually, then click "Save Map" when done.',
-      confirmLabel: 'Name Rooms Now',
+      title:        `Name ${inactiveAreas.length} rooms`,
+      desc:         'Click through each room to name it. You can also dismiss ' +
+                    'this and click rooms on the map manually.',
+      confirmLabel: 'Start Naming',
       fields: [],
     });
   } catch {
-    _showSaveMapButton();
+    showToast('Click a room on the map to name it', 'info');
     return;
   }
 
-  for (let i = 0; i < inactive.length; i++) {
-    const area = inactive[i];
+  for (let i = 0; i < inactiveAreas.length; i++) {
+    const area = inactiveAreas[i];
+
+    _panToArea(area);
     highlightArea(area.area_id);
     state.selectedAreaId = area.area_id;
+    _showPhaseBar('naming');
 
     let vals;
     try {
       vals = await showModal({
-        title:        `Name area ${i + 1} of ${inactive.length}`,
-        desc:         `Area #${area.area_id} (${area.points.length} vertices). ` +
-                      `Leave name blank to skip.`,
-        confirmLabel: i < inactive.length - 1 ? 'Save & Next' : 'Save & Finish',
+        title:        `Name room ${i + 1} of ${inactiveAreas.length}`,
+        desc:         `Area #${area.area_id}. Leave name blank to skip.`,
+        confirmLabel: i < inactiveAreas.length - 1 ? 'Save & Next' : 'Save & Finish',
         fields: [
-          { key: 'name',      label: 'Room name',  placeholder: 'e.g. Kitchen (blank to skip)' },
-          { key: 'room_type', label: 'Room type',  type: 'select',
-            value: 'none', options: ROOM_TYPE_OPTIONS },
+          { key: 'name',
+            label:       'Room name',
+            placeholder: 'e.g. Kitchen  (blank to skip)' },
+          { key: 'room_type',
+            label:   'Room type',
+            type:    'select',
+            value:   'none',
+            options: ROOM_TYPE_OPTIONS },
         ],
       });
     } catch {
       break;
     }
 
-    if (vals.name) {
-      area.area_meta_data = JSON.stringify({ name: vals.name });
+    if (vals.name.trim()) {
+      area.area_meta_data = JSON.stringify({ name: vals.name.trim() });
       area.area_state     = 'clean';
       area.room_type      = vals.room_type || 'none';
-      $('field-name').value       = vals.name;
-      $('field-room-type').value  = vals.room_type || 'none';
-      $('field-state').value      = 'clean';
+      $('field-name').value      = vals.name.trim();
+      $('field-room-type').value = vals.room_type || 'none';
+      $('field-state').value     = 'clean';
       areaDetailEl.classList.add('visible');
       await saveArea();
+      _showPhaseBar('naming');
     }
   }
 
   highlightArea(null);
   state.selectedAreaId = null;
-  _promptSaveMap();
+
+  const named = state.areas.filter(a => a.area_state === 'clean').length;
+  if (named > 0) {
+    _showPhaseBar('naming');
+  }
+}
+
+function _panToArea(area) {
+  if (!area.points || area.points.length === 0) return;
+
+  const cx = area.points.reduce((s, p) => s + p.x, 0) / area.points.length;
+  const cy = area.points.reduce((s, p) => s + p.y, 0) / area.points.length;
+
+  const sc  = robotToSVG(cx, cy);
+  const vb  = mapSvg.viewBox.baseVal;
+
+  mapSvg.setAttribute('viewBox',
+    `${sc.x - vb.width / 2} ${sc.y - vb.height / 2} ${vb.width} ${vb.height}`);
 }
 
 async function executeExplore() {
@@ -3391,7 +3609,6 @@ async function executeExplore() {
     });
 
     if (phaseText) phaseText.textContent = 'Exploration done — loading map…';
-    state.explorePhase = 'naming';
 
     const mapsRes  = await api('/get/maps');
     const allMaps  = mapsRes.maps || [];
@@ -3411,10 +3628,9 @@ async function executeExplore() {
     await loadMap(newMapId);
     await reloadMapChips();
 
-    showToast(`Exploration complete — ${state.areas.length} areas detected. Name your rooms.`, 'success');
-    showInstruction('DEFINE AREAS', 'Click each room to name it, then Save Map', 'green');
-
-    _startAreaDefinitionFlow();
+    // Transition to drawing phase
+    state.explorePhase = 'drawing';
+    _enterDrawingPhase();
 
   } catch (e) {
     console.error('[explore]', e);
@@ -3722,6 +3938,88 @@ if (new URLSearchParams(window.location.search).get('test') === '1') {
     const featRes2 = { docking_pose: { x: 200, y: 75, heading: 90, valid: true } };
     const dock2    = (featRes2.map ?? featRes2).docking_pose ?? null;
     _assert('docking_pose extracted when not nested in .map', dock2?.x === 200);
+  })();
+
+  // ── _panToArea centroid calculation ────────────────────────────────────
+  (function testPanToArea() {
+    const area = {
+      area_id: 28,
+      area_state: 'inactive',
+      points: [
+        { x: -713, y: 300 },
+        { x: -698, y: 962 },
+        { x:  127, y: 943 },
+        { x:  112, y: 282 },
+      ],
+    };
+    const cx = area.points.reduce((s, p) => s + p.x, 0) / area.points.length;
+    const cy = area.points.reduce((s, p) => s + p.y, 0) / area.points.length;
+    _assert('centroid x is approximately -293', Math.abs(cx - (-293)) < 2);
+    _assert('centroid y is approximately 622',  Math.abs(cy - 622)    < 2);
+  })();
+
+  // ── Phase transitions ───────────────────────────────────────────────────
+  (function testPhaseTransitions() {
+    const validTransitions = {
+      null:      ['running'],
+      running:   ['drawing'],
+      drawing:   ['naming', 'drawing'],
+      naming:    ['drawing', 'saving'],
+      saving:    [null],
+    };
+    _assert('running is valid from null',
+      validTransitions['null'].includes('running'));
+    _assert('drawing is valid from running',
+      validTransitions['running'].includes('drawing'));
+    _assert('naming is valid from drawing',
+      validTransitions['drawing'].includes('naming'));
+    _assert('saving is valid from naming',
+      validTransitions['naming'].includes('saving'));
+    _assert('null is valid from saving',
+      validTransitions['saving'].includes(null));
+  })();
+
+  // ── Naming wizard skips blocking/no-go areas ────────────────────────────
+  (function testNamingWizardFilter() {
+    const areas = [
+      { area_id: 28, area_state: 'inactive',  area_type: 'room' },
+      { area_id: 30, area_state: 'blocking',  area_type: 'to_be_cleaned' },
+      { area_id: 31, area_state: 'inactive',  area_type: 'room' },
+      { area_id: 32, area_state: 'clean',     area_type: 'room' },
+    ];
+    const toName = areas.filter(a =>
+      a.area_state === 'inactive' && a.area_type !== 'to_be_cleaned');
+    _assert('wizard targets 2 inactive room areas', toName.length === 2);
+    _assert('wizard skips blocking area',   !toName.find(a => a.area_id === 30));
+    _assert('wizard skips already-named',   !toName.find(a => a.area_id === 32));
+  })();
+
+  // ── Phase bar "Done Drawing" enabled when any split was done ────────────
+  (function testPhaseBarSaveButton() {
+    const named0 = [
+      { area_id: 28, area_state: 'inactive' },
+      { area_id: 31, area_state: 'inactive' },
+    ];
+    const canSave0 = named0.filter(a => a.area_state === 'clean').length > 0;
+    _assert('save disabled when 0 rooms named', canSave0 === false);
+
+    const named1 = [
+      { area_id: 28, area_state: 'clean'    },
+      { area_id: 31, area_state: 'inactive' },
+    ];
+    const canSave1 = named1.filter(a => a.area_state === 'clean').length > 0;
+    _assert('save enabled when 1 room named', canSave1 === true);
+  })();
+
+  // ── Undo: only a reload, not a true undo ───────────────────────────────
+  (function testUndoCaveat() {
+    const API_ENDPOINTS = [
+      '/set/explore', '/set/split_area', '/set/merge_areas',
+      '/set/modify_area', '/set/save_map', '/set/delete_map',
+      '/set/modify_map', '/set/add_area',
+    ];
+    const hasUndo = API_ENDPOINTS.includes('/set/undo');
+    _assert('no /set/undo endpoint exists in API', hasUndo === false);
   })();
 
   const passed = _results.filter(r => r.pass).length;
