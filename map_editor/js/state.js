@@ -18,6 +18,16 @@ export const state = {
   explorePhase:   null,   // null | 'running' | 'drawing' | 'naming' | 'saving'
   splitFormat:    null,   // last successful split URL format label
 
+  // Robot live state
+  robPose:            null,
+  robPoseTimer:       null,
+  robotMode:          null,
+  robotCharging:      null,
+  statusTimer:        null,
+  mapHasUnsavedEdits: false,
+  _lastWalls:         [],
+  _lastDock:          null,
+
   // Pan/zoom
   viewTx: 0, viewTy: 0, viewScale: 1,
   panStart: null,
