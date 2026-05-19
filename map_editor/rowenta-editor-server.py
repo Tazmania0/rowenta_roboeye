@@ -53,7 +53,7 @@ class Handler(BaseHTTPRequestHandler):
     def _clean_path(self, raw):
         # HA ingress injects a token path segment before our routes.
         # Normalise to bare /get/... or /set/... path.
-        for marker in ('/get/', '/set/', '/config', '/js/', '/rowenta-map-editor.css'):
+        for marker in ('/get/', '/set/', '/js/', '/rowenta-map-editor.css', '/config'):
             idx = raw.find(marker)
             if idx >= 0:
                 return raw[idx:]
