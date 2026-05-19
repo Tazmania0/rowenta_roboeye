@@ -11,6 +11,7 @@ import { executeSplit } from './split.js';
 import { startSplit } from './split.js';
 import { startMerge } from './merge.js';
 import { executeNogo, executeSpot, handleSpotClick, handleBlockClick } from './nogo.js';
+import { startGoTo, executeGoTo } from './robot.js';
 
 const mapSvg       = document.getElementById('map-svg');
 const areaDetailEl = document.getElementById('area-detail');
@@ -37,6 +38,12 @@ export function initEvents(onAreaClick) {
   // ── SVG click: bubble phase (split, select)
   mapSvg.addEventListener('click', e => {
     if (state.mode === 'spot' || state.mode === 'block') {
+      return;
+    }
+
+    if (state.mode === 'goto') {
+      const pt = eventToSVGPoint(e);
+      executeGoTo(pt.x, pt.y);
       return;
     }
 
@@ -194,6 +201,7 @@ export function initEvents(onAreaClick) {
       clearSplitOverlay();
       hideInstruction();
       mergeHintEl.classList.remove('visible');
+      if (state.mode === 'goto') setMode('select');
       setMode('select');
       if (state.selectedAreaId !== null) highlightArea(state.selectedAreaId);
       else highlightArea(null);
@@ -208,6 +216,8 @@ export function initEvents(onAreaClick) {
     if (e.code === 'KeyX') startSplit();
     if (e.code === 'KeyM') startMerge();
     if (e.code === 'KeyF') fitToScreen();
+    if (e.code === 'KeyV') { import('./nogo.js').then(m => m.startSpot()); }
+    if (e.code === 'KeyG') startGoTo();
   });
   window.addEventListener('keyup', e => {
     if (e.code === 'Space') setMode('select');

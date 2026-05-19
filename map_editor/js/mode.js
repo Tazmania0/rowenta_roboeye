@@ -13,12 +13,12 @@ export function setMode(mode) {
   mapSvg.className = `mode-${mode}`;
 
   // Update toolbar
-  ['select','pan','split','merge','block','spot'].forEach(m => {
-    const btn = document.getElementById('tool-' + (m==='merge'?'merge':m==='block'?'block':m));
+  ['select','pan','split','merge','block','spot','goto'].forEach(m => {
+    const btn = document.getElementById('tool-' + m);
     if (btn) btn.classList.toggle('active', m === mode);
   });
 
-  const modeNames = { select: 'Select', pan: 'Pan', split: 'Split', merge: 'Merge', block: 'No-Go Draw', spot: 'Spot Draw' };
+  const modeNames = { select: 'Select', pan: 'Pan', split: 'Split', merge: 'Merge', block: 'No-Go Draw', spot: 'Spot Draw', goto: 'Go To' };
   statusMode.textContent = `Mode: ${modeNames[mode] || mode}`;
 }
 
