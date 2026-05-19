@@ -46,7 +46,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         path   = args[0] if args else ''
         status = args[1] if len(args) > 1 else ''
-        tag = "→ robot" if ('/get/' in str(path) or '/set/' in str(path)) else "  local"
+        tag = "-> robot" if ('/get/' in str(path) or '/set/' in str(path)) else "   local"
         print(f"  {tag}  {path}  [{status}]", flush=True)
 
     # ── Strip HA ingress prefix (e.g. /api/hassio_ingress/abc123/get/maps) ──
@@ -99,7 +99,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(body)
                 if 'robot_ip' in data:
                     _config['robot_ip'] = data['robot_ip'].strip()
-                    print(f"  config  robot_ip updated → {_config['robot_ip']}", flush=True)
+                    print(f"  config  robot_ip updated -> {_config['robot_ip']}", flush=True)
                 self._respond(200, 'application/json',
                               json.dumps({"ok": True}).encode())
             except Exception as e:
@@ -170,12 +170,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
 
     def _respond(self, status, ctype, body):
-        self.send_response(status)
-        self.send_header('Content-Type', ctype)
-        self.send_header('Content-Length', len(body))
-        self._cors_headers()
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header('Content-Type', ctype)
+            self.send_header('Content-Length', len(body))
+            self.send_header('Cache-Control', 'no-store, max-age=0')
+            self.send_header('Pragma', 'no-cache')
+            self._cors_headers()
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            # Browsers sometimes cancel an in-flight request during reload,
+            # navigation, or devtools probing. Nothing is wrong with the robot
+            # proxy in that case, so keep the server console quiet.
+            pass
 
 
 def main():
@@ -198,14 +206,14 @@ def main():
     url = f"http://localhost:{args.port}"
 
     print()
-    print("  ╔══════════════════════════════════════════════╗")
-    print("  ║  Rowenta Map Editor                          ║")
-    print("  ╚══════════════════════════════════════════════╝")
+    print("  +----------------------------------------------+")
+    print("  |  Rowenta Map Editor                          |")
+    print("  +----------------------------------------------+")
     print(f"  Open:   {url}")
     if _config['robot_ip']:
         print(f"  Robot:  {_config['robot_ip']}:{ROBOT_PORT}")
     else:
-        print(f"  Robot:  — enter IP in the browser UI —")
+        print("  Robot:  enter IP in the browser UI")
     print("  Stop:   Ctrl+C")
     print()
 

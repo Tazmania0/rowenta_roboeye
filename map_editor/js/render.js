@@ -115,7 +115,7 @@ export function renderMap(walls=[], dock=null) {
       poly.setAttribute('stroke', '#ef4444');
       poly.setAttribute('stroke-width', '6');
       poly.setAttribute('stroke-dasharray', '10 8');
-      poly.style.pointerEvents = 'none';  // blocking zones not interactable
+      poly.style.pointerEvents = 'auto';
     } else {
       // inactive / unknown — render beneath named rooms, don't intercept clicks
       poly.setAttribute('fill', 'rgba(100,116,139,0.08)');
@@ -126,7 +126,7 @@ export function renderMap(walls=[], dock=null) {
     }
 
     poly.setAttribute('stroke-linejoin', 'round');
-    if (st !== 'blocking' && st !== 'proposed_blocking') {
+    if (st !== 'inactive' && st !== 'declined_blocking') {
       poly.style.pointerEvents = 'auto';
       poly.style.cursor = 'pointer';
       poly.style.transition = 'fill 0.15s';
@@ -136,8 +136,7 @@ export function renderMap(walls=[], dock=null) {
       poly.style.transition = 'fill 0.15s';
     }
 
-    // Only named (clean) rooms are interactable — inactive/blocking
-    // already have pointerEvents:none, so these events only fire for clean areas
+    // Named rooms, no-go areas, and clean spots are interactable so they can be selected/deleted
     poly.addEventListener('mouseenter', () => {
       if (area.area_id !== state.selectedAreaId)
         poly.setAttribute('fill', 'rgba(255,255,255,0.08)');
