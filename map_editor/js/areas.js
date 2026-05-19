@@ -3,8 +3,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { state } from './state.js';
 import { apiText } from './api.js';
-import { showToast, showSpinner, showInstruction } from './modal.js';
+import { showToast, showSpinner, showInstruction, showModal } from './modal.js';
 import { highlightArea, highlightAreaSplit, renderAreaList, renderMap, getAreaName } from './render.js';
+import { loadMap } from './load.js';
+import { _updateSaveButton } from './mapops.js';
 
 const areaDetailEl = document.getElementById('area-detail');
 const mergeHintEl  = document.getElementById('merge-hint');
@@ -55,6 +57,11 @@ export function onAreaClick(areaId) {
   document.getElementById('field-state').value     = area.area_state || 'clean';
   document.getElementById('field-fan').value       = String(area.cleaning_parameter_set || 0);
   document.getElementById('field-strategy').value  = area.strategy_mode || 'normal';
+  const floorTypeEl = document.getElementById('field-floor-type');
+  if (floorTypeEl) floorTypeEl.value = area.floor_type || 'none';
+  _renderAreaStats(area);
+  const btnClean = document.getElementById('btn-clean-area');
+  if (btnClean) btnClean.disabled = area.area_state !== 'clean';
 }
 
 export function updateSplitListUI(areaId) {
@@ -75,6 +82,7 @@ export async function saveArea() {
   const areaState = document.getElementById('field-state').value;
   const fanSpeed  = parseInt(document.getElementById('field-fan').value);
   const strategy  = document.getElementById('field-strategy').value;
+  const floorType = document.getElementById('field-floor-type')?.value || 'none';
 
   const metaData = name ? JSON.stringify({ name }) : '';
   const currentMetaData = area.area_meta_data || '';
@@ -91,7 +99,7 @@ export async function saveArea() {
     area_state:            areaState,
     area_type:             area.area_type || 'room',
     cleaning_parameter_set: fanSpeed,
-    floor_type:            area.floor_type || 'default',
+    floor_type:            floorType,
     method:                area.method    || 'normal',
     pump_volume:           area.pump_volume || 'default',
     room_type:             roomType,
@@ -113,6 +121,7 @@ export async function saveArea() {
         room_type: roomType,
         cleaning_parameter_set: fanSpeed,
         strategy_mode: strategy,
+        floor_type: floorType,
       }),
       changesMetadata: true,
       localPatch: {
@@ -121,6 +130,7 @@ export async function saveArea() {
         room_type: roomType,
         cleaning_parameter_set: fanSpeed,
         strategy_mode: strategy,
+        floor_type: floorType,
       },
     },
     {
@@ -213,9 +223,12 @@ export async function saveArea() {
       ...(Object.prototype.hasOwnProperty.call(savedPayload, 'room_type') ? { room_type: roomType } : {}),
       ...(Object.prototype.hasOwnProperty.call(savedPayload, 'cleaning_parameter_set') ? { cleaning_parameter_set: fanSpeed } : {}),
       ...(Object.prototype.hasOwnProperty.call(savedPayload, 'strategy_mode') ? { strategy_mode: strategy } : {}),
+      ...(Object.prototype.hasOwnProperty.call(savedPayload, 'floor_type') ? { floor_type: floorType } : {}),
     });
     renderAreaList();
     renderMap();
+    state.mapHasUnsavedEdits = true;
+    _updateSaveButton();
     showToast('Area saved', 'success');
   } catch(e) {
     showToast('Save failed: ' + e.message, 'error');
@@ -234,4 +247,93 @@ export async function toggleBlock() {
   const isBlocked = area.area_state === 'blocking' || area.area_state === 'proposed_blocking';
   document.getElementById('field-state').value = isBlocked ? 'clean' : 'blocking';
   await saveArea();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE AREA
+// ─────────────────────────────────────────────────────────────────────────────
+export async function executeDeleteArea() {
+  const areaId = state.selectedAreaId;
+  if (!areaId) return;
+  const area = state.areas.find(a => a.area_id === areaId);
+  if (!area) return;
+  const name    = getAreaName(area);
+  const isNamed = area.area_state === 'clean';
+  try {
+    await showModal({
+      title:        `Delete "${name}"?`,
+      desc:         isNamed
+        ? 'Removes the room, its name, and all cleaning statistics.'
+        : 'Removes this area segment from the map.',
+      confirmLabel: 'Delete Area', danger: true,
+    });
+  } catch { return; }
+  showSpinner(true);
+  try {
+    const { api, pollCmd } = await import('./api.js');
+    const res   = await api(`/set/delete_area?map_id=${state.activeMapId}&area_id=${areaId}`);
+    const cmdId = res?.cmd_id ?? res?.cmdId;
+    if (cmdId) await pollCmd(cmdId, 15000);
+    else await new Promise(r => setTimeout(r, 1500));
+    state.areas = state.areas.filter(a => a.area_id !== areaId);
+    state.selectedAreaId = null;
+    state.mapHasUnsavedEdits = true;
+    _updateSaveButton();
+    renderMap(state._lastWalls, state._lastDock);
+    renderAreaList();
+    areaDetailEl.classList.remove('visible');
+    showToast(`"${name}" deleted`, 'success');
+  } catch (e) {
+    showToast('Delete failed: ' + e.message.substring(0, 80), 'error');
+    await loadMap(state.activeMapId);
+  } finally { showSpinner(false); }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLEAN AREA NOW
+// ─────────────────────────────────────────────────────────────────────────────
+export async function executeCleanArea() {
+  const areaId = state.selectedAreaId;
+  if (!areaId) { showToast('No area selected', 'error'); return; }
+  const area = state.areas.find(a => a.area_id === areaId);
+  if (!area) return;
+  try {
+    await showModal({ title: `Clean "${getAreaName(area)}"?`,
+      desc: 'Robot will start cleaning this room immediately.',
+      confirmLabel: 'Start Cleaning' });
+  } catch { return; }
+  showSpinner(true);
+  try {
+    const { api } = await import('./api.js');
+    const fan  = area.cleaning_parameter_set ?? 0;
+    const path = `/set/clean_map?map_id=${state.activeMapId}&area_ids=${areaId}`
+               + `&cleaning_parameter_set=${fan}&cleaning_strategy_mode=1`;
+    await api(path);
+    showToast(`Cleaning "${getAreaName(area)}"…`, 'success');
+  } catch (e) { showToast('Clean failed: ' + e.message.substring(0, 80), 'error'); }
+  finally { showSpinner(false); }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AREA STATISTICS
+// ─────────────────────────────────────────────────────────────────────────────
+export function _renderAreaStats(area) {
+  const el = document.getElementById('area-stats');
+  if (!el) return;
+  const stats = area._raw?.statistics;
+  if (!stats) { el.style.display = 'none'; return; }
+  const areaM2      = (stats.area_size / 1_000_000).toFixed(1);
+  const avgMins     = stats.average_cleaning_time > 0
+    ? Math.round(stats.average_cleaning_time / 60) + ' min' : '—';
+  const lastCleaned = stats.last_cleaned?.year === 2001 ? 'Never'
+    : `${stats.last_cleaned.year}-${String(stats.last_cleaned.month).padStart(2, '0')}-`
+    + String(stats.last_cleaned.day).padStart(2, '0');
+  el.style.display = '';
+  el.innerHTML = `<div class="panel-title">Statistics</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:11px">
+      <span style="color:var(--muted)">Area</span><span>${areaM2} m²</span>
+      <span style="color:var(--muted)">Cleanings</span><span>${stats.cleaning_counter}</span>
+      <span style="color:var(--muted)">Avg time</span><span>${avgMins}</span>
+      <span style="color:var(--muted)">Last cleaned</span><span>${lastCleaned}</span>
+    </div>`;
 }

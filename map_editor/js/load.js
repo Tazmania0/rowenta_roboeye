@@ -129,6 +129,9 @@ export async function loadMap(mapId) {
     state.dockingPose = dock;   // cache for executeSaveMap
     console.log('[rowenta-editor] walls:', walls.length, '  dock:', dock);
 
+    state._lastWalls = walls;
+    state._lastDock  = dock;
+    state.mapHasUnsavedEdits = false;
     renderMap(walls, dock);
     renderAreaList();
     // Refresh phase bar if we are in the post-explore flow
@@ -142,6 +145,19 @@ export async function loadMap(mapId) {
     }
     fitToScreen();
     showToast(`Loaded map ${mapId} — ${state.areas.length} areas`, 'success');
+    // Update map operations buttons
+    const { _updateMapOpsButtons } = await import('./mapops.js');
+    _updateMapOpsButtons();
+    // Check capability for auto no-go zones
+    api('/get/product_feature_set').then(f => {
+      const has = f?.features?.includes('auto_no_go_zones') || f?.auto_no_go_zones === true;
+      const btn = document.getElementById('btn-propose-nogo');
+      if (btn) btn.style.display = has ? '' : 'none';
+    }).catch(() => {});
+    // Start live polling
+    const { startRobPosePolling, startStatusPolling } = await import('./robot.js');
+    startRobPosePolling();
+    startStatusPolling();
   } catch(e) {
     showToast('Failed to load map: ' + e.message, 'error');
     emptyState.style.display = 'flex';

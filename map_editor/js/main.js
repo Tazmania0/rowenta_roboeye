@@ -7,8 +7,7 @@ import * as config from './config.js';
 import { setProxyRobotIP } from './api.js';
 import { showToast, showSpinner, setStatus, showInstruction } from './modal.js';
 import { setAreaClickCallback, renderMapChips, renderAreaList } from './render.js';
-import { setHandleMergeClick } from './areas.js';
-import { onAreaClick, saveArea, toggleBlock, updateSplitListUI } from './areas.js';
+import { setHandleMergeClick, onAreaClick, saveArea, toggleBlock, updateSplitListUI, executeDeleteArea, executeCleanArea } from './areas.js';
 import { startSplit } from './split.js';
 import { startMerge, handleMergeClick } from './merge.js';
 import { startBlock, startBlockZone, startSpot } from './nogo.js';
@@ -16,6 +15,8 @@ import { setMode, fitToScreen } from './mode.js';
 import { loadMaps, loadMap } from './load.js';
 import { executeExplore, executeDeleteMap, _promptSaveMap } from './explore.js';
 import { initEvents } from './events.js';
+import { executeSaveExistingMap, executeRenameMap, executeGoHome, executeResetStats, _updateMapOpsButtons } from './mapops.js';
+import { startGoTo, executeProposedNoGo } from './robot.js';
 
 const ipInput = document.getElementById('ip-input');
 
@@ -81,6 +82,15 @@ document.getElementById('btn-explore').addEventListener('click', executeExplore)
 document.getElementById('btn-delete-map').addEventListener('click', () => {
   if (state.activeMapId) executeDeleteMap(state.activeMapId);
 });
+
+document.getElementById('btn-save-map-edits')?.addEventListener('click', executeSaveExistingMap);
+document.getElementById('btn-rename-map')    ?.addEventListener('click', executeRenameMap);
+document.getElementById('btn-go-home')       ?.addEventListener('click', executeGoHome);
+document.getElementById('btn-propose-nogo')  ?.addEventListener('click', executeProposedNoGo);
+document.getElementById('btn-reset-stats')   ?.addEventListener('click', executeResetStats);
+document.getElementById('btn-clean-area')    ?.addEventListener('click', executeCleanArea);
+document.getElementById('btn-delete-area')   ?.addEventListener('click', executeDeleteArea);
+document.getElementById('tool-goto')         ?.addEventListener('click', startGoTo);
 
 document.getElementById('btn-save-area').addEventListener('click', saveArea);
 document.getElementById('btn-split-area').addEventListener('click', startSplit);
@@ -361,6 +371,27 @@ if (new URLSearchParams(window.location.search).get('test') === '1') {
     ];
     const hasUndo = API_ENDPOINTS.includes('/set/undo');
     _assert('no /set/undo endpoint exists in API', hasUndo === false);
+  })();
+
+  (function testRoomTypeCompleteness() {
+    import('./config.js').then(({ ROOM_TYPES }) => {
+      const APK = ['armchair','basement','bath','bed','cables','chair','coffee_table','corridor',
+        'couch','desk','dining','dining_table','flower','garage','garderobe','hallway','kids',
+        'kitchen','lamp','laundry_room','lavatory','living','none','office','pet_area',
+        'play_room','sleeping','stool','storage','study','toys'];
+      const ui = ROOM_TYPES.map(r => r.value);
+      const missing = APK.filter(t => !ui.includes(t));
+      if (missing.length > 0) console.error('FAIL: APK room types missing from UI:', missing);
+      else console.log('[test] room type completeness: PASS');
+      if (ui.includes('no_go_zone')) console.error('FAIL: no_go_zone should not be in dropdown');
+      else console.log('[test] no_go_zone not in dropdown: PASS');
+    });
+  })();
+
+  (function testCleanAreaUrl() {
+    const url = `/set/clean_map?map_id=45&area_ids=32&cleaning_parameter_set=2&cleaning_strategy_mode=1`;
+    _assert('clean URL has area_ids',              url.includes('area_ids=32'));
+    _assert('clean URL has cleaning_strategy_mode', url.includes('cleaning_strategy_mode=1'));
   })();
 
   const passed = _results.filter(r => r.pass).length;
