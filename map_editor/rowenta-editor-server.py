@@ -25,12 +25,17 @@ import webbrowser
 import urllib.request
 import urllib.error
 import urllib.parse
+import mimetypes
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('text/css', '.css')
 
 ROBOT_PORT   = 8080
 DEFAULT_PORT = 8765
 HTML_FILE    = Path(__file__).parent / "rowenta-map-editor.html"
+STATIC_DIR   = Path(__file__).parent
 
 # Shared mutable config — safe because GIL + single write path
 _config = {"robot_ip": "", "port": DEFAULT_PORT}
@@ -48,7 +53,7 @@ class Handler(BaseHTTPRequestHandler):
     def _clean_path(self, raw):
         # HA ingress injects a token path segment before our routes.
         # Normalise to bare /get/... or /set/... path.
-        for marker in ('/get/', '/set/', '/config'):
+        for marker in ('/get/', '/set/', '/config', '/js/', '/rowenta-map-editor.css'):
             idx = raw.find(marker)
             if idx >= 0:
                 return raw[idx:]
@@ -73,6 +78,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if path.startswith('/get/') or path.startswith('/set/'):
             self._proxy(path, query)
+            return
+
+        # Serve static assets (CSS, JS modules)
+        if path.endswith('.css') or path.endswith('.js'):
+            self._serve_static(path)
             return
 
         self._respond(404, 'text/plain', b'Not found')
@@ -111,6 +121,22 @@ class Handler(BaseHTTPRequestHandler):
             return
         body = HTML_FILE.read_bytes()
         self._respond(200, 'text/html; charset=utf-8', body)
+
+    def _serve_static(self, path):
+        # Resolve relative to STATIC_DIR, prevent directory traversal
+        rel = path.lstrip('/')
+        file_path = (STATIC_DIR / rel).resolve()
+        try:
+            file_path.relative_to(STATIC_DIR.resolve())
+        except ValueError:
+            self._respond(403, 'text/plain', b'Forbidden')
+            return
+        if not file_path.exists() or not file_path.is_file():
+            self._respond(404, 'text/plain', f'Not found: {rel}'.encode())
+            return
+        ctype = mimetypes.guess_type(str(file_path))[0] or 'application/octet-stream'
+        body = file_path.read_bytes()
+        self._respond(200, ctype, body)
 
     def _proxy(self, path, query):
         ip = _config.get('robot_ip', '').strip()
