@@ -393,6 +393,8 @@ async def async_setup_entry(
     # ── Per-room sensors (from all known maps) ────────────────────────
     # Per-map entity tracking: map_id -> {area_id -> [entities]}.
     known_sensors_by_map: dict[str, dict] = {}
+    # Tracks last-known area names per map to detect renames: map_id -> {area_id -> name}.
+    known_area_names_by_map: dict[str, dict[str, str]] = {}
 
     # Migration: re-enable entities disabled by the old disable/enable model.
     async_enable_all_room_entities(hass, config_entry, "sensor")
@@ -419,6 +421,11 @@ async def async_setup_entry(
         )
         if initial_by_area:
             known_sensors_by_map[map_id] = initial_by_area
+        known_area_names_by_map[map_id] = {
+            str(a.get("id")): _parse_sensor_area_name(a)
+            for a in areas_list
+            if a.get("id") is not None
+        }
         entities.extend(initial_sensors)
 
     room_uids = {
@@ -440,19 +447,29 @@ async def async_setup_entry(
 
         map_sensors = known_sensors_by_map.setdefault(map_id, {})
 
-        current_ids: set = {
-            str(area_id)
+        current_id_to_name: dict[str, str] = {
+            str(area_id): _parse_sensor_area_name(area)
             for area in areas
             if (area_id := area.get("id")) is not None
             and _parse_sensor_area_name(area)
         }
+        current_ids: set = set(current_id_to_name.keys())
+
+        # Detect renamed areas (same area_id, different name) — treat as stale
+        # so the entity is removed and re-created with the updated room name.
+        old_names = known_area_names_by_map.get(map_id, {})
+        renamed_ids = {
+            aid for aid in current_ids
+            if aid in map_sensors and old_names.get(aid) != current_id_to_name[aid]
+        }
+        known_area_names_by_map[map_id] = current_id_to_name
 
         if map_id == coordinator.active_map_id:
             async_remove_stale_room_entities(
                 hass, config_entry, coordinator, "sensor", current_ids
             )
 
-        stale_ids = set(map_sensors.keys()) - current_ids
+        stale_ids = (set(map_sensors.keys()) - current_ids) | renamed_ids
         from homeassistant.helpers import entity_registry as er
         _ent_reg = er.async_get(hass)
         for area_id in stale_ids:

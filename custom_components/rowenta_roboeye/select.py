@@ -68,6 +68,8 @@ async def async_setup_entry(
     # This avoids the async_remove/async_add race that caused duplicate-ID errors
     # when switching maps: we never remove+recreate entities for map switches.
     known_entities_by_map: dict[str, dict] = {}
+    # Tracks last-known area names per map to detect renames: map_id -> {area_id -> name}.
+    known_area_names_by_map: dict[str, dict[str, str]] = {}
 
     _committed = coordinator.active_map_id
 
@@ -90,6 +92,11 @@ async def async_setup_entry(
         )
         if initial_by_area:
             known_entities_by_map[map_id] = initial_by_area
+        known_area_names_by_map[map_id] = {
+            str(a.get("id")): _parse_select_area_name(a)
+            for a in areas_list
+            if a.get("id") is not None
+        }
         entities.extend(initial_selects)
 
     room_uids = {
@@ -106,14 +113,16 @@ async def async_setup_entry(
     def _async_on_areas_updated(map_id: str) -> None:
         areas = coordinator.areas_for(map_id)
 
+        current_id_to_name: dict[str, str] = {
+            str(area_id): _parse_select_area_name(area)
+            for area in areas
+            if (area_id := area.get("id")) is not None
+            and _parse_select_area_name(area)
+        }
+        current_ids: set = set(current_id_to_name.keys())
+
         # Only purge stale registry entries for the committed active map.
         if map_id == coordinator.active_map_id:
-            current_ids: set = {
-                str(area_id)
-                for area in areas
-                if (area_id := area.get("id")) is not None
-                and _parse_select_area_name(area)
-            }
             # Purge registry entries for area_ids no longer on this map.  This
             # catches orphans whose area_ids changed between HA sessions (e.g. after
             # a room redraw) when async_remove_stale_room_entities wasn't called at
@@ -121,17 +130,19 @@ async def async_setup_entry(
             async_remove_stale_room_entities(
                 hass, config_entry, coordinator, "select", current_ids
             )
-        else:
-            current_ids = {
-                str(area_id)
-                for area in areas
-                if (area_id := area.get("id")) is not None
-                and _parse_select_area_name(area)
-            }
 
         map_entities = known_entities_by_map.setdefault(map_id, {})
 
-        stale_ids = set(map_entities.keys()) - current_ids
+        # Detect renamed areas (same area_id, different name) — treat as stale
+        # so entities are removed and re-created with the updated room name.
+        old_names = known_area_names_by_map.get(map_id, {})
+        renamed_ids = {
+            aid for aid in current_ids
+            if aid in map_entities and old_names.get(aid) != current_id_to_name[aid]
+        }
+        known_area_names_by_map[map_id] = current_id_to_name
+
+        stale_ids = (set(map_entities.keys()) - current_ids) | renamed_ids
         from homeassistant.helpers import entity_registry as er
         _ent_reg = er.async_get(hass)
         for area_id in stale_ids:
