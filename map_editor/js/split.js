@@ -158,23 +158,31 @@ export async function executeSplit(lineA, lineB) {
         state.splitPoints = [];
         clearSplitOverlay();
         const oldIds = new Set(state.areas.map(a => a.area_id));
-        // Retry loadMap until the split is visible in /get/areas — firmware may lag
-        let splitVisible = false;
-        for (let attempt = 0; attempt < 4 && !splitVisible; attempt++) {
-          if (attempt > 0) await new Promise(r => setTimeout(r, 2000));
-          await loadMap(state.activeMapId);
-          splitVisible = state.areas.some(a =>
-            a.area_id !== null && !oldIds.has(a.area_id) && a.area_state !== 'blocking'
-          );
+        // Retry loadMap until the split is visible in /get/areas — firmware may lag.
+        // Errors here must not fall through to the format-probing catch — the split
+        // command already succeeded and retrying would send a duplicate split request.
+        try {
+          let splitVisible = false;
+          for (let attempt = 0; attempt < 4 && !splitVisible; attempt++) {
+            if (attempt > 0) await new Promise(r => setTimeout(r, 2000));
+            await loadMap(state.activeMapId);
+            splitVisible = state.areas.some(a =>
+              a.area_id !== null && !oldIds.has(a.area_id) && a.area_state !== 'blocking'
+            );
+          }
+          if (state.explorePhase === 'drawing') {
+            const { _highlightAllInactive, _showPhaseBar } = await import('./explore.js');
+            _highlightAllInactive();
+            _showPhaseBar('drawing');
+            setMode('split');
+          }
+          showSpinner(false);
+          await _promptNameNewAreas(oldIds);
+        } catch (refreshErr) {
+          console.warn('[split] post-split refresh/naming error (split was accepted):', refreshErr);
+          showSpinner(false);
+          showToast('Split accepted — map refresh failed. Reload the page to see the result.', 'warn');
         }
-        if (state.explorePhase === 'drawing') {
-          const { _highlightAllInactive, _showPhaseBar } = await import('./explore.js');
-          _highlightAllInactive();
-          _showPhaseBar('drawing');
-          setMode('split');
-        }
-        showSpinner(false);
-        await _promptNameNewAreas(oldIds);
         return;
       }
       // ← no break — always try all formats
