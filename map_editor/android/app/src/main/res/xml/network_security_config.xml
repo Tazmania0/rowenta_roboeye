@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Allow cleartext HTTP to:
+    - localhost (local NanoHTTPD server serving the editor)
+    - Any host (the robot is on LAN with an unknown IP, always HTTP port 8080)
+  This app is a local-network tool; it never communicates with the internet.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

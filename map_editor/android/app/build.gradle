@@ -1,0 +1,59 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.rowenta.mapeditor'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.rowenta.mapeditor"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    // Copy web assets from the parent map_editor folder before building
+    sourceSets {
+        main {
+            assets {
+                srcDirs = ['src/main/assets', '../web-assets']
+            }
+        }
+    }
+}
+
+// Sync web assets from map_editor/ into a staging dir so the build picks them up
+task syncWebAssets(type: Copy) {
+    from '../..'
+    include 'rowenta-map-editor.html'
+    include 'rowenta-map-editor.css'
+    include 'js/**'
+    into 'web-assets'
+}
+preBuild.dependsOn syncWebAssets
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.webkit:webkit:1.11.0'
+    // Lightweight embedded HTTP server — serves assets + proxies robot API
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
+}
