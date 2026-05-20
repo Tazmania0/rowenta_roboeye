@@ -11,6 +11,60 @@ import { loadMaps, loadMap, reloadMapChips } from './load.js';
 
 const mapSvg = document.getElementById('map-svg');
 
+function _setMapChipsDisabled(disabled) {
+  document.querySelectorAll('.map-chip, .map-discard-btn').forEach(btn => {
+    btn.disabled = disabled;
+    btn.title = disabled ? 'Exploration is running' : '';
+  });
+}
+
+function _sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function _modifyMapPath(mapId, mapMetaData, dockingPose) {
+  const params = new URLSearchParams();
+  params.set('map_id', mapId);
+  params.set('map_meta_data', mapMetaData);
+  params.set('docking_pose', JSON.stringify(dockingPose));
+  return `/set/modify_map?${params.toString()}`;
+}
+
+function _statusLooksLikeExploring(status) {
+  const mode = String(status?.mode ?? status?.state ?? status?.status ?? '').toLowerCase();
+  return mode.includes('explor')
+      || mode.includes('mapping')
+      || mode.includes('localiz')
+      || mode === 'cleaning'
+      || mode === 'clean';
+}
+
+async function _waitForExploreStatusToSettle(timeoutMs, onTick = null) {
+  const deadline = Date.now() + timeoutMs;
+  let sawExploreStatus = false;
+
+  while (Date.now() < deadline) {
+    let status;
+    try {
+      status = await api('/get/status');
+    } catch {
+      return;
+    }
+
+    if (!_statusLooksLikeExploring(status)) {
+      return;
+    }
+
+    sawExploreStatus = true;
+    if (onTick) onTick();
+    await _sleep(5000);
+  }
+
+  if (sawExploreStatus) {
+    throw new Error('Robot still reports exploration in progress');
+  }
+}
+
 export function _showSaveMapButton() {
   let btn = document.getElementById('btn-save-map-float');
   if (!btn) {
@@ -63,11 +117,13 @@ export async function executeSaveMap(mapName) {
 
     // Step 2: Rename map (with docking_pose)
     if (mapName) {
-      const dockJson = encodeURIComponent(JSON.stringify(
+      const modifyRes = await api(_modifyMapPath(
+        mapId,
+        mapName,
         state.dockingPose ?? { x: 0, y: 0, heading: 0, valid: false }
       ));
-      const nameEnc = encodeURIComponent(mapName);
-      await api(`/set/modify_map?map_id=${mapId}&name=${nameEnc}&docking_pose=${dockJson}`);
+      const modifyCmdId = modifyRes?.cmd_id ?? modifyRes?.cmdId;
+      if (modifyCmdId) await pollCmd(modifyCmdId, 60000);
     }
 
     // Step 3: Save as permanent
@@ -355,6 +411,7 @@ export async function executeExplore() {
   showSpinner(true);
   setStatus('Exploring…', 'busy');
   state.explorePhase = 'running';
+  _setMapChipsDisabled(true);
 
   const progressEl = document.getElementById('explore-progress');
   const phaseText  = document.getElementById('explore-phase-text');
@@ -370,6 +427,7 @@ export async function executeExplore() {
     showToast('Exploration started — robot is mapping the floor', 'info');
 
     const TIMEOUT_MS = 10 * 60 * 1000;
+    const STATUS_SETTLE_TIMEOUT_MS = 25 * 60 * 1000;
 
     await pollCmd(cmdId, TIMEOUT_MS, (elapsed) => {
       const m = Math.floor(elapsed / 60);
@@ -378,7 +436,11 @@ export async function executeExplore() {
       if (phaseText) phaseText.textContent  = 'Mapping in progress…';
     });
 
-    if (phaseText) phaseText.textContent = 'Exploration done — loading map…';
+    await _waitForExploreStatusToSettle(STATUS_SETTLE_TIMEOUT_MS, () => {
+      if (phaseText) phaseText.textContent = 'Waiting for robot to finish mapping…';
+    });
+
+    if (phaseText) phaseText.textContent = 'Exploration done — preparing map…';
 
     const mapsRes  = await api('/get/maps');
     const allMaps  = mapsRes.maps || [];
@@ -395,11 +457,12 @@ export async function executeExplore() {
     state.exploreMapId = newMapId;
     console.log('[explore] new temporary map_id:', newMapId);
 
-    await loadMap(newMapId);
-    await reloadMapChips();
-
-    // Transition to drawing phase
+    // Do not switch maps while exploration is still running. The current map
+    // stays visible until the robot is finished and the editor enters drawing.
     state.explorePhase = 'drawing';
+    if (phaseText) phaseText.textContent = 'Loading explored map…';
+    await reloadMapChips();
+    await loadMap(newMapId);
     _enterDrawingPhase();
 
   } catch (e) {
@@ -407,6 +470,7 @@ export async function executeExplore() {
     showToast('Exploration failed: ' + e.message.substring(0, 100), 'error');
     state.explorePhase = null;
   } finally {
+    _setMapChipsDisabled(false);
     showSpinner(false);
     setStatus(state.connected ? `Connected — ${state.maps.length} map(s)` : 'Disconnected',
               state.connected ? 'ok' : '');

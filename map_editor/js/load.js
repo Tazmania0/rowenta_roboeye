@@ -73,6 +73,13 @@ export function _updateDeleteBtn() {
 }
 
 export async function loadMap(mapId) {
+  if (state.explorePhase === 'running'
+      && state.activeMapId
+      && String(mapId) !== String(state.activeMapId)) {
+    console.log('[rowenta-editor] Keeping current map visible during exploration; ignored map_id:', mapId);
+    return;
+  }
+
   state.activeMapId = mapId;
   state.selectedAreaId = null;
   state.splitPoints = [];

@@ -6,6 +6,37 @@ import { api, pollCmd } from './api.js';
 import { showModal, showToast, showSpinner } from './modal.js';
 import { reloadMapChips, loadMap } from './load.js';
 
+function _mapName(map, mapId) {
+  return map ? ((map.map_meta_data || '').trim() || `Map ${mapId}`) : `Map ${mapId}`;
+}
+
+function _modifyMapPath(mapId, mapMetaData, dockingPose) {
+  const params = new URLSearchParams();
+  params.set('map_id', mapId);
+  params.set('map_meta_data', mapMetaData);
+  params.set('docking_pose', JSON.stringify(dockingPose));
+  return `/set/modify_map?${params.toString()}`;
+}
+
+function _extractDockingPose(res) {
+  const map = res?.map ?? res?.featureMap ?? res?.tileMap ?? res;
+  return map?.docking_pose ?? map?.dockingPose ?? map?.dockingPoseResponse ?? null;
+}
+
+async function _readDockingPose(mapId) {
+  const endpoints = [
+    `/get/feature_map?map_id=${mapId}`,
+    `/get/tile_map?map_id=${mapId}`,
+  ];
+  for (const endpoint of endpoints) {
+    try {
+      const pose = _extractDockingPose(await api(endpoint));
+      if (pose) return pose;
+    } catch {}
+  }
+  return null;
+}
+
 export function _updateSaveButton() {
   const btn = document.getElementById('btn-save-map-edits');
   if (!btn) return;
@@ -29,7 +60,7 @@ export function _updateMapOpsButtons() {
 export async function executeSaveExistingMap() {
   const mapId = state.activeMapId; if (!mapId) return;
   const map  = state.maps.find(m => String(m.map_id) === String(mapId));
-  const name = map ? ((map.map_meta_data || '').trim() || `Map ${mapId}`) : `Map ${mapId}`;
+  const name = _mapName(map, mapId);
   try {
     await showModal({ title: `Save changes to "${name}"?`,
       desc: 'All splits, merges, area names, and no-go zones will be permanently saved.',
@@ -50,7 +81,7 @@ export async function executeSaveExistingMap() {
 export async function executeRenameMap() {
   const mapId = state.activeMapId; if (!mapId) return;
   const map = state.maps.find(m => String(m.map_id) === String(mapId));
-  const currentName = map ? ((map.map_meta_data || '').trim() || `Map ${mapId}`) : '';
+  const currentName = _mapName(map, mapId);
   let vals;
   try {
     vals = await showModal({ title: 'Rename map', desc: 'Enter a new name.',
@@ -60,18 +91,16 @@ export async function executeRenameMap() {
   const newName = vals.name.trim(); if (!newName || newName === currentName) return;
   if (!state.dockingPose) {
     showSpinner(true);
-    try {
-      const fr = await api(`/get/feature_map?map_id=${mapId}`);
-      state.dockingPose = (fr.map ?? fr).docking_pose ?? null;
-    } catch {}
+    state.dockingPose = await _readDockingPose(mapId);
   }
   if (!state.dockingPose) { showToast('Cannot rename: failed to read dock position', 'error'); showSpinner(false); return; }
   showSpinner(true);
   try {
-    await api(`/set/modify_map?map_id=${mapId}&name=${encodeURIComponent(newName)}`
-            + `&docking_pose=${encodeURIComponent(JSON.stringify(state.dockingPose))}`);
-    if (map) map.map_meta_data = newName;
-    reloadMapChips();
+    const res   = await api(_modifyMapPath(mapId, newName, state.dockingPose));
+    const cmdId = res?.cmd_id ?? res?.cmdId;
+    if (cmdId) await pollCmd(cmdId, 60000);
+    await reloadMapChips();
+    await loadMap(mapId);
     showToast(`Renamed to "${newName}"`, 'success');
   } catch (e) { showToast('Rename failed: ' + e.message.substring(0, 80), 'error'); }
   finally { showSpinner(false); }

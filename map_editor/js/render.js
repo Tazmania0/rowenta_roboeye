@@ -30,6 +30,10 @@ export function renderMapChips({ onChipClick, onDiscardClick, pollCmd, showModal
     const chip = document.createElement('button');
     chip.className = 'map-chip' + (m.map_id === state.activeMapId ? ' active' : '');
     chip.dataset.mapId = m.map_id;
+    if (state.explorePhase === 'running') {
+      chip.disabled = true;
+      chip.title = 'Exploration is running';
+    }
 
     // Temporary/unsaved explore map — render differently
     if (m.map_id === state.exploreMapId) {
@@ -41,6 +45,10 @@ export function renderMapChips({ onChipClick, onDiscardClick, pollCmd, showModal
       discard.className   = 'btn map-discard-btn';
       discard.textContent = '✕ Discard';
       discard.style.cssText = 'font-size:10px;padding:2px 8px;border-color:#ef4444;color:#ef4444';
+      if (state.explorePhase === 'running') {
+        discard.disabled = true;
+        discard.title = 'Exploration is running';
+      }
       discard.addEventListener('click', async (e) => {
         e.stopPropagation();
         if (onDiscardClick) await onDiscardClick(m.map_id);
