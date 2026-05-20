@@ -136,11 +136,11 @@ export function renderMap(walls=[], dock=null) {
     poly.setAttribute('stroke-linejoin', 'round');
     if (st !== 'inactive' && st !== 'declined_blocking') {
       poly.style.pointerEvents = 'auto';
-      poly.style.cursor = 'pointer';
+      poly.style.cursor = isBlockingArea(area) || isSpotArea(area) ? 'grab' : 'pointer';
       poly.style.transition = 'fill 0.15s';
     }
     if (st === 'clean') {
-      poly.style.cursor = 'pointer';
+      poly.style.cursor = isSpotArea(area) ? 'grab' : 'pointer';
       poly.style.transition = 'fill 0.15s';
     }
 
@@ -154,6 +154,12 @@ export function renderMap(walls=[], dock=null) {
         setAreaPolyStyle(poly, area);
     });
     poly.addEventListener('click', e => {
+      if (state.suppressNextClick) {
+        state.suppressNextClick = false;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (state.mode === 'split' && state.selectedAreaId !== null) {
         // In split mode with area selected: treat click as a point placement
         // (don't stop propagation — let SVG handler place the point)
@@ -193,16 +199,19 @@ export function renderMap(walls=[], dock=null) {
       txt.textContent = name;
       areaGroup.appendChild(txt);
 
-      const idTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      idTxt.setAttribute('x', sc.x);
-      idTxt.setAttribute('y', sc.y + 75);
-      idTxt.setAttribute('text-anchor', 'middle');
-      idTxt.setAttribute('fill', '#475569');
-      idTxt.setAttribute('font-size', '44');
-      idTxt.setAttribute('font-family', 'JetBrains Mono, monospace');
-      idTxt.setAttribute('pointer-events', 'none');
-      idTxt.textContent = `#${area.area_id}`;
-      areaGroup.appendChild(idTxt);
+      const statsLines = svgAreaStatsLines(area);
+      statsLines.forEach((line, index) => {
+        const idTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        idTxt.setAttribute('x', sc.x);
+        idTxt.setAttribute('y', sc.y + 75 + index * 48);
+        idTxt.setAttribute('text-anchor', 'middle');
+        idTxt.setAttribute('fill', '#475569');
+        idTxt.setAttribute('font-size', '40');
+        idTxt.setAttribute('font-family', 'JetBrains Mono, monospace');
+        idTxt.setAttribute('pointer-events', 'none');
+        idTxt.textContent = line;
+        areaGroup.appendChild(idTxt);
+      });
     }
   });
   mapGroup.appendChild(areaGroup);
@@ -361,6 +370,33 @@ export function isBlockingArea(area) {
   return area?.area_state === 'blocking' || area?.area_state === 'proposed_blocking';
 }
 
+function formatAreaStatsSummary(area) {
+  const stats = area?._raw?.statistics;
+  if (!stats) return '';
+
+  const parts = [];
+  if (typeof stats.area_size === 'number' && stats.area_size > 0) {
+    parts.push(`${(stats.area_size / 1_000_000).toFixed(1)} m2`);
+  }
+  if (typeof stats.average_cleaning_time === 'number' && stats.average_cleaning_time > 0) {
+    parts.push(`avg ${(stats.average_cleaning_time / 60000).toFixed(1)} min`);
+  }
+  return parts.join(' · ');
+}
+
+function svgAreaStatsLines(area) {
+  const stats = area?._raw?.statistics;
+  const lines = [`ID #${area.area_id}`];
+  if (!stats) return lines;
+  if (typeof stats.area_size === 'number' && stats.area_size > 0) {
+    lines.push(`${(stats.area_size / 1_000_000).toFixed(1)} m2`);
+  }
+  if (typeof stats.average_cleaning_time === 'number' && stats.average_cleaning_time > 0) {
+    lines.push(`avg ${(stats.average_cleaning_time / 60000).toFixed(1)} min`);
+  }
+  return lines;
+}
+
 export function renderAreaList(onAreaClick) {
   areaListEl.innerHTML = '';
   if (state.areas.length === 0) {
@@ -377,15 +413,27 @@ export function renderAreaList(onAreaClick) {
     const st = area.area_state;
     dot.style.background = st==='clean' ? '#3b82f6' : st==='blocking'||st==='proposed_blocking' ? '#ef4444' : '#475569';
 
+    const textWrap = document.createElement('div');
+    textWrap.className = 'area-text';
+
     const name = document.createElement('span');
     name.className = 'area-name';
     name.textContent = getAreaName(area);
+    textWrap.appendChild(name);
+
+    const statsText = formatAreaStatsSummary(area);
+    if (statsText) {
+      const statsEl = document.createElement('span');
+      statsEl.className = 'area-stats-summary';
+      statsEl.textContent = statsText;
+      textWrap.appendChild(statsEl);
+    }
 
     const idEl = document.createElement('span');
     idEl.className = 'area-id';
     idEl.textContent = `#${area.area_id}`;
 
-    item.appendChild(dot); item.appendChild(name); item.appendChild(idEl);
+    item.appendChild(dot); item.appendChild(textWrap); item.appendChild(idEl);
     item.addEventListener('click', () => {
       if (_onAreaClickCb) _onAreaClickCb(area.area_id);
       else if (onAreaClick) onAreaClick(area.area_id);

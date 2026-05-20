@@ -10,31 +10,11 @@ function _mapName(map, mapId) {
   return map ? ((map.map_meta_data || '').trim() || `Map ${mapId}`) : `Map ${mapId}`;
 }
 
-function _modifyMapPath(mapId, mapMetaData, dockingPose) {
+function _modifyMapPath(mapId, mapMetaData) {
   const params = new URLSearchParams();
   params.set('map_id', mapId);
   params.set('map_meta_data', mapMetaData);
-  params.set('docking_pose', JSON.stringify(dockingPose));
   return `/set/modify_map?${params.toString()}`;
-}
-
-function _extractDockingPose(res) {
-  const map = res?.map ?? res?.featureMap ?? res?.tileMap ?? res;
-  return map?.docking_pose ?? map?.dockingPose ?? map?.dockingPoseResponse ?? null;
-}
-
-async function _readDockingPose(mapId) {
-  const endpoints = [
-    `/get/feature_map?map_id=${mapId}`,
-    `/get/tile_map?map_id=${mapId}`,
-  ];
-  for (const endpoint of endpoints) {
-    try {
-      const pose = _extractDockingPose(await api(endpoint));
-      if (pose) return pose;
-    } catch {}
-  }
-  return null;
 }
 
 export function _updateSaveButton() {
@@ -89,14 +69,9 @@ export async function executeRenameMap() {
       fields: [{ key: 'name', label: 'Map name', value: currentName, placeholder: 'e.g. Ground Floor' }] });
   } catch { return; }
   const newName = vals.name.trim(); if (!newName || newName === currentName) return;
-  if (!state.dockingPose) {
-    showSpinner(true);
-    state.dockingPose = await _readDockingPose(mapId);
-  }
-  if (!state.dockingPose) { showToast('Cannot rename: failed to read dock position', 'error'); showSpinner(false); return; }
   showSpinner(true);
   try {
-    const res   = await api(_modifyMapPath(mapId, newName, state.dockingPose));
+    const res   = await api(_modifyMapPath(mapId, newName));
     const cmdId = res?.cmd_id ?? res?.cmdId;
     if (cmdId) await pollCmd(cmdId, 60000);
     await reloadMapChips();

@@ -57,6 +57,22 @@ export const ROOM_TYPES = [
 // Keep ROOM_TYPE_OPTIONS as alias for backward compat (used in explore.js _startNamingWizard)
 export const ROOM_TYPE_OPTIONS = ROOM_TYPES;
 
+export const SPOT_AREA_TYPES = [
+  { value: 'none',         label: 'None'         },
+  { value: 'plant',        label: 'Plant'        },
+  { value: 'cables',       label: 'Cables'       },
+  { value: 'shelf',        label: 'Shelf'        },
+  { value: 'table',        label: 'Table'        },
+  { value: 'dining_table', label: 'Dining Table' },
+  { value: 'coffee_table', label: 'Coffee Table' },
+  { value: 'chair',        label: 'Chair'        },
+  { value: 'couch',        label: 'Couch / Sofa' },
+  { value: 'desk',         label: 'Desk'         },
+  { value: 'pet_area',     label: 'Pet Area'     },
+  { value: 'toys',         label: 'Toys'         },
+  { value: 'lamp',         label: 'Lamp'         },
+];
+
 export const FLOOR_TYPES = [
   { value: 'none',            label: 'Default'           },
   { value: 'hard_wood',       label: 'Hard Floor'        },

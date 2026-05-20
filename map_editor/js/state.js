@@ -12,6 +12,8 @@ export const state = {
   splitPoints: [],     // 0 or 1 SVG points for split line preview
   rectStart:   null,   // {x,y} SVG coords of first rect corner (drag-to-draw)
   rectMode:    null,   // 'block' | 'spot' | null
+  areaDrag:    null,   // active no-go / spot reposition drag
+  suppressNextClick: false,
   connected: false,
   exploreMapId:   null,   // map_id of current temporary/explore map
   dockingPose:    null,   // {x,y,heading,valid} read from feature_map

@@ -22,11 +22,10 @@ function _sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function _modifyMapPath(mapId, mapMetaData, dockingPose) {
+function _modifyMapPath(mapId, mapMetaData) {
   const params = new URLSearchParams();
   params.set('map_id', mapId);
   params.set('map_meta_data', mapMetaData);
-  params.set('docking_pose', JSON.stringify(dockingPose));
   return `/set/modify_map?${params.toString()}`;
 }
 
@@ -37,6 +36,16 @@ function _statusLooksLikeExploring(status) {
       || mode.includes('localiz')
       || mode === 'cleaning'
       || mode === 'clean';
+}
+
+function _formatExploreMapLabel(mapStatus) {
+  const operationId = mapStatus?.operation_map_id;
+  const activeId = mapStatus?.active_map_id;
+  if (operationId && activeId && String(operationId) !== String(activeId)) {
+    return `new map ${operationId} (active ${activeId})`;
+  }
+  const mapId = operationId ?? activeId;
+  return mapId ? `map ${mapId}` : '';
 }
 
 async function _waitForExploreStatusToSettle(timeoutMs, onTick = null) {
@@ -115,13 +124,9 @@ export async function executeSaveMap(mapName) {
       state.dockingPose = mapData.docking_pose ?? null;
     }
 
-    // Step 2: Rename map (with docking_pose)
+    // Step 2: Rename map. This firmware rejects docking_pose on modify_map.
     if (mapName) {
-      const modifyRes = await api(_modifyMapPath(
-        mapId,
-        mapName,
-        state.dockingPose ?? { x: 0, y: 0, heading: 0, valid: false }
-      ));
+      const modifyRes = await api(_modifyMapPath(mapId, mapName));
       const modifyCmdId = modifyRes?.cmd_id ?? modifyRes?.cmdId;
       if (modifyCmdId) await pollCmd(modifyCmdId, 60000);
     }
@@ -417,6 +422,31 @@ export async function executeExplore() {
   const phaseText  = document.getElementById('explore-phase-text');
   const elapsedEl  = document.getElementById('explore-elapsed');
   if (progressEl) progressEl.style.display = 'block';
+  let latestExploreMapLabel = '';
+  let lastMapStatusReadMs = 0;
+
+  const updateExploreProgress = (elapsed, label = 'Mapping in progress…') => {
+    const m = Math.floor(elapsed / 60);
+    const s = elapsed % 60;
+    if (elapsedEl) elapsedEl.textContent = `${m}:${String(s).padStart(2,'0')} elapsed`;
+    if (phaseText) {
+      phaseText.textContent = latestExploreMapLabel
+        ? `${label} — ${latestExploreMapLabel}`
+        : label;
+    }
+  };
+
+  const refreshExploreMapStatus = (elapsed) => {
+    const now = Date.now();
+    if (now - lastMapStatusReadMs < 4000) return;
+    lastMapStatusReadMs = now;
+    api('/get/map_status')
+      .then(res => {
+        latestExploreMapLabel = _formatExploreMapLabel(res);
+        updateExploreProgress(elapsed);
+      })
+      .catch(() => {});
+  };
 
   try {
     // CONFIRMED: zero parameters
@@ -430,10 +460,8 @@ export async function executeExplore() {
     const STATUS_SETTLE_TIMEOUT_MS = 25 * 60 * 1000;
 
     await pollCmd(cmdId, TIMEOUT_MS, (elapsed) => {
-      const m = Math.floor(elapsed / 60);
-      const s = elapsed % 60;
-      if (elapsedEl) elapsedEl.textContent = `${m}:${String(s).padStart(2,'0')} elapsed`;
-      if (phaseText) phaseText.textContent  = 'Mapping in progress…';
+      updateExploreProgress(elapsed);
+      refreshExploreMapStatus(elapsed);
     });
 
     await _waitForExploreStatusToSettle(STATUS_SETTLE_TIMEOUT_MS, () => {

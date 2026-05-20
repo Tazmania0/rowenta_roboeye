@@ -12,12 +12,19 @@ import { startSplit } from './split.js';
 import { startMerge } from './merge.js';
 import { executeNogo, executeSpot, handleSpotClick, handleBlockClick } from './nogo.js';
 import { startGoTo, executeGoTo } from './robot.js';
+import { finishAreaDrag, startAreaDrag, updateAreaDrag } from './area_move.js';
 
 const mapSvg       = document.getElementById('map-svg');
 const areaDetailEl = document.getElementById('area-detail');
 const areaListEl   = document.getElementById('area-list');
 const mergeHintEl  = document.getElementById('merge-hint');
 const statusCoords = document.getElementById('status-coords');
+
+function _isTypingTarget(target) {
+  const el = target instanceof Element ? target : null;
+  if (!el) return false;
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable;
+}
 
 function _zoom(factor, cx, cy) {
   const vb = mapSvg.viewBox.baseVal;
@@ -31,6 +38,12 @@ function _zoom(factor, cx, cy) {
 export function initEvents(onAreaClick) {
   // ── SVG click: capture phase (spot/block)
   mapSvg.addEventListener('click', e => {
+    if (state.suppressNextClick) {
+      state.suppressNextClick = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (state.mode === 'spot') handleSpotClick(e);
     if (state.mode === 'block') handleBlockClick(e);
   }, true);
@@ -84,6 +97,11 @@ export function initEvents(onAreaClick) {
       statusCoords.textContent = `x:${robotPt.x}  y:${robotPt.y}  (${(robotPt.x*0.002).toFixed(2)}m, ${(robotPt.y*0.002).toFixed(2)}m)`;
     }
 
+    if (state.areaDrag) {
+      updateAreaDrag(pt);
+      return;
+    }
+
     // Split line: track cursor from first point
     if (state.mode === 'split' && state.splitPoints.length === 1) {
       const p0 = state.splitPoints[0];
@@ -115,6 +133,15 @@ export function initEvents(onAreaClick) {
 
   // ── SVG mousedown
   mapSvg.addEventListener('mousedown', e => {
+    if (state.mode === 'select' && e.button === 0) {
+      const poly = e.target instanceof Element ? e.target.closest('polygon[data-area-id]') : null;
+      if (poly && startAreaDrag(poly.dataset.areaId, eventToSVGPoint(e))) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+    }
+
     if (e.button === 1 || state.mode === 'pan') {
       state.panStart = {
         cx: e.clientX, cy: e.clientY,
@@ -137,6 +164,14 @@ export function initEvents(onAreaClick) {
 
   // ── Window mouseup
   window.addEventListener('mouseup', e => {
+    if (state.areaDrag) {
+      const moved = state.areaDrag.moved;
+      if (moved) state.suppressNextClick = true;
+      finishAreaDrag();
+      e.preventDefault();
+      return;
+    }
+
     state.panStart = null;
     mapSvg.classList.remove('panning');
 
@@ -192,6 +227,8 @@ export function initEvents(onAreaClick) {
 
   // ── Space = pan mode (hold)
   window.addEventListener('keydown', e => {
+    if (_isTypingTarget(e.target)) return;
+
     if (e.code === 'Space' && state.mode !== 'pan') { e.preventDefault(); setMode('pan'); }
     if (e.code === 'Escape') {
       state.splitPoints  = [];
@@ -220,6 +257,8 @@ export function initEvents(onAreaClick) {
     if (e.code === 'KeyG') startGoTo();
   });
   window.addEventListener('keyup', e => {
+    if (_isTypingTarget(e.target)) return;
+
     if (e.code === 'Space') setMode('select');
   });
 }

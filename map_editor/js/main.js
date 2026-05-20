@@ -207,30 +207,22 @@ if (new URLSearchParams(window.location.search).get('test') === '1') {
   })();
 
   (function testModifyMapUrl() {
-    const dock  = { x: 100, y: 50, heading: 180, valid: true };
     const name  = 'Ground Floor';
     const mapId = 45;
     const params = new URLSearchParams();
     params.set('map_id', mapId);
     params.set('map_meta_data', name);
-    params.set('docking_pose', JSON.stringify(dock));
     const url = `/set/modify_map?${params.toString()}`;
     _assert('modify_map URL has map_id',      url.includes(`map_id=${mapId}`));
     _assert('modify_map URL has map_meta_data', url.includes('map_meta_data='));
-    _assert('modify_map URL has docking_pose',url.includes('docking_pose='));
-    const decoded = JSON.parse(decodeURIComponent(url.split('docking_pose=')[1]));
-    _assert('docking_pose.x is 100',          decoded.x === 100);
-    _assert('docking_pose.valid is true',     decoded.valid === true);
+    _assert('modify_map URL omits name param', !url.includes('name='));
+    _assert('modify_map URL omits docking_pose', !url.includes('docking_pose='));
 
-    const dockInvalid = { x: 0, y: 0, heading: 0, valid: false };
     const params2 = new URLSearchParams();
     params2.set('map_id', 3);
     params2.set('map_meta_data', 'Test');
-    params2.set('docking_pose', JSON.stringify(dockInvalid));
     const url2 = `/set/modify_map?${params2.toString()}`;
-    const d2   = JSON.parse(decodeURIComponent(url2.split('docking_pose=')[1]));
-    _assert('docking_pose with valid=false is still included', 'valid' in d2);
-    _assert('docking_pose.valid=false preserved',              d2.valid === false);
+    _assert('modify_map URL has Test map metadata', url2.includes('map_meta_data=Test'));
   })();
 
   (function testDeleteGuards() {

@@ -7,6 +7,7 @@ import { showModal, showToast, showSpinner, showInstruction, hideInstruction } f
 import { clearSplitOverlay, setSplitDot, setSpotRect } from './overlay.js';
 import { apiText, pollCmd } from './api.js';
 import { setMode } from './mode.js';
+import { SPOT_AREA_TYPES } from './config.js';
 
 export function startBlockZone() {
   startBlock();
@@ -56,10 +57,15 @@ function areaSize(points) {
   };
 }
 
-function addAreaPath(mapId, points, { stateValue, cleaningParameterSet, name }) {
+function addAreaPath(mapId, points, { stateValue, cleaningParameterSet, name, spotAreaType }) {
+  const metaData = { name: name || '' };
+  if (spotAreaType && spotAreaType !== 'none') {
+    metaData.spot_area_type = spotAreaType;
+  }
+
   const params = new URLSearchParams();
   params.set('map_id', String(mapId));
-  params.set('area_meta_data', JSON.stringify({ name: name || '' }));
+  params.set('area_meta_data', JSON.stringify(metaData));
   params.set('area_type', 'to_be_cleaned');
   params.set('cleaning_parameter_set', String(cleaningParameterSet));
   params.set('area_state', stateValue);
@@ -128,7 +134,10 @@ async function executeAreaRectangle(svgA, svgB, kind) {
       desc: isSpot
         ? `Create a clean spot rectangle (${(width * 0.002).toFixed(2)}m x ${(height * 0.002).toFixed(2)}m).`
         : `Create a permanent blocked rectangle (${(width * 0.002).toFixed(2)}m x ${(height * 0.002).toFixed(2)}m).`,
-      fields: isSpot ? [{ key: 'name', label: 'Spot name', type: 'text', value: 'Spot' }] : [],
+      fields: isSpot ? [
+        { key: 'name', label: 'Spot name', type: 'text', value: 'Spot' },
+        { key: 'spot_area_type', label: 'Area type', type: 'select', options: SPOT_AREA_TYPES, value: 'none' },
+      ] : [],
       confirmLabel: isSpot ? 'Add Clean Spot' : 'Add No-Go',
       danger: !isSpot,
     });
@@ -153,7 +162,12 @@ async function executeAreaRectangle(svgA, svgB, kind) {
     await runAddArea(
       points,
       isSpot
-        ? { stateValue: 'clean', cleaningParameterSet: 1, name: opts?.name || 'Spot' }
+        ? {
+            stateValue: 'clean',
+            cleaningParameterSet: 1,
+            name: opts?.name || 'Spot',
+            spotAreaType: opts?.spot_area_type || 'none',
+          }
         : { stateValue: 'blocking', cleaningParameterSet: 0, name: '' },
       isSpot ? 'Clean spot area added' : 'No-go area added',
     );
