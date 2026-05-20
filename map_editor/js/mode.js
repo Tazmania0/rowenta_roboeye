@@ -10,7 +10,7 @@ const statusMode = document.getElementById('status-mode');
 
 export function setMode(mode) {
   state.mode = mode;
-  mapSvg.className = `mode-${mode}`;
+  mapSvg.setAttribute('class', `mode-${mode}`);
 
   // Update toolbar
   ['select','pan','split','merge','block','spot','goto'].forEach(m => {
