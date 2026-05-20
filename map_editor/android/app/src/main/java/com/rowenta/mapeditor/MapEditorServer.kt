@@ -10,7 +10,7 @@ import java.net.URL
 /**
  * Local HTTP server that:
  *  1. Serves the map editor HTML/CSS/JS from Android assets.
- *  2. Proxies /get/* and /set/* requests to the Rowenta robot (port 8080).
+ *  2. Proxies /get/... and /set/... requests to the Rowenta robot (port 8080).
  *  3. Exposes /config GET/POST so the UI can read and update the robot IP at runtime.
  *
  * Mirrors the logic of rowenta-editor-server.py so the existing web editor JS works
