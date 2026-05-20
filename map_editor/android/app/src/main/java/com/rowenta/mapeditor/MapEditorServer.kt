@@ -144,7 +144,7 @@ class MapEditorServer(
             val contentType = conn.contentType ?: "application/json"
             val body = try {
                 conn.inputStream.readBytes()
-            } catch (_: IOException) {
+            } catch (e: IOException) {
                 conn.errorStream?.readBytes() ?: ByteArray(0)
             }
             conn.disconnect()
