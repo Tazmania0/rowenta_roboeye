@@ -115,7 +115,7 @@ class MapEditorServer(
         val ip = robotIp.trim()
         if (ip.isEmpty()) {
             return newFixedLengthResponse(
-                Response.Status.BAD_GATEWAY,
+                Response.Status.INTERNAL_ERROR,
                 "application/json",
                 """{"error":"Robot IP not set. Enter it in the editor and tap Connect."}""",
             )
@@ -153,7 +153,7 @@ class MapEditorServer(
             newFixedLengthResponse(status, contentType, body.toString(Charsets.UTF_8))
         } catch (e: Exception) {
             newFixedLengthResponse(
-                Response.Status.BAD_GATEWAY,
+                Response.Status.INTERNAL_ERROR,
                 "application/json",
                 JSONObject().put("error", e.message ?: "Connection failed").toString(),
             )
