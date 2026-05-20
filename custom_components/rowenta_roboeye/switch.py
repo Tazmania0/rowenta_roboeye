@@ -64,6 +64,8 @@ async def async_setup_entry(
     entities: list = [RobEyeDeepCleanSwitch(coordinator)]
     # Per-map entity tracking: map_id -> {area_id -> [entities]}
     known_entities_by_map: dict[str, dict] = {}
+    # Tracks last-known area names per map to detect renames: map_id -> {area_id -> name}.
+    known_area_names_by_map: dict[str, dict[str, str]] = {}
     known_task_ids: set[int] = set()
 
     def _parse_switch_area_name(area: dict) -> str:
@@ -147,6 +149,11 @@ async def async_setup_entry(
         initial_switches, initial_by_area = _room_switches(map_id, areas_list, set())
         if initial_by_area:
             known_entities_by_map[map_id] = initial_by_area
+        known_area_names_by_map[map_id] = {
+            str(a.get("id")): _parse_switch_area_name(a)
+            for a in areas_list
+            if a.get("id") is not None
+        }
         entities.extend(initial_switches)
 
     room_uids = {
@@ -171,19 +178,29 @@ async def async_setup_entry(
 
         map_entities = known_entities_by_map.setdefault(map_id, {})
 
-        current_ids: set = {
-            str(area_id)
+        current_id_to_name: dict[str, str] = {
+            str(area_id): _parse_switch_area_name(area)
             for area in areas
             if (area_id := area.get("id")) is not None
             and _parse_switch_area_name(area)
         }
+        current_ids: set = set(current_id_to_name.keys())
+
+        # Detect renamed areas (same area_id, different name) — treat as stale
+        # so entities are removed and re-created with the updated room name.
+        old_names = known_area_names_by_map.get(map_id, {})
+        renamed_ids = {
+            aid for aid in current_ids
+            if aid in map_entities and old_names.get(aid) != current_id_to_name[aid]
+        }
+        known_area_names_by_map[map_id] = current_id_to_name
 
         if map_id == coordinator.active_map_id:
             async_remove_stale_room_entities(
                 hass, config_entry, coordinator, "switch", current_ids
             )
 
-        stale_ids = set(map_entities.keys()) - current_ids
+        stale_ids = (set(map_entities.keys()) - current_ids) | renamed_ids
         from homeassistant.helpers import entity_registry as er
         _ent_reg = er.async_get(hass)
         for area_id in stale_ids:
