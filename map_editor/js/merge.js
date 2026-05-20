@@ -95,14 +95,21 @@ export async function handleMergeClick(areaId) {
 
   try {
     let res, mergeOk = false, workingFmt = '';
-    for (const [p1, p2] of [
-      ['area_id_1','area_id_2'],
-      ['areaId1','areaId2'],
-      ['area_id1','area_id2'],
-      ['id1','id2'],
-    ]) {
+    const mergeParamSets = [
+      ['area_id_1', 'area_id_2'],
+      ['areaId1',   'areaId2'  ],
+      ['area_id1',  'area_id2' ],
+      ['id1',       'id2'      ],
+    ];
+    for (const [p1, p2] of mergeParamSets) {
       const url = `/set/merge_areas?map_id=${state.activeMapId}&${p1}=${id1}&${p2}=${id2}`;
-      const resp = await fetch(USE_PROXY ? url : `http://${config.robotIP}:${ROBOT_PORT}${url}`);
+      let resp;
+      try {
+        resp = await fetch(USE_PROXY ? url : `http://${config.robotIP}:${ROBOT_PORT}${url}`);
+      } catch (fetchErr) {
+        console.warn(`[merge] ${p1}/${p2} → fetch error:`, fetchErr);
+        continue;
+      }
       console.log(`[merge] ${p1}/${p2} → HTTP ${resp.status}`);
       if (resp.ok) {
         res = await resp.json();
@@ -110,9 +117,24 @@ export async function handleMergeClick(areaId) {
         workingFmt = `${p1}/${p2}`;
         break;
       }
-      if (resp.status !== 400) break;
+      // Continue trying all formats regardless of status code
     }
-    if (!mergeOk) throw new Error('All merge param formats returned 400 — check console');
+    // Also try area_ids=X,Y (same convention as /set/clean_map)
+    if (!mergeOk) {
+      try {
+        const url = `/set/merge_areas?map_id=${state.activeMapId}&area_ids=${id1},${id2}`;
+        const resp = await fetch(USE_PROXY ? url : `http://${config.robotIP}:${ROBOT_PORT}${url}`);
+        console.log(`[merge] area_ids → HTTP ${resp.status}`);
+        if (resp.ok) {
+          res = await resp.json();
+          mergeOk = true;
+          workingFmt = 'area_ids';
+        }
+      } catch (fetchErr) {
+        console.warn('[merge] area_ids → fetch error:', fetchErr);
+      }
+    }
+    if (!mergeOk) throw new Error('All merge formats failed — check console for HTTP statuses');
 
     const cmdId = res.cmd_id ?? res.cmdId ?? res.command_id;
     if (cmdId) {
