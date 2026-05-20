@@ -19,30 +19,19 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Full-screen immersive — the editor fills the whole display
         setupFullscreen()
 
         server = MapEditorServer(applicationContext, MapEditorServer.SERVER_PORT)
         server.start()
 
-        webView = WebView(this).also { wv ->
-            wv.settings.apply {
-                javaScriptEnabled = true
-                domStorageEnabled = true
-                // Required so fetch() inside the WebView can reach localhost:8765
-                allowContentAccess = true
-            }
-            wv.setBackgroundColor(Color.parseColor("#0f172a"))
-            wv.webViewClient = object : WebViewClient() {
-                // Intercept requests so the WebView always goes through the local server.
-                // In practice the HTML is already loaded from localhost, so all relative
-                // URLs resolve there naturally; this override is a belt-and-suspenders guard.
-                override fun shouldInterceptRequest(
-                    view: WebView,
-                    request: WebResourceRequest,
-                ): WebResourceResponse? = null // let the network layer handle it
-            }
+        webView = WebView(this)
+        webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowContentAccess = true
         }
+        webView.setBackgroundColor(Color.parseColor("#0f172a"))
+        webView.webViewClient = WebViewClient()
         setContentView(webView)
 
         webView.loadUrl("http://localhost:${MapEditorServer.SERVER_PORT}/")
