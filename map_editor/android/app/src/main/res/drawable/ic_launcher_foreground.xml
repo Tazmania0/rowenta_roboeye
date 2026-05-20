@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simplified robot vacuum icon -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Body -->
+    <path
+        android:fillColor="#3b82f6"
+        android:pathData="M54,26 A28,28 0 1,1 53.999,26 Z"/>
+    <!-- Map grid lines -->
+    <path
+        android:strokeColor="#0f172a"
+        android:strokeWidth="2"
+        android:fillColor="#00000000"
+        android:pathData="M36,44 L72,44 M36,54 L72,54 M46,34 L46,64 M56,34 L56,64"/>
+    <!-- Robot dot -->
+    <path
+        android:fillColor="#ffffff"
+        android:pathData="M54,49 A5,5 0 1,1 53.999,49 Z"/>
+</vector>
