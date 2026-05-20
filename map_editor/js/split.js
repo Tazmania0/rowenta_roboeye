@@ -158,22 +158,23 @@ export async function executeSplit(lineA, lineB) {
         state.splitPoints = [];
         clearSplitOverlay();
         const oldIds = new Set(state.areas.map(a => a.area_id));
-        try {
+        // Retry loadMap until the split is visible in /get/areas — firmware may lag
+        let splitVisible = false;
+        for (let attempt = 0; attempt < 4 && !splitVisible; attempt++) {
+          if (attempt > 0) await new Promise(r => setTimeout(r, 2000));
           await loadMap(state.activeMapId);
-          // Refresh phase bar and re-highlight if in explore draw phase
-          if (state.explorePhase === 'drawing') {
-            const { _highlightAllInactive, _showPhaseBar } = await import('./explore.js');
-            _highlightAllInactive();
-            _showPhaseBar('drawing');
-            setMode('split');
-          }
-          showSpinner(false);
-          _promptNameNewAreas(oldIds);
-        } catch (e) {
-          showSpinner(false);
-          console.warn('[split] split accepted, but map refresh failed:', e);
-          showToast('Split accepted, but map refresh failed. Reload map to see changes.', 'error');
+          splitVisible = state.areas.some(a =>
+            a.area_id !== null && !oldIds.has(a.area_id) && a.area_state !== 'blocking'
+          );
         }
+        if (state.explorePhase === 'drawing') {
+          const { _highlightAllInactive, _showPhaseBar } = await import('./explore.js');
+          _highlightAllInactive();
+          _showPhaseBar('drawing');
+          setMode('split');
+        }
+        showSpinner(false);
+        await _promptNameNewAreas(oldIds);
         return;
       }
       // ← no break — always try all formats
