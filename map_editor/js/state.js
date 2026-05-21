@@ -22,14 +22,17 @@ export const state = {
   splitFormat:    null,   // last successful split URL format label
 
   // Robot live state
-  robPose:            null,
-  robPoseTimer:       null,
-  robotMode:          null,
-  robotCharging:      null,
-  robotBatteryLevel:  null,
-  cleaningGrid:       null,
-  statusTimer:        null,
-  mapHasUnsavedEdits: false,
+  robPose:              null,
+  robPoseTimer:         null,
+  robotMode:            null,
+  robotCharging:        null,
+  robotBatteryLevel:    null,
+  robotErrorCode:       null,   // number | null
+  robotCleaningTimeSec: null,   // number | null (seconds)
+  robotAreaCleanedCm2:  null,   // number | null
+  cleaningGrid:         null,
+  statusTimer:          null,
+  mapHasUnsavedEdits:   false,
   _lastWalls:         [],
   _lastDock:          null,
 

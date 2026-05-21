@@ -20,6 +20,31 @@
     <span class="battery-icon"><span id="battery-fill"></span></span>
     <span id="battery-text">--%</span>
   </div>
+  <!-- Robot status chip -->
+  <div id="robot-status-chip" style="display:none;align-items:center;gap:6px;
+       height:24px;padding:0 9px;border:1px solid var(--border);border-radius:6px;
+       background:rgba(255,255,255,0.03);font-family:'JetBrains Mono',monospace;
+       font-size:11px;color:var(--muted);">
+    <span id="robot-status-dot" style="width:7px;height:7px;border-radius:50%;
+          background:var(--muted);flex-shrink:0;"></span>
+    <span id="robot-status-text">Ready</span>
+  </div>
+  <!-- Cleaning progress chip (hidden when not cleaning) -->
+  <div id="cleaning-info-chip" style="display:none;align-items:center;gap:7px;
+       height:24px;padding:0 9px;border:1px solid rgba(59,130,246,0.35);
+       border-radius:6px;background:rgba(59,130,246,0.07);
+       font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);">
+    <span id="cleaning-time-text">0:00</span>
+    <span style="opacity:0.4">|</span>
+    <span id="cleaning-area-text">0 m²</span>
+  </div>
+  <!-- Error chip (hidden when no error) -->
+  <div id="error-chip" style="display:none;align-items:center;gap:6px;
+       height:24px;padding:0 9px;border:1px solid rgba(239,68,68,0.45);
+       border-radius:6px;background:rgba(239,68,68,0.08);
+       font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--danger);">
+    ⚠ <span id="error-chip-text">Error</span>
+  </div>
   <span id="mode-badge" style="display:none;font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(16,185,129,0.15);border:1px solid #10b981;color:#10b981;font-family:'JetBrains Mono',monospace;">PROXY</span>
   <label style="font-size:11px;color:var(--muted);margin-right:4px;" id="ip-label">Robot IP</label>
   <input id="ip-input" type="text" placeholder="192.168.1.xx" />

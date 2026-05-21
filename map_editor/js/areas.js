@@ -179,7 +179,6 @@ export async function saveArea() {
         room_type: roomType,
         cleaning_parameter_set: fanSpeed,
         strategy_mode: strategy,
-        floor_type: floorType,
       }),
       changesMetadata: true,
       localPatch: {
@@ -188,7 +187,6 @@ export async function saveArea() {
         room_type: roomType,
         cleaning_parameter_set: fanSpeed,
         strategy_mode: strategy,
-        floor_type: floorType,
       },
     },
     {
@@ -274,14 +272,40 @@ export async function saveArea() {
     }
     if (!saved) throw lastErr || new Error('modify_area failed');
 
-    // Update local state
+    // If the winning format didn't include settings, send a dedicated settings-only call
+    const settingsApplied =
+      Object.prototype.hasOwnProperty.call(savedPayload, 'cleaning_parameter_set') &&
+      Object.prototype.hasOwnProperty.call(savedPayload, 'strategy_mode');
+    if (!settingsApplied) {
+      const originalFanSpeed = area._raw?.cleaning_parameter_set ?? area.cleaning_parameter_set;
+      const originalStrategy = area._raw?.strategy_mode ?? area.strategy_mode;
+      const settingsChanged  =
+        Number(originalFanSpeed) !== fanSpeed ||
+        (originalStrategy || 'normal') !== strategy;
+      if (settingsChanged) {
+        try {
+          await apiText(modifyAreaUrl({
+            area_id: area.area_id,
+            cleaning_parameter_set: fanSpeed,
+            strategy_mode: strategy,
+          }));
+          console.log('[modify_area] settings-only call succeeded');
+        } catch (e) {
+          console.warn('[modify_area] settings-only call failed:', e);
+          showToast('Settings may not have been saved — try saving again', 'warn');
+        }
+      }
+    }
+
+    // Update local state — always reflect what the user set
     Object.assign(area, {
       area_meta_data: metaData,
       ...(Object.prototype.hasOwnProperty.call(savedPayload, 'area_state') ? { area_state: areaState } : {}),
-      ...(Object.prototype.hasOwnProperty.call(savedPayload, 'room_type') ? { room_type: roomType } : {}),
-      ...(Object.prototype.hasOwnProperty.call(savedPayload, 'cleaning_parameter_set') ? { cleaning_parameter_set: fanSpeed } : {}),
-      ...(Object.prototype.hasOwnProperty.call(savedPayload, 'strategy_mode') ? { strategy_mode: strategy } : {}),
+      ...(Object.prototype.hasOwnProperty.call(savedPayload, 'room_type')  ? { room_type: roomType }   : {}),
       ...(Object.prototype.hasOwnProperty.call(savedPayload, 'floor_type') ? { floor_type: floorType } : {}),
+      // Always reflect settings (either sent in main call or the fallback above)
+      cleaning_parameter_set: fanSpeed,
+      strategy_mode: strategy,
     });
     renderAreaList();
     renderMap();

@@ -21,9 +21,15 @@ export function startStatusPolling() {
   const pollStatus = async () => {
     try {
       const res = await api('/get/status');
-      state.robotMode    = res.mode;
-      state.robotCharging = res.charging;
+      state.robotMode         = res.mode;
+      state.robotCharging     = res.charging;
       state.robotBatteryLevel = _extractBatteryLevel(res);
+      state.robotErrorCode    = (typeof res.error_code === 'number' && res.error_code !== 0)
+                                  ? res.error_code : null;
+      state.robotCleaningTimeSec = typeof res.current_cleaning_time === 'number'
+                                  ? Math.round(res.current_cleaning_time / 1000) : null;
+      state.robotAreaCleanedCm2  = typeof res.current_area_cleaned === 'number'
+                                  ? res.current_area_cleaned : null;
       await _updateCleaningGrid();
       _updateRobotStatusUI();
     } catch {}
@@ -85,6 +91,7 @@ export function _updateRobotStatusUI() {
       dot.className = 'status-dot ok'; text.textContent = `Connected — ${state.maps.length} map(s)`;
     }
   }
+  _updateStatusChips();
 }
 
 function _updateBatteryUI() {
@@ -174,6 +181,68 @@ export async function executeGoTo(svgX, svgY) {
     if (resp.ok) { showToast(`Going to (${p.x}, ${p.y})`, 'success'); setMode('select'); return; }
   }
   showToast('GoTo: all formats failed — check console', 'error'); setMode('select');
+}
+
+// ─── Status chips ─────────────────────────────────────────────────────────────
+function _updateStatusChips() {
+  const statusChip = document.getElementById('robot-status-chip');
+  const cleanChip  = document.getElementById('cleaning-info-chip');
+  const errorChip  = document.getElementById('error-chip');
+  if (!statusChip || !cleanChip || !errorChip) return;
+
+  if (!state.connected) {
+    statusChip.style.display = 'none';
+    cleanChip.style.display  = 'none';
+    errorChip.style.display  = 'none';
+    return;
+  }
+
+  // ── Mode chip ────────────────────────────────────────────────────
+  const MODE_LABELS = { cleaning: 'Cleaning', go_home: 'Docking', charging: 'Charging', ready: 'Ready' };
+  const MODE_COLORS = { cleaning: '#3b82f6', go_home: '#f59e0b', charging: '#10b981', ready: '#10b981' };
+  const mode  = state.robotMode || 'ready';
+  const color = MODE_COLORS[mode] || 'var(--muted)';
+  let label   = MODE_LABELS[mode] || mode;
+
+  if (mode === 'cleaning' && String(state.robotCharging || '').toLowerCase().includes('charging')) {
+    label = 'Recharging';
+  }
+
+  statusChip.style.display     = 'inline-flex';
+  statusChip.style.borderColor = color + '55';
+  statusChip.style.color       = color;
+  document.getElementById('robot-status-dot').style.background  = color;
+  document.getElementById('robot-status-text').textContent      = label;
+
+  // ── Cleaning info chip ───────────────────────────────────────────
+  if (mode === 'cleaning' && state.robotCleaningTimeSec !== null) {
+    const secs   = state.robotCleaningTimeSec;
+    const mins   = Math.floor(secs / 60);
+    const ss     = String(secs % 60).padStart(2, '0');
+    const areaM2 = state.robotAreaCleanedCm2 !== null
+      ? (state.robotAreaCleanedCm2 / 10000).toFixed(1) + ' m²'
+      : '—';
+    document.getElementById('cleaning-time-text').textContent = `${mins}:${ss}`;
+    document.getElementById('cleaning-area-text').textContent = areaM2;
+    cleanChip.style.display = 'inline-flex';
+  } else {
+    cleanChip.style.display = 'none';
+  }
+
+  // ── Error chip ───────────────────────────────────────────────────
+  if (state.robotErrorCode !== null) {
+    const ERR_LABELS = {
+      1: 'Brush stuck', 2: 'Wheel stuck', 3: 'Side brush', 4: 'Suction blocked',
+      5: 'Insufficient battery', 6: 'Dustbin full', 7: 'Cliff detected', 8: 'Bumper stuck',
+    };
+    const errText = ERR_LABELS[state.robotErrorCode]
+      ? `${ERR_LABELS[state.robotErrorCode]} (${state.robotErrorCode})`
+      : `Error ${state.robotErrorCode}`;
+    document.getElementById('error-chip-text').textContent = errText;
+    errorChip.style.display = 'inline-flex';
+  } else {
+    errorChip.style.display = 'none';
+  }
 }
 
 // ─── Auto no-go zones ─────────────────────────────────────────────────────────
