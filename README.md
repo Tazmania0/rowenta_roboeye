@@ -1,38 +1,25 @@
-# Rowenta / Tefal RobEye Robot Vacuum — Home Assistant Integration
+# Rowenta / Tefal RobEye — Home Assistant Integration
 
-A native Home Assistant custom integration for **Rowenta and Tefal X-Plorer Serie 120 / S220 / S240** robot vacuums using the **local RobEye HTTP API** (port 8080). No cloud, no YAML, no token hunting — everything runs on your LAN.
+[![HACS Custom][hacs-badge]][hacs-url]
+[![HA Version][ha-badge]](https://www.home-assistant.io)
+[![License: MIT][license-badge]](LICENSE)
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![GitHub release](https://img.shields.io/github/v/release/Tazmania0/rowenta_roboeye)](https://github.com/Tazmania0/rowenta_roboeye/releases)
+A native Home Assistant custom integration for **Rowenta / Tefal RobEye** robot vacuums using the local **RobEye HTTP API** (port 8080, Robart SDK). No cloud, no YAML, no token hunting.
 
-[![Add to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Tazmania0&repository=rowenta_roboeye&category=integration)
+> **Prior art:** Architecture is modelled on the [Romy](https://www.home-assistant.io/integrations/romy/) integration (also Robart-based) and the [Dreame](https://github.com/Tasshack/dreame-vacuum) integration pattern. The map card draws inspiration from [Xiaomi Vacuum Map Card](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card).
 
 ---
 
 ## Compatible Models
 
-### ✅ Confirmed working
-| Brand | Model |
-|-------|-------|
-| Rowenta | X-Plorer Serie 120 (RR7865WH, RR7867WH) |
-| Rowenta | X-Plorer Serie 120 AI |
-| Tefal | X-Plorer Serie 120 (RG7865WH, RG7867WH) |
-| Tefal | X-Plorer Serie 120 AI |
+| Model | Shape | Protocol | Status |
+|-------|-------|----------|--------|
+| Rowenta X-Plorer Serie 120 | D-shape | RobEye / Robart | ✅ Tested |
+| Rowenta X-Plorer S220 | D-shape | RobEye / Robart | ✅ Compatible |
+| Rowenta X-Plorer S240 | D-shape | RobEye / Robart | ✅ Compatible |
+| Tefal X-Plorer Serie 120 | D-shape | RobEye / Robart | ✅ Compatible |
 
-### 🟡 Likely compatible (D-shaped body with local RobEye API)
-| Brand | Model |
-|-------|-------|
-| Rowenta / Tefal | X-Plorer S220 / S220+ |
-| Rowenta / Tefal | X-Plorer S240 / S240+ |
-
-Community confirmation welcome — open an issue with your model if it works or doesn't.
-
-### ❌ Not compatible — use [Tuya Local](https://github.com/make-all/tuya-local) instead
-
-Round-body models use the Tuya cloud protocol, not the local RobEye API:
-X-Plorer Serie 50, 60, 75, 75S, 80, S85, S90, S135, S140, S275, S280, S375+, S380+, S575, S580 Max, Eclipse 2n1 / 3n1.
-
-> **How to tell:** D-shaped (flat front) = RobEye local API → this integration. Round body = Tuya.
+> **Out of scope:** Rowenta Serie 50–80 / S85 and above use the **Tuya** protocol and are not supported.
 
 ---
 
@@ -42,15 +29,13 @@ X-Plorer Serie 50, 60, 75, 75S, 80, S85, S90, S135, S140, S275, S280, S375+, S38
 
 **Via HACS (recommended)**
 
-[![Add to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Tazmania0&repository=rowenta_roboeye&category=integration)
-
-Click the button above, or add manually:
 1. HACS → Integrations → ⋮ → Custom repositories
 2. Add `https://github.com/Tazmania0/rowenta_roboeye` as **Integration**
-3. Search *RobEye*, install, restart HA
+3. Search *Rowenta RobEye*, install, restart HA
 
-**Manual install**
-Copy `custom_components/rowenta_roboeye/` into your `config/custom_components/` directory and restart HA.
+**Manual**
+
+Copy `custom_components/rowenta_roboeye/` into `config/custom_components/`, restart HA.
 
 ---
 
@@ -58,153 +43,259 @@ Copy `custom_components/rowenta_roboeye/` into your `config/custom_components/` 
 
 **Settings → Devices & Services → Add Integration → Rowenta / Tefal RobEye Robot Vacuum**
 
-| Field | Value |
+| Field | Notes |
 |-------|-------|
-| Host | Local IP address of your vacuum (e.g. `192.168.1.50`) |
-| Name | A friendly nickname for this vacuum in HA (e.g. *Rosie*, *Daisy*) |
+| Host | Local IP of your vacuum (e.g. `192.168.1.50`) — assign a DHCP reservation so it never changes |
+| Name | Optional friendly nickname for the device (e.g. *Merry*, *Daisy*, *Rosie*) |
 
-> **Tip:** Assign a DHCP reservation so the IP never changes. If the IP does change later, update it without removing the integration via **Settings → Devices & Services → Rowenta / Tefal RobEye Robot Vacuum → Configure**.
+Maps and rooms are **auto-discovered** from the robot after a successful connection — no map IDs to look up.
 
-The floor map is fetched automatically from the device — no Map ID entry is needed.
+> **Auto-discovery:** If your LAN supports mDNS multicast, HA detects the vacuum via `_robeye._tcp.local.` and shows a notification — no IP entry needed. The mDNS hostname is used as the unique ID, so the integration survives DHCP IP changes automatically.
 
-> **Auto-discovery:** If your LAN supports mDNS multicast, HA detects the vacuum automatically via the `_robeye._tcp.local.` service and shows a confirmation prompt — no IP entry needed at all. The mDNS hostname is used as the stable unique ID, so if the IP changes the integration updates silently.
+> **Options flow:** After setup, you can update the IP address or name any time via **Settings → Devices & Services → Rowenta RobEye → Configure** — no need to remove and re-add the integration.
 
 ---
 
-### 3 — Dashboard
+### 3 — Map & Room Discovery
 
-A Lovelace dashboard named **Rowenta Xplorer 120** is created automatically on first setup. It appears in the HA sidebar with no manual YAML required. Room cards are added automatically as rooms are discovered on the current floor.
+Map IDs and room layouts are discovered automatically via `/get/maps` and `/get/areas`. Each map's display name comes from the label you assigned in the RobEye app; unnamed maps appear as "Map 1", "Map 2", etc.
 
-The dashboard has four views:
+For multi-floor homes, use the **Active Map** selector to switch floors after physically moving the robot. Map switching is manual — the integration does not auto-switch.
 
-**🤖 Control** — vacuum state, battery, brush stuck and dustbin status tiles; Clean All / Stop / Return to Base buttons; fan speed selector; cleaning strategy selector; deep clean toggle; live status panel (mode, charging state, session area and time elapsed); **Cleaning Queue** panel showing active/paused/pending job labels with estimated completion time; schedule panel listing all configured schedules with per-schedule enable/disable toggles; current floor panel (active map name and map switch selector).
+---
 
-**🏠 Rooms** — one card per discovered room showing: fan speed selector, strategy selector, deep clean toggle, room selection toggle, Start Cleaning button, last cleaned date, times cleaned, area (m²), and average clean duration. Toggle the selection switches across multiple rooms then press **Clean Selected Rooms** to send them as a single multi-room clean command.
+### 4 — Dashboard
 
-**📊 Statistics** — lifetime totals (cleaning runs, area, distance, time) and device info (serial number, firmware version, Wi-Fi network and signal strength).
+After setup the integration writes a ready-made Lovelace dashboard to:
 
-**🗺 Map** — live SVG map card showing the saved floor plan, the cleaned-area overlay from the current or most recent session, and a moving robot position dot with direction indicator. During cleaning a **robot trail** (up to 2000 path points, 1 cm resolution) traces the robot's route. **Avoidance zones** are rendered as a hatched red overlay. After cleaning ends the card switches to **"LAST SESSION"** replay mode, showing the frozen cleaned-area grid and path from the completed run until the next clean starts; this saved session is also restored from `/get/cleaning_grid_map` on HA startup so the last run is visible immediately. The map card is fully interactive: tap any room polygon to toggle its selection, then press **Clean Selected** in the control bar — or use the control bar buttons to Start/Pause, Stop, or Go Home without leaving the map view. This view appears only when the `Live Map` sensor entity is enabled. If no map data is available a guidance card is shown instead.
+```
+config/rowenta_xplorer120_dashboard.yaml
+```
+
+Load it via **Settings → Dashboards → Add Dashboard → Raw configuration editor**.
+
+The dashboard includes:
+
+- Vacuum state card with battery
+- **Clean All**, **Pause / Continue**, **Stop**, **Return to Base** buttons
+- Fan speed selector and global strategy selector
+- Active map selector (for multi-floor homes)
+- Per-room clean buttons, fan speed selects, strategy selects, and deep-clean switches
+- **Clean Selected Rooms** — tick rooms on the map card then press once
+- Schedule toggles (enable / disable each saved schedule)
+- Per-room and lifetime statistics
+- Device info (serial, firmware, Wi-Fi)
+
+---
+
+## Lovelace Map Card
+
+The integration ships `rowenta-map-card.js`, a custom Lovelace card that renders a **live SVG map** of your home in the browser. No camera entity, no image proxy.
+
+The card JS file is registered as a Lovelace resource **automatically during integration setup** — no manual file copying or resource configuration required.
+
+**Features:**
+
+- Floor plan outline from room boundary polygons
+- Robot position dot with smooth heading interpolation (`transition: transform 0.45s linear`)
+- Cleaned-area shading, updated in real time
+- Docking station icon
+- Interactive room selection — tap a room to toggle it (highlighted blue), then press **Clean Selected Rooms**
+- Four control buttons: Start/Pause · Stop · Go Home · Clean Selected Rooms
+- Purely reactive to WebSocket push — zero `setInterval`
+
+**Card configuration:**
+
+```yaml
+type: custom:rowenta-map-card
+entity: vacuum.rowenta_xplorer120
+```
+
+---
+
+## Map Editor
+
+The repo includes a standalone **in-browser map editor** (`map_editor/`) for drawing and editing room boundaries directly against the robot's live map. It runs as a lightweight Python proxy server — no dependencies beyond the Python standard library.
+
+**Tools:**
+
+| Tool | Shortcut | Description |
+|------|----------|-------------|
+| Select | S | Select and inspect a room |
+| Pan | Space | Pan the map canvas |
+| Split room | X | Draw a split line across a room |
+| Merge rooms | M | Click two adjacent rooms to merge |
+| Draw no-go zone | B | Draw a blocking rectangle (robot avoids) |
+| Draw spot area | — | Draw a targeted spot-clean zone |
+| Fit to screen | F | Zoom to fit the whole map |
+| Cancel | Esc | Cancel current operation |
+
+**Running:**
+
+```bash
+# Standalone — serves at http://localhost:8765
+python3 map_editor/rowenta-editor-server.py 192.168.1.50
+
+# Custom port
+python3 map_editor/rowenta-editor-server.py 192.168.1.50 --port 9000
+```
+
+The editor also runs as a **Home Assistant add-on** (ingress mode), where the robot IP can be updated live without restarting the server. In proxy mode a `PROXY` badge appears in the header. Opening the HTML file directly is blocked by mixed-content policy — use the Python server or HA add-on instead.
 
 ---
 
 ## Entities
 
-> **Entity ID format:** all entity IDs use the robot's serial number as the device slug (e.g. `sensor.abc1234567_battery_level`), not a fixed name. This allows multiple robots to coexist in the same HA instance without collisions. The entity names shown below use `<serial>` as a placeholder — replace it with your robot's actual serial number slug, which you can find in **Settings → Devices & Services → Rowenta Xplorer 120 → device page**.
+### Entity ID Convention
 
-### Main Vacuum
-| Entity | Description |
-|--------|-------------|
-| `vacuum.<serial>` | Main control entity — state, battery %, fan speed, start / stop / return to base |
+All entity IDs are derived from the robot's serial number (`{device_id}`), read from `/get/robot_id` at first connection. The serial is lower-cased with hyphens and spaces replaced by underscores.
 
-### Buttons
-| Entity | Description |
-|--------|-------------|
-| `button.<serial>_clean_entire_home` | Start a full-home clean |
-| `button.<serial>_stop` | Stop immediately |
-| `button.<serial>_return_to_base` | Send the vacuum to its dock |
-| `button.<serial>_map<N>_clean_room_<id>` | Clean one specific room — one per discovered room, added automatically |
-| `button.<serial>_clean_selected_rooms` | Clean all rooms currently toggled ON by their `_selected` switches — resolves fan speed and strategy across the selection (most intensive wins), then resets all selection switches; unavailable when no rooms are selected |
+Per-room and per-map entities include the map ID to prevent registry collisions across floors:
 
-### Selects
-| Entity | Description |
-|--------|-------------|
-| `select.<serial>_cleaning_mode` | Global fan speed: Normal / Eco / High / Silent |
-| `select.<serial>_cleaning_strategy` | Global cleaning strategy: Default / Normal / Walls & Corners |
-| `select.<serial>_active_map` | Shows the active floor; lets you switch between saved maps |
-| `select.<serial>_map<N>_room_<id>_fan_speed` | Per-room fan speed override — one per discovered room |
-| `select.<serial>_map<N>_room_<id>_strategy` | Per-room cleaning strategy override — one per discovered room |
+```
+{platform}.{device_id}_map{map_id}_room_{area_id}_{property}
+```
 
-### Switches
-| Entity | Description |
-|--------|-------------|
-| `switch.<serial>_deep_clean_mode` | Global deep clean toggle — when ON, all cleans use Deep strategy (mode 3, double/triple pass) |
-| `switch.<serial>_map<N>_room_<id>_deep_clean` | Per-room deep clean override — forces Deep strategy for that room; bidirectionally synced with the robot's stored `strategy_mode` (changes made in the native app reflected within 300 s) |
-| `switch.<serial>_map<N>_room_<id>_selected` | Per-room selection toggle — HA-only state, no API call; toggled by the user (or by tapping the room on the map card) to build the room set for `button.clean_selected_rooms` |
-| `switch.<serial>_schedule_<task_id>` | Per-schedule enable/disable — one switch per schedule entry; writes via `/set/modify_scheduled_task`; optimistic state prevents bounce while the robot confirms |
+Examples for a robot with serial `ser120_abc123`:
 
-The global and per-room deep clean switches survive HA restarts (state restored via `RestoreEntity`). The per-room selection switches also restore state, but are map-scoped — they become unavailable when a different map is active.
+| Entity ID | Description |
+|-----------|-------------|
+| `vacuum.ser120_abc123` | Main vacuum entity |
+| `button.ser120_abc123_map3_clean_room_10` | Clean room 10 on map 3 |
+| `switch.ser120_abc123_map3_room_10_deep_clean` | Deep clean switch for room 10 |
+| `select.ser120_abc123_map3_room_10_fan_speed` | Fan speed for room 10 |
+| `select.ser120_abc123_map3_room_10_strategy` | Strategy for room 10 |
+| `switch.ser120_abc123_map3_room_10_selected` | Room selection switch for room 10 |
 
-#### Cleaning Strategy Modes
-Confirmed from the RobEye web UI source:
+---
 
-| API value | Label | Description |
-|-----------|-------|-------------|
-| `4` | Default | Robot chooses automatically |
-| `1` | Normal | Standard single-pass |
-| `2` | Walls & Corners | Extra passes along edges |
-| `3` | Deep | Double/triple pass |
+### Main Vacuum Entity
 
-The `cleaning_strategy` select offers **Default / Normal / Walls & Corners**. Deep mode is applied exclusively by the `deep_clean_mode` switch (and per-room counterparts), which takes precedence over the select when ON. Per-room strategy selects offer the same three options; the per-room deep clean switch overrides them for that room.
+`vacuum.{device_id}`
 
-#### Strategy Precedence (highest wins)
-1. Per-room deep clean switch → Deep for that room
-2. Per-room strategy select → room-level strategy
-3. Global deep clean switch → Deep for all rooms
-4. Global cleaning strategy select → Default / Normal / Walls & Corners
+Supported HA features: **START · STOP · PAUSE · RETURN_HOME · FAN_SPEED · STATE**
 
-### Sensors — Status
-| Entity | Description |
-|--------|-------------|
-| `sensor.<serial>_battery_level` | Battery % |
-| `sensor.<serial>_mode` | Current mode: `cleaning` / `ready` / `go_home` / `not_ready` |
-| `sensor.<serial>_charging_status` | Charging state: `charging` / `connected` / `unconnected` |
-| `sensor.<serial>_fan_speed` | Current fan speed label |
-| `sensor.<serial>_active_map` | Display name of the currently active floor map |
-| `sensor.<serial>_current_area_cleaned` | m² cleaned this session (disabled by default) |
-| `sensor.<serial>_current_cleaning_time` | Time elapsed this session (disabled by default) |
-| `sensor.<serial>_schedule` | Count of active schedules; `schedules` attribute holds the full parsed list consumed by the dashboard |
-| `sensor.<serial>_last_event` | Human-readable label of the most recent robot event (e.g. "Room clean succeeded", "Recharging mid-clean") — driven by `/get/event_log` polled every 30 s |
-| `sensor.<serial>_cleaning_queue` | Count of items in the HA command queue (0 = idle); `queue` attribute is a list of `{status, label, map_name}` dicts; `recent_events` attribute holds the last 10 top-level robot events |
-| `sensor.<serial>_queue_eta` | Estimated seconds remaining to complete all queued cleaning commands; `unavailable` during recharge-and-continue |
-| `sensor.<serial>_selected_room_count` | Count of rooms currently toggled ON for multi-room cleaning; used by the dashboard "Clean Selected" button label |
+Fan speed options (via the vacuum entity or `select.{device_id}_cleaning_mode`):
 
-### Sensors — Lifetime Statistics
-| Entity | Description |
-|--------|-------------|
-| `sensor.<serial>_total_cleaning_runs` | Total number of cleaning runs |
-| `sensor.<serial>_total_cleaned_area` | Total area cleaned (m²) |
-| `sensor.<serial>_total_distance_driven` | Total distance driven (m) |
-| `sensor.<serial>_total_cleaning_time` | Total cleaning time (h) |
+| Label | API value | Description |
+|-------|-----------|-------------|
+| normal | 1 | Standard power |
+| eco | 2 | Quiet, lower suction |
+| high | 3 | Maximum suction |
+| silent | 4 | Minimal noise |
 
-### Sensors — Per-Room (auto-discovered)
-One set per room per floor, added automatically. `<N>` is the map ID; `<id>` is the area ID from the RobEye API.
+---
 
-| Entity | Description |
-|--------|-------------|
-| `sensor.<serial>_map<N>_room_<id>_cleanings` | Times this room has been cleaned |
-| `sensor.<serial>_map<N>_room_<id>_area` | Room area (m²) |
-| `sensor.<serial>_map<N>_room_<id>_avg_clean_time` | Average clean duration (min) |
-| `sensor.<serial>_map<N>_room_<id>_last_cleaned` | Date last cleaned, or unavailable if never |
+### Controls
 
-### Binary Sensors (diagnostic, hidden by default)
-| Entity | State | Description |
-|--------|-------|-------------|
-| `binary_sensor.<serial>_dustbin_present` | Present / Missing | Dustbin seated or removed |
-| `binary_sensor.<serial>_left_brush_stuck` | Stuck / OK | Left side brush stuck — fires a persistent HA notification |
-| `binary_sensor.<serial>_right_brush_stuck` | Stuck / OK | Right side brush stuck — fires a persistent HA notification |
+| Entity ID | Description |
+|-----------|-------------|
+| `vacuum.{device_id}` | Main vacuum — start, pause, stop, return, fan speed |
+| `button.{device_id}_clean_entire_home` | Full-home clean |
+| `button.{device_id}_clean_selected_rooms` | Clean all currently selected rooms in one pass |
+| `button.{device_id}_return_to_base` | Send to dock |
+| `button.{device_id}_stop` | Stop immediately |
+| `select.{device_id}_cleaning_mode` | Global fan speed: Normal / Eco / High / Silent |
+| `select.{device_id}_cleaning_strategy` | Global strategy: Default / Normal / Walls & Corners |
+| `select.{device_id}_active_map` | Switch between saved floor maps |
+| `switch.{device_id}_deep_clean_mode` | Global deep-clean toggle (forces strategy=deep for this run) |
+
+> **Strategy note:** The strategy selector offers three options — Default / Normal / Walls & Corners. Deep clean is a separate switch (`deep_clean_mode`) that overrides strategy to `"deep"` (double/triple pass). The API only accepts `"normal"` or `"deep"` on the wire; "Default" and "Walls & Corners" both map to `"normal"`.
+
+---
+
+### Per-Room Controls (one set per named room, per map)
+
+| Entity ID | Description |
+|-----------|-------------|
+| `button.{device_id}_map{map_id}_clean_room_{area_id}` | Clean this room |
+| `switch.{device_id}_map{map_id}_room_{area_id}_selected` | Mark room for multi-room clean |
+| `select.{device_id}_map{map_id}_room_{area_id}_fan_speed` | Per-room fan speed (persists to robot) |
+| `select.{device_id}_map{map_id}_room_{area_id}_strategy` | Per-room strategy: Default / Normal / Walls & Corners (persists to robot) |
+| `switch.{device_id}_map{map_id}_room_{area_id}_deep_clean` | Per-room deep clean (persists to robot) |
+
+---
+
+### Schedule Switches (one per saved schedule)
+
+| Entity ID | Description |
+|-----------|-------------|
+| `switch.{device_id}_schedule_{task_id}` | Enable / disable a saved cleaning schedule |
+
+Toggled via `GET /set/modify_scheduled_task?task_id=N&enabled=0\|1`. Schedule switches **bypass the command queue** — they are settings writes, not cleaning operations.
+
+---
+
+### Status Sensors
+
+| Entity ID | Description |
+|-----------|-------------|
+| `sensor.{device_id}_battery_level` | Battery % |
+| `sensor.{device_id}_mode` | Current mode (cleaning / ready / go_home / charging) |
+| `sensor.{device_id}_charging` | Charging state |
+| `sensor.{device_id}_fan_speed_label` | Active fan speed label |
+| `sensor.{device_id}_active_map` | Name of the currently active map |
+| `sensor.{device_id}_queue_eta` | Estimated minutes to finish queued jobs (`None` during recharge) |
+| `sensor.{device_id}_last_event` | Most recent hardware event; backed by a rolling 50-event buffer |
+| `sensor.{device_id}_current_area_cleaned` | Area cleaned this session (m²) |
+| `sensor.{device_id}_current_cleaning_time` | Time elapsed this session |
+| `sensor.{device_id}_cleaning_queue` | Command queue status |
+| `sensor.{device_id}_selected_room_count` | Number of rooms currently selected for multi-room clean |
+| `sensor.{device_id}_live_map` | Live map data (floor plan, cleaned area, robot position) as attributes — consumed by the map card |
+| `sensor.{device_id}_schedule` | All saved schedules as attributes |
+
+---
+
+### Lifetime Statistics
+
+| Entity ID | Description |
+|-----------|-------------|
+| `sensor.{device_id}_total_number_of_cleaning_runs` | Total runs |
+| `sensor.{device_id}_total_area_cleaned` | Total area (m²) |
+| `sensor.{device_id}_total_distance_driven` | Total distance (m) |
+| `sensor.{device_id}_total_cleaning_time` | Total time (h) |
+
+---
+
+### Per-Room Sensors (one set per named room, per map)
+
+| Entity ID | Description |
+|-----------|-------------|
+| `sensor.{device_id}_{m}room_{area_id}_cleanings` | Times cleaned |
+| `sensor.{device_id}_{m}room_{area_id}_area` | Room area (m²) |
+| `sensor.{device_id}_{m}room_{area_id}_avg_clean_time` | Average clean time (min) |
+| `sensor.{device_id}_{m}room_{area_id}_last_cleaned` | Date last cleaned (`None` = never) |
+
+> `{m}` is empty for the default map or `map{map_id}_` for secondary maps.
+
+---
 
 ### Diagnostic Sensors (hidden by default)
-| Entity | Description |
-|--------|-------------|
-| `sensor.<serial>_wi_fi_signal_strength` | Wi-Fi RSSI (dBm) |
-| `sensor.<serial>_wi_fi_network` | Wi-Fi SSID |
-| `sensor.<serial>_firmware_version` | Protocol / firmware version |
-| `sensor.<serial>_serial_number` | Robot serial number |
-| `sensor.<serial>_cliff_sensor` | Cliff sensor health |
-| `sensor.<serial>_bump_sensor` | Bump sensor health |
-| `sensor.<serial>_wheel_drop_sensor` | Wheel drop sensor health |
-| `sensor.<serial>_main_brush_current` | Main brush motor current (mA) |
-| `sensor.<serial>_left_brush_current` | Left side brush motor current (mA) |
-| `sensor.<serial>_right_brush_current` | Right side brush motor current (mA) |
 
-> Reveal hidden entities: **Settings → Devices & Services → Rowenta Xplorer 120 → entities → Show hidden entities**
+| Entity ID | Description |
+|-----------|-------------|
+| `sensor.{device_id}_wifi_rssi` | Wi-Fi signal strength (dBm) |
+| `sensor.{device_id}_wifi_ssid` | Wi-Fi network name |
+| `sensor.{device_id}_protocol_version` | Robart SDK / firmware version |
+| `sensor.{device_id}_robot_serial` | Serial number |
+| `sensor.{device_id}_main_brush_current_ma` | Main brush motor current (mA) |
+| `sensor.{device_id}_side_brush_left_current_ma` | Left side brush motor current (mA) |
+| `sensor.{device_id}_side_brush_right_current_ma` | Right side brush motor current (mA) |
+| `sensor.{device_id}_sensor_cliff_status` | Cliff sensor health |
+| `sensor.{device_id}_sensor_bump_status` | Bump sensor health |
+| `sensor.{device_id}_sensor_wheel_drop_status` | Wheel drop sensor health |
 
-### Live Map Sensor (opt-in, disabled by default)
-| Entity | Description |
-|--------|-------------|
-| `sensor.<serial>_live_map` | Transport sensor for the SVG map card — attributes carry the floor plan geometry, cleaned-area overlay, robot position/heading, and path trail |
+---
 
-Enable this entity in **Settings → Devices & Services → Rowenta Xplorer 120** to activate the Map dashboard view and robot tracking. When disabled, all live-map polling is suspended.
+### Binary Sensors
+
+| Entity ID | Description |
+|-----------|-------------|
+| `binary_sensor.{device_id}_left_brush_stuck` | Left brush stuck — `PROBLEM` device class |
+| `binary_sensor.{device_id}_right_brush_stuck` | Right brush stuck — `PROBLEM` device class |
+| `binary_sensor.{device_id}_dustbin_present` | Dustbin present / missing (custom states, no device class) |
+
+> Reveal hidden entities: **Settings → Devices → Rowenta RobEye → Show hidden entities**
 
 ---
 
@@ -212,103 +303,76 @@ Enable this entity in **Settings → Devices & Services → Rowenta Xplorer 120*
 
 ### `rowenta_roboeye.clean_room`
 
-Start a targeted clean of one or more specific rooms.
+Clean specific rooms by area ID — useful in automations.
 
 ```yaml
 service: rowenta_roboeye.clean_room
 target:
-  entity_id: vacuum.<serial>
+  entity_id: vacuum.ser120_abc123
 data:
-  room_ids: [3, 11]       # required — list of numeric area IDs
-  fan_speed: high          # optional — eco / normal / high / silent
-  deep_clean: true         # optional — forces Deep strategy for this call only
-```
-
-Room IDs are the numeric area IDs visible in the per-room entity names (the `<id>` suffix after `room_`).
-
-### `rowenta_roboeye.remove_queue_entry`
-
-Remove a pending item from the HA command queue by position index (0-based). Useful when a queued room clean is no longer needed without stopping the currently active job.
-
-```yaml
-service: rowenta_roboeye.remove_queue_entry
-target:
-  entity_id: vacuum.<serial>
-data:
-  pending_index: 0   # 0 = first pending item (the one that would run next)
+  room_ids: [3, 11]      # list of RobEye area IDs
+  fan_speed: high        # optional — eco / normal / high / silent
+  deep_clean: false      # optional — forces deep strategy for this run only
 ```
 
 ---
 
-## Command Queue
+## Hardware Alerts & Logbook
 
-All `/set/` cleaning commands are serialised through an `asyncio.PriorityQueue`. The worker dispatches one command at a time, polls `/get/command_result` for completion, waits for the robot to physically finish, then dispatches the next.
+The integration raises **persistent HA notifications** for hardware events detected via the event log:
 
-### Priority
+| Event | Notification |
+|-------|-------------|
+| Left or right brush stuck | "Rowenta — Brush Alert" — auto-dismissed when brush is freed |
+| Dustbin removed | "Rowenta — Dustbin Missing" — auto-dismissed when dustbin is reinserted |
 
-| Priority | Commands |
-|----------|---------|
-| 0 (immediate) | `stop`, `go_home`, `clean_start_or_continue` — jump to front of queue; worker wakes immediately from any poll sleep |
-| 1 (normal) | All cleaning commands (`clean_map`, `clean_all`) |
-| bypass (no queue) | `modify_area`, `set_fan_speed` — fire directly and return; never held behind a cleaning job |
+Top-level user-initiated events (`hierarchy=1`, `source_type=user`) are also written to the **HA logbook** with human-readable labels. The integration keeps a rolling buffer of the last 50 top-level events, exposed via `sensor.{device_id}_last_event`.
 
-### Completion detection
+**Tracked event types:**
 
-After each dispatched command, the worker:
-1. Captures the `cmd_id` from the `/set/` response.
-2. Polls `/get/command_result` every 5 s (up to 30 s) for that exact `cmd_id`.
-3. Calls `_wait_for_active_operation_end()` — two-phase: waits up to 30 s for the robot to *enter* active mode, then waits (no timeout, 2 consecutive non-active polls) for it to *exit* — preventing the worker from racing ahead during brief inter-room transitions.
-4. Waits 8 s (dock settle delay) before dispatching the next job.
-
-### Pause / resume
-
-**Pause** (`vacuum.stop` / Stop button while cleaning):
-- Drains all pending cleaning jobs from the queue into `_paused_jobs` (saved for resume).
-- Sets `_is_paused = True`, captures current fan speed.
-- Vacuum state → `paused`.
-
-**Resume** (`vacuum.start` when paused):
-- Re-dispatches the original `clean_map` as a fresh queue item (NOT `clean_start_or_continue` — firmware frequently abandons sessions after `/set/stop`, so a fresh `clean_map` guarantees the room gets cleaned).
-- Re-enqueues `_paused_jobs` behind the resumed room; commands added while paused come last.
-- Queue order: *paused room* → *saved jobs* → *newly-added-while-paused jobs*.
-
-**Full stop** (`vacuum.return_to_base` / Go Home):
-- Discards `_paused_jobs` entirely — no resume possible.
-- Clears `_is_paused`.
-
-**Advance to next job** (Stop button when already paused):
-- Abandons the current (paused) room.
-- Re-enqueues the remaining `_paused_jobs` so the queue continues with the next room.
-
-### Queue display
-
-`sensor.<serial>_cleaning_queue` shows each job's status:
-
-| Status icon | Meaning |
-|-------------|---------|
-| 🔄 active | Currently being dispatched and tracked |
-| ⏸ paused | Was stopped mid-run; will re-run first on resume |
-| ⏳ pending | Waiting in the queue |
-
-`sensor.<serial>_queue_eta` sums `average_cleaning_time` from `/get/areas` for every room in every queued job (the same room queued twice counts twice). Returns `unavailable` during recharge-and-continue.
+| type_id | Label |
+|---------|-------|
+| 1010 | Started cleaning room |
+| 1011 | Room clean succeeded |
+| 1012 | Room clean interrupted |
+| 1030 | Returning to dock |
+| 1031 | Docked |
+| 1032 | Docking interrupted |
+| 1033 | Docking failed |
+| 1040 | Recharging mid-clean |
+| 1042 | Recharge cycle interrupted |
+| 1050 | Localizing |
+| 1051 | Localized |
+| 1052 | Localization failed |
+| 1110 | Room clean started |
+| 1111 | Multi-room clean succeeded |
+| 1112 | Room clean interrupted |
+| 1140 | Undocking |
+| 1170 | Re-docking |
+| 1172 | Re-docking interrupted |
+| 1200 | Command skipped |
+| 2000 | Battery low |
+| 2010 | Robot lifted |
+| 2011 | Robot set back down |
+| 2030 | Dustbin removed |
+| 2031 | Dustbin inserted |
 
 ---
 
-## Multi-Floor / Multi-Map Support
+## Command Queue & State Machine
 
-The robot does **not** auto-detect which floor it is on. The workflow for multi-floor homes is:
+Cleaning commands (`clean_all`, `clean_map`, `go_home`) are managed by an `asyncio.Queue` with a background worker. Each dispatched command receives a `cmd_id` from the robot and is polled every **5 s** via `/get/command_result` (timeout: 30 s per command).
 
-1. Physically move the robot to the dock on the other floor.
-2. In HA, use **`select.active_map`** to select the correct floor map.
-3. Room cards and entities for the new floor appear immediately — no reload needed.
+**Settings writes bypass the queue entirely:** `modify_area`, per-room fan speed / strategy, and `modify_scheduled_task` are sent immediately. This bypass is enforced in three places in the code to prevent regressions.
 
-Room entity `unique_id` values include both the map ID and area ID, so rooms on different floors with identical area IDs never collide in the entity registry.
+### Recharge-and-Continue
 
-The `select.active_map` entity lists all permanent saved maps by their user-assigned name (Cyrillic supported) or "Map 1", "Map 2" for unnamed maps. The `sensor.active_map` shows the name of the currently selected floor.
+When the robot runs low mid-clean it docks, charges (~100 min), then resumes automatically. During this cycle:
 
-> **Note:** `/set/use_map` returns error 101 on this firmware — the map can only be selected via the integration's `select.active_map` entity, which updates HA's tracking context. The robot's own SLAM engine determines localisation from its physical position.
-
-**How multi-map works internally:** At startup the integration fetches areas for every permanent map and pre-creates entities for all floors. Switching maps is a pure local operation — no extra HTTP calls — and entities for inactive floors are simply marked unavailable until selected. A uniform background refresh (every 600 s, paused during cleaning) keeps all maps' room data up to date.
+- State stays `mode=cleaning + charging=charging`
+- The original `cmd_id` remains `"executing"` throughout
+- ETA returns `None`
+- The queue worker extends its timeout to **3 hours** (`MODE_RECHARGE_CONTINUE_WAIT_S`) and polls every **30 s** (`MODE_RECHARGE_CONTINUE_POLL_S`)
 
 ---
 
@@ -316,110 +380,114 @@ The `select.active_map` entity lists all permanent saved maps by their user-assi
 
 | Data | Interval | Endpoint(s) |
 |------|----------|-------------|
-| Status | 5 s cleaning / 15 s idle | `/get/status` |
-| Sensor values (brushes, dustbin) | Every tick | `/get/sensor_values` |
-| Robot position | 5 s cleaning / 60 s idle (live map enabled only) | `/get/rob_pose` |
-| Cleaned-area polygon + occupancy grid (live) | Every 5 s — **active cleaning only**, never polled when idle | `/get/seen_polygon`, `/get/cleaning_grid_map` |
-| Event log (incremental, `last_id` cursor) | Every 30 s | `/get/event_log` |
-| Rooms, areas, maps (all permanent floors) | Every 600 s (paused during cleaning; forced once on clean end) | `/get/maps`, `/get/areas` (fetched for every known permanent map) |
-| Sensor health, map status | Every 600 s | `/get/sensor_status`, `/get/robot_flags`, `/get/map_status` |
-| Cleaning schedule | Every 60 s | `/get/schedule` |
-| Lifetime statistics | Every 600 s | `/get/statistics`, `/get/permanent_statistics` |
-| Saved map geometry (walls, rooms, last-session grid) | Every 600 s | `/get/feature_map`, `/get/tile_map`, `/get/areas` (saved), `/get/seen_polygon` (saved), `/get/cleaning_grid_map` (saved) |
-| Serial number, Wi-Fi, firmware | Every 3600 s | `/get/robot_id`, `/get/wifi_status`, `/get/protocol_version` |
-
-> `/get/live_parameters` is **never polled** — it is a configuration endpoint only; polling it during cleaning would interfere with robot state.
+| Status + robot position | 5 s (cleaning) / 15 s (idle) | `/get/status`, `/get/rob_pose` |
+| Event log | 30 s | `/get/event_log?last_id=N` |
+| Map geometry + areas | 600 s | `/get/n_n_polygons`, `/get/seen_polygon`, `/get/areas` |
+| Statistics | 600 s | `/get/statistics` |
+| Maps list (background refresh) | 600 s | `/get/maps` |
+| Device info | 3600 s | `/get/robot_id`, `/get/wifi_status`, `/get/sensor_status` |
+| Command result polling | 5 s (per queued command) | `/get/command_result` |
 
 ---
 
-## Robot Position
+## CI / Workflows
 
-Position is read from `/get/rob_pose`:
-
-```json
-{
-  "map_id": 3,
-  "x1": -2,
-  "y1": -3,
-  "heading": 157,
-  "valid": true,
-  "is_tentative": false,
-  "timestamp": 958459
-}
-```
-
-- `x1`, `y1` — position in API units. **1 unit = 2 mm** (validated by physical measurement).
-- `heading` — already in degrees (0–360), no conversion needed.
-- `valid: false` — robot has no SLAM fix; the position dot is hidden on the map card.
-- `is_tentative: true` — SLAM is converging; position may jump.
-- `timestamp` — monotonic uptime counter; an unchanged value during active cleaning is logged as a potential stale-position warning.
-
-The SVG map card uses `transition: transform 0.45s linear` on the robot element to interpolate smoothly between position fixes, making motion appear continuous.
-
-> `/debug/localization` and related debug endpoints are **not used** — `/get/rob_pose` supersedes them and works in all robot states.
+| Workflow | Trigger | Jobs |
+|----------|---------|------|
+| `validate.yml` | push / PR | pytest (Python 3.12) + hassfest |
+| `release.yml` | push to `main` or `v*` tag | Reads version from `manifest.json`, creates git tag if absent, builds `rowenta_roboeye.zip`, publishes GitHub Release |
 
 ---
 
-## Recharge-and-Continue
+## API Endpoints Reference
 
-When the robot runs low on battery mid-clean it docks automatically to recharge, then resumes the same job. During the entire charge cycle:
+### Implemented
 
-- `sensor.<serial>_mode` stays `cleaning`
-- `sensor.<serial>_charging_status` shows `charging`
-- The same `cmd_id` remains `executing` — it never aborts
-- `sensor.<serial>_queue_eta` returns `unavailable`
-- `/get/event_log` emits `type_id=2000` (battery low) then `type_id=1040` (`recharge_and_continue`)
-- After charging completes, `charging` returns to `unconnected` and the robot leaves the dock to resume
+| Endpoint | Used For |
+|----------|----------|
+| `GET /get/status` | Mode, charging, battery, current area / time |
+| `GET /get/rob_pose` | Robot X/Y position and heading (degrees). 1 unit = 2 mm. `valid=false` = no fix |
+| `GET /get/sensor_values` | Brush motor currents, brush stuck flag |
+| `GET /get/sensor_status` | Cliff / bump / wheel-drop sensor health |
+| `GET /get/maps` | All saved floor maps with names and IDs |
+| `GET /get/areas?map_id=N` | Room list — boundaries, `area_state`, `area_type`, `cleaning_parameter_set`, `strategy_mode` |
+| `GET /get/seen_polygon` | Cleaned-area polygon (current or last run) |
+| `GET /get/n_n_polygons` | Room boundary polygons for map rendering |
+| `GET /get/feature_map` | Docking station pose (`docking_pose.valid` may be string `"false"` before relocation) |
+| `GET /get/cleaning_grid_map` | Binary occupancy grid (map background) |
+| `GET /get/statistics` | Per-room and lifetime stats |
+| `GET /get/schedule` | All saved schedules (enabled + disabled) |
+| `GET /get/wifi_status` | SSID, RSSI |
+| `GET /get/robot_id` | Serial number (`unique_id` / `serial_number` fields) |
+| `GET /get/event_log?last_id=N` | Incremental hardware event log — returns events with `id > N` |
+| `GET /get/ui_cmd_log` | User command history |
+| `GET /get/command_result` | Poll command status by `cmd_id` — returns `{"commands":[...]}` array |
+| `GET /debug/exploration` | SLAM exploration state |
+| `GET /debug/relocalization` | SLAM relocalization state |
+| `SET /set/clean_map` | Clean specific rooms or switch active map |
+| `SET /set/clean_all` | Clean all rooms |
+| `SET /set/clean_start_or_continue` | Resume after user-initiated pause |
+| `SET /set/go_home` | Return to dock |
+| `SET /set/stop` | Stop cleaning — transitions active `cmd_id` to `"aborted"` |
+| `SET /set/modify_area` | Write per-room fan speed / strategy (persists to robot map) |
+| `SET /set/modify_scheduled_task` | Enable / disable a saved schedule (`task_id` + `enabled` only) |
 
-The command worker extends its `_wait_for_cmd` timeout to 3 hours with a 30 s poll interval during this state so the queue is not prematurely cancelled.
+**Known deprecated / broken:**
+
+| Endpoint | Notes |
+|----------|-------|
+| `SET /set/clean_continue` | Returns error 106 `command_deprecated` — use `/set/clean_start_or_continue` |
+| `GET /get/live_parameters` | Removed from all polling — unreliable |
+| `GET /debug/localization` | Superseded by `/get/rob_pose` |
+| `GET /get/configurable_parameters` | Returns HTTP 400 on this firmware |
 
 ---
 
-## Live Map Card Configuration
+### Discovered — Not Yet Integrated
 
-The `custom:rowenta-map-card` card is added automatically to the Map view dashboard. To customise it in YAML, the available options are:
+Confirmed present on the robot (via ApolloLogs / APK analysis) but not yet used. Candidates for future features:
 
-```yaml
-type: custom:rowenta-map-card
-entity: sensor.<serial>_live_map      # required
-vacuum_entity: vacuum.<serial>        # optional — auto-derived from entity if omitted
-title: "Living Room Map"              # default: "Live Map"
-rotate: 0                             # degrees to rotate the whole map (0/90/180/270)
-show_dock: true                       # show dock position icon
-show_walls: true                      # show wall outlines
-show_room_labels: true                # show room name labels
-show_room_areas: true                 # show room area (m²) under label
-room_opacity: 0.25                    # fill opacity for room polygons (0.0–1.0)
-show_redundant_rooms: false           # show auto-detected rooms without user-assigned names
-```
-
-The card is purely reactive to WebSocket push from the `live_map` sensor — it uses no `setInterval` polling.
+| Endpoint | Notes |
+|----------|-------|
+| `GET /get/map_status` | Map build / load state |
+| `GET /get/robot_flags` | Low-level capability flags |
+| `GET /get/protocol_version` | Robart SDK version string |
+| `GET /get/cleaning_parameter_set` | Global cleaning parameter set definitions |
+| `GET /get/permanent_statistics` | Non-resettable lifetime counters |
+| `GET /get/sensor_commands` | Brush / sensor raw commands; stuck-brush detection |
+| `GET /get/topo_map` | Topological map data |
+| `GET /get/tile_map` | Tile-based map; also contains docking position |
+| `GET /get/task_history` | Per-task cleaning history |
+| `GET /get/points_of_interest` | POI list (returns `[{}]` on current firmware) |
+| `GET /get/product_feature_set` | Feature capability flags per model — useful for S220/S240 auto-detection |
+| `GET /get/safety_mcu_firmware_version` | Safety MCU firmware string |
+| `GET /get/bug_report` | Internal diagnostic log |
+| `GET /get/critical_logs` | Critical error log |
+| `GET /debug/smsc` | Safety MCU status |
+| `SET /set/add_area` | Draw new room or blocking zone (confirmed: flat `x1..y4` params, no `save_map` needed) |
+| `SET /set/merge_areas` | Merge two rooms (`area_id1=N&area_id2=M`) |
+| `SET /set/split_area` | Split a room (`area_id=N&x1=X&y1=Y&x2=X&y2=Y`) |
 
 ---
 
-## Cleaning Schedule
+## Known Limitations & Open Items
 
-The schedule sensor (`sensor.<serial>_schedule`) reads `/get/schedule` every 60 seconds. Both enabled and disabled schedules are returned by the API. The **sensor state is the count of active (enabled) schedules**. The full parsed list is in the `schedules` attribute, consumed by the dashboard:
+### Rooms dashboard view
 
-```yaml
-# Example schedules attribute entry
-- task_id: 1
-  enabled: true
-  days: ["Mon", "Wed", "Fri"]
-  days_full: ["Monday", "Wednesday", "Friday"]
-  time: "07:30"
-  hour: 7
-  minute: 30
-  mode: "all"           # "all" = whole home, "rooms" = specific rooms
-  map_id: "3"
-  map_name: "Ground Floor"
-  rooms: []             # list of {id, name} when mode is "rooms"
-  rooms_str: "All rooms"
-  fan_speed: "eco"
-  fan_raw: 2            # 0 = per-room default, 1–4 = Normal/Eco/High/Silent
-```
+After a map switch or HA restart, the Rooms view may occasionally display entity cards as unavailable or show room names from the previous floor. This is a timing issue between the coordinator loading new room data and the dashboard updating.
 
-> Schedules are **read and toggle** from HA — enable or disable individual schedules using the `switch.<serial>_schedule_<task_id>` entities. Each schedule switch exposes `task_id`, `days`, `time`, `cleaning_mode`, `area_ids`, `fan_speed`, and `map_id` as extra state attributes. Creating or editing schedule times/days must be done in the RobEye mobile app.
+**Workaround:** reload the integration via **Settings → Devices & Services → Rowenta RobEye → ⋮ → Reload**. The Rooms view will rebuild correctly within a few seconds.
+
+### Other
+
+| # | Item | Status |
+|---|------|--------|
+| 1 | Room sensor `unique_id` missing map prefix — collision on two-floor homes | 🔴 Fix pending |
+| 2 | `_format_date` shows `2001-xx-xx` instead of "Never" for un-cleaned rooms | 🔴 Fix pending |
+| 3 | `cleaning_parameter_set=0` shows blank in schedule sensor (should show "Default") | 🟡 Fix pending |
+| 4 | Root-level `icon.png` / `logo.png` are byte-for-byte duplicates of `brand/` variants — delete | 🟢 HACS hygiene |
+| 5 | `zip_release: false` in `hacs.json` conflicts with `release.yml` producing a zip artifact | 🟢 HACS hygiene |
+| 6 | Submit brand assets to [home-assistant/brands](https://github.com/home-assistant/brands) for official icon | 🟢 Future |
 
 ---
 
@@ -427,116 +495,21 @@ The schedule sensor (`sensor.<serial>_schedule`) reads `/get/schedule` every 60 
 
 | Symptom | Fix |
 |---------|-----|
-| Integration not found after install | Restart Home Assistant |
-| "Cannot connect" on setup | Check IP; confirm the vacuum is powered on and reachable on port 8080; assign a DHCP reservation |
-| Robot got a new IP address | Update without removing the integration: **Settings → Devices & Services → Rowenta / Tefal RobEye → Configure** |
-| Rooms not appearing | Wait for the first 300-second areas poll, or reload the integration; verify the vacuum has a saved map with named rooms |
-| Dashboard not in sidebar | Reload the integration; check HA logs for Lovelace errors |
-| Auto-discovery not working | Use manual IP entry; open an issue with the mDNS service name your vacuum advertises |
-| Map view missing from dashboard | Enable `sensor.<serial>_live_map` in the entity list, then reload the integration |
-| Map shows wrong floor after robot moved | The robot does not auto-detect floor changes; manually select the correct floor via `select.active_map`. Room entities for the new floor appear immediately; area statistics refresh within 600 s |
-| Vacuum shows `error` state | Check dustbin is seated and brushes are not stuck — the `error` attribute shows the specific cause |
-| Mode sensor shows `cleaning` while docked | Robot is in **recharge-and-continue** — battery was low mid-clean; it will resume automatically when charged |
-| `queue_eta` sensor shows `unavailable` | Normal during recharge-and-continue; ETA resumes once the robot leaves the dock |
-| Schedule sensor empty | No schedules are configured in the RobEye app, or the vacuum returned an empty schedule list |
-| Room "Last cleaned" unavailable | The room has never been cleaned — correct behaviour; the API sentinel (year 2001) is shown as unavailable |
-
----
-
-## API Reference (confirmed endpoints)
-
-All communication is plain HTTP to port 8080 on the local network — no authentication, no cloud.
-
-### Status & Position
-
-| Endpoint | Used for |
-|----------|---------|
-| `GET /get/status` | Robot mode, battery, error state |
-| `GET /get/sensor_values` | Dustbin level, brush stuck flags, motor currents |
-| `GET /get/sensor_commands` | Brush status and stuck-brush error codes |
-| `GET /get/sensor_status` | Cliff / bump / wheel-drop sensor health |
-| `GET /get/robot_flags` | Feature capability flags |
-| `GET /get/robot_id` | Serial number and hardware identifiers |
-| `GET /get/wifi_status` | SSID and RSSI |
-| `GET /get/protocol_version` | Firmware version string |
-| `GET /get/rob_pose` | Real-time robot position (x, y, heading) — works in all states |
-
-### Maps & Rooms
-
-| Endpoint | Used for |
-|----------|---------|
-| `GET /get/maps` | All saved floor maps with names and statistics |
-| `GET /get/map_status` | Currently active floor map ID |
-| `GET /get/areas?map_id=N` | Room list with names, areas, statistics, fan speed, strategy |
-| `GET /get/feature_map?map_id=N` | Saved floor plan: walls, room polygons, dock position (`docking_pose`) |
-| `GET /get/tile_map?map_id=N` | Tile-based map geometry; also contains docking position |
-| `GET /get/topo_map` | Topological map graph (node/edge connectivity between areas) |
-| `GET /get/seen_polygon` | Cleaned-area outline (live session) |
-| `GET /get/cleaning_grid_map` | Occupancy grid (live + saved session) |
-| `GET /get/n_n_polygons` | Nearest-neighbour polygon boundaries |
-
-### Schedules & Statistics
-
-| Endpoint | Used for |
-|----------|---------|
-| `GET /get/schedule` | All cleaning schedules (enabled + disabled) |
-| `GET /get/cleaning_parameter_set` | Current fan speed / cleaning parameter set |
-| `GET /get/statistics` | Session and cumulative statistics |
-| `GET /get/permanent_statistics` | Alternative lifetime statistics |
-| `GET /get/task_history` | Historical cleaning task records |
-
-### Commands & Events
-
-| Endpoint | Used for |
-|----------|---------|
-| `GET /get/command_result` | Poll result of an issued command by `cmd_id` |
-| `GET /get/event_log?last_id=N` | Incremental event log — battery low, recharge-and-continue, area cleaned, dock errors |
-| `GET /get/ui_cmd_log` | Audit log of all commands issued from app or UI |
-| `GET /set/clean_all` | Start a full-home clean |
-| `GET /set/clean_map?map_id=N&area_ids=X,Y` | Start a targeted room clean (one or more rooms) |
-| `GET /set/clean_start_or_continue` | Resume a paused / interrupted clean |
-| `GET /set/go_home` | Return to dock |
-| `GET /set/stop` | Stop immediately |
-| `GET /set/switch_cleaning_parameter_set` | Change global fan speed |
-| `GET /set/modify_area` | Write per-room fan speed and strategy (bypasses command queue) |
-| `GET /set/modify_scheduled_task?task_id=X&enabled=1` | Enable or disable a schedule entry |
-
-### Debug (read-only, not polled in production)
-
-| Endpoint | Notes |
-|----------|-------|
-| `GET /debug/exploration` | SLAM exploration state dump |
-| `GET /debug/relocalization` | Relocalization debug data |
-| `GET /debug/smsc` | SMSC state machine debug |
-| `GET /get/critical_logs` | On-device critical error log |
-| `GET /get/bug_report` | Full on-device diagnostic bundle |
-
-**Known dead / limited endpoints on Serie 120 firmware:**
-- `/get/rooms` — returns `unknown_request`; room data comes from `/get/areas` only
-- `/get/points_of_interest` — responds but always returns `[{}]`; dock position comes from `/get/feature_map` `docking_pose` instead
-- `/get/configurable_parameters` — returns HTTP 400 Bad Request on this firmware
-- `/set/use_map` — returns error 101; active map is switched via `/set/clean_map?map_id=X` only
-- `/set/clean_continue` — returns error 106 `command_deprecated`; use `/set/clean_start_or_continue` instead
-
----
-
-## Planned / Not Yet Implemented
-
-| Feature | Notes |
-|---------|-------|
-| **Schedule create / edit from HA** | Schedules are read + toggle-only from HA. Create and edit schedule entries in the RobEye mobile app. |
-| **No-go zone / spot clean entities** | `area_type: "to_be_cleaned"` areas are skipped during entity creation; no HA entities are built for avoidance or spot zones yet. |
-| **Event log as HA events** | `/get/event_log` is consumed internally (recharge-and-continue detection, `type_id` 2000/1040) and drives `sensor.last_event` and `sensor.cleaning_queue.recent_events`, but events are not yet surfaced as native HA logbook events. |
-| **Schedule create / edit from HA** | Schedules are read + toggle-only from HA. Create and edit schedule entries in the RobEye mobile app. |
-| **No-go zone / spot clean entities** | `area_type: "to_be_cleaned"` areas are skipped during entity creation; no HA entities are built for avoidance or spot zones yet. |
-| **HACS default list** | Integration targets the HACS default list in a future release. |
+| Integration not found after install | Restart HA |
+| "Cannot connect" during setup | Check IP, confirm vacuum is powered on and on the same subnet, assign a DHCP reservation |
+| Rooms view shows wrong rooms or unavailable cards | Reload the integration — see Known Limitations |
+| Map card shows blank | Hard-refresh the browser; if still blank check HA logs for resource registration errors at startup |
+| Auto-discovery not working | Use manual IP entry; open a GitHub issue with the mDNS service type from your vacuum |
+| Schedule toggles not visible | At least one schedule must be saved on the robot |
+| Robot shows "unavailable" | Three consecutive failed polls trigger unavailable state — check network / firewall |
+| Map editor: "Mixed content blocked" | Use the Python proxy server (`rowenta-editor-server.py`) or the HA add-on instead of opening the HTML file directly |
 
 ---
 
 ## Running Tests
 
 ```bash
-pip install pytest pytest-asyncio pytest-homeassistant-custom-component
+pip install -r requirements-test.txt
 pytest tests/ -v
 ```
 
@@ -544,25 +517,28 @@ pytest tests/ -v
 
 ## Contributing
 
-Issues and pull requests welcome at [github.com/Tazmania0/rowenta_roboeye](https://github.com/Tazmania0/rowenta_roboeye/issues).
+PRs welcome. Before opening one:
 
-Helpful contributions:
-- Testing on S220 / S240 models and reporting compatibility
-- **Translations** — copy `translations/en.json`, translate, and open a PR. The following entities currently fall back to their hardcoded `_attr_name` values and need translation keys added to `en.json`: `sensor.schedule`, `sensor.cleaning_queue`, `sensor.selected_room_count`, `sensor.queue_eta`, `sensor.last_event`, `button.clean_selected`, `switch.deep_clean` (per-room), `switch.selected` (per-room), `switch.schedule_<N>`
-- Reporting undocumented API endpoints or parameters discovered via packet capture or APK analysis
+1. Run `ruff check` and `mypy`
+2. Add or update tests for any new API endpoints
+3. Follow the **empirical-first** principle — confirm live device responses before implementing
 
 ---
 
-## Credits & Prior Art
+## Credits
 
-- **[Romy integration](https://www.home-assistant.io/integrations/romy/)** — official HA integration for a related Robart-SDK vacuum; architecture reference
-- **[HA community thread](https://community.home-assistant.io/t/rowenta-vacuum-cleaner-ht-component/244131/)** — original community exploration of the RobEye HTTP API; first published endpoint map
-- **[openHAB Romy integration](https://community.openhab.org/t/romy-robot-integration-via-http-binding-austrian-vacuum-robot-highly-recommended/143307)** — independent HTTP binding implementation; useful endpoint cross-reference
-- **[Dreame Vacuum integration](https://github.com/Tasshack/dreame-vacuum)** — reference for live map card patterns and multi-room entity architecture
-- **[Xiaomi Vacuum Map Card](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card)** — inspiration for the SVG map card interaction model
+- [Romy integration](https://www.home-assistant.io/integrations/romy/) — Robart HTTP API pattern
+- [Dreame vacuum](https://github.com/Tasshack/dreame-vacuum) — coordinator / entity architecture
+- [Xiaomi Vacuum Map Card](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card) — map card inspiration
+- [ApolloLogs](https://community.home-assistant.io/t/rowenta-vacuum-cleaner-ht-component/244131/19) — endpoint discovery
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE)
+
+[hacs-badge]: https://img.shields.io/badge/HACS-Custom-orange.svg
+[hacs-url]: https://github.com/Tazmania0/rowenta_roboeye
+[ha-badge]: https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blue.svg
+[license-badge]: https://img.shields.io/badge/License-MIT-yellow.svg
