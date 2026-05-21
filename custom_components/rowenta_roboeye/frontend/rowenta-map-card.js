@@ -7,8 +7,9 @@
 // v2.7.1: only render real blocking zones as red no-go overlays.
 // v2.7.2: render clean spot zones with a separate amber hatch.
 // v2.7.3: keep legacy spot polygons visible while HA refreshes payload attrs.
+// v2.7.4: detect legacy room-shaped spot payloads by name/state.
 
-const VERSION = "2.7.3";
+const VERSION = "2.7.4";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -78,7 +79,10 @@ function isBlockingZone(zone) {
 }
 
 function isSpotZone(zone) {
-  return zone?.area_type === "to_be_cleaned" && !isBlockingZone(zone);
+  if (!zone || isBlockingZone(zone)) return false;
+  if (zone.area_type === "to_be_cleaned") return true;
+  const name = String(zone.name || "").trim().toLowerCase();
+  return zone.area_state === "clean" && zone.room_type === "none" && name.startsWith("spot");
 }
 
 function isLegacyZone(zone) {
