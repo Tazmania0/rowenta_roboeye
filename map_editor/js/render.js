@@ -88,9 +88,10 @@ export function renderMap(walls=[], dock=null) {
       <path d="M -20,60 L 20,100 M 0,0 L 80,80 M 60,-20 L 100,20"
         stroke="#ef4444" stroke-width="6" stroke-opacity="0.8"/>
     </pattern>
-    <pattern id="editor-hatch-amber" patternUnits="userSpaceOnUse" width="80" height="80" patternTransform="rotate(45)">
-      <line x1="0" y1="0" x2="0" y2="80"
-        stroke="#f59e0b" stroke-width="12" stroke-opacity="0.75"/>
+    <pattern id="editor-hatch-amber" patternUnits="userSpaceOnUse" width="80" height="80">
+      <rect width="80" height="80" fill="rgba(245,158,11,0.18)"/>
+      <path d="M -20,20 L 20,-20 M 0,80 L 80,0 M 60,100 L 100,60"
+        stroke="#f59e0b" stroke-width="10" stroke-opacity="0.75"/>
     </pattern>`;
   mapGroup.appendChild(defs);
 
@@ -127,7 +128,7 @@ export function renderMap(walls=[], dock=null) {
     if (isSpotArea(area)) {
       poly.setAttribute('fill', 'url(#editor-hatch-amber)');
       poly.setAttribute('stroke', '#f59e0b');
-      poly.setAttribute('stroke-width', '7');
+      poly.setAttribute('stroke-width', '9');
       poly.setAttribute('stroke-dasharray', '18 10');
     } else if (st === 'clean') {
       poly.setAttribute('fill', 'rgba(59,130,246,0.15)');
@@ -161,11 +162,11 @@ export function renderMap(walls=[], dock=null) {
 
     // Named rooms, no-go areas, and clean spots are interactable so they can be selected/deleted
     poly.addEventListener('mouseenter', () => {
-      if (area.area_id !== state.selectedAreaId)
+      if (!(state.selectedAreaIds instanceof Set && state.selectedAreaIds.has(area.area_id)) && area.area_id !== state.selectedAreaId)
         poly.setAttribute('fill', 'rgba(255,255,255,0.08)');
     });
     poly.addEventListener('mouseleave', () => {
-      if (area.area_id !== state.selectedAreaId)
+      if (!(state.selectedAreaIds instanceof Set && state.selectedAreaIds.has(area.area_id)) && area.area_id !== state.selectedAreaId)
         setAreaPolyStyle(poly, area);
     });
     poly.addEventListener('click', e => {
@@ -189,7 +190,7 @@ export function renderMap(walls=[], dock=null) {
         return;
       }
       e.stopPropagation();
-      if (_onAreaClickCb) _onAreaClickCb(area.area_id);
+      if (_onAreaClickCb) _onAreaClickCb(area.area_id, e);
     });
 
     areaGroup.appendChild(poly);
@@ -290,7 +291,7 @@ export function setAreaPolyStyle(poly, area) {
     if (isSpotArea(area)) {
       poly.setAttribute('fill', 'url(#editor-hatch-amber)');
       poly.setAttribute('stroke', '#f59e0b');
-      poly.setAttribute('stroke-width', '7');
+      poly.setAttribute('stroke-width', '9');
       poly.setAttribute('stroke-dasharray', '18 10');
       return;
     }
@@ -311,6 +312,10 @@ export function setAreaPolyStyle(poly, area) {
 }
 
 export function highlightArea(areaId) {
+  const selectedIds = state.selectedAreaIds instanceof Set && state.selectedAreaIds.size
+    ? state.selectedAreaIds
+    : new Set(areaId !== null ? [areaId] : []);
+
   state.areas.forEach(a => {
     const poly = mapSvg.querySelector(`polygon[data-area-id="${a.area_id}"]`);
     if (poly) {
@@ -319,14 +324,14 @@ export function highlightArea(areaId) {
       poly.setAttribute('stroke-width', '8');
     }
   });
-  if (areaId !== null) {
-    const poly = mapSvg.querySelector(`polygon[data-area-id="${areaId}"]`);
+  selectedIds.forEach(id => {
+    const poly = mapSvg.querySelector(`polygon[data-area-id="${id}"]`);
     if (poly) {
       poly.setAttribute('fill', 'rgba(16,185,129,0.28)');
       poly.setAttribute('stroke', '#10b981');
       poly.setAttribute('stroke-width', '12');
     }
-  }
+  });
 }
 
 export function highlightAreaSplit(areaId) {
@@ -420,7 +425,9 @@ export function renderAreaList(onAreaClick) {
   }
   state.areas.forEach(area => {
     const item = document.createElement('div');
-    item.className = 'area-item' + (area.area_id === state.selectedAreaId ? ' selected' : '');
+    const selected = (state.selectedAreaIds instanceof Set && state.selectedAreaIds.has(area.area_id))
+      || area.area_id === state.selectedAreaId;
+    item.className = 'area-item' + (selected ? ' selected' : '');
     item.dataset.areaId = area.area_id;
 
     const dot = document.createElement('div');
@@ -449,9 +456,9 @@ export function renderAreaList(onAreaClick) {
     idEl.textContent = `#${area.area_id}`;
 
     item.appendChild(dot); item.appendChild(textWrap); item.appendChild(idEl);
-    item.addEventListener('click', () => {
-      if (_onAreaClickCb) _onAreaClickCb(area.area_id);
-      else if (onAreaClick) onAreaClick(area.area_id);
+    item.addEventListener('click', e => {
+      if (_onAreaClickCb) _onAreaClickCb(area.area_id, e);
+      else if (onAreaClick) onAreaClick(area.area_id, e);
     });
     areaListEl.appendChild(item);
   });

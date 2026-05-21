@@ -29,9 +29,10 @@ function ensurePreviewPatterns() {
       <path d="M -20,60 L 20,100 M 0,0 L 80,80 M 60,-20 L 100,20"
         stroke="#ef4444" stroke-width="6" stroke-opacity="0.8"/>
     </pattern>
-    <pattern id="editor-preview-hatch-amber" patternUnits="userSpaceOnUse" width="80" height="80" patternTransform="rotate(45)">
-      <line x1="0" y1="0" x2="0" y2="80"
-        stroke="#f59e0b" stroke-width="12" stroke-opacity="0.75"/>
+    <pattern id="editor-preview-hatch-amber" patternUnits="userSpaceOnUse" width="80" height="80">
+      <rect width="80" height="80" fill="rgba(245,158,11,0.18)"/>
+      <path d="M -20,20 L 20,-20 M 0,80 L 80,0 M 60,100 L 100,60"
+        stroke="#f59e0b" stroke-width="10" stroke-opacity="0.75"/>
     </pattern>`;
   mapSvg.insertBefore(defs, mapSvg.firstChild);
 }

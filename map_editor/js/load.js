@@ -82,6 +82,7 @@ export async function loadMap(mapId) {
 
   state.activeMapId = mapId;
   state.selectedAreaId = null;
+  state.selectedAreaIds = new Set();
   state.splitPoints = [];
   renderMapChips({ onChipClick: loadMap, onDiscardClick: _discardExploreMap });
   showSpinner(true);
@@ -141,6 +142,11 @@ export async function loadMap(mapId) {
     state.mapHasUnsavedEdits = false;
     renderMap(walls, dock);
     renderAreaList();
+    const btnCleanArea = document.getElementById('btn-clean-area');
+    if (btnCleanArea) {
+      btnCleanArea.disabled = true;
+      btnCleanArea.textContent = '▶ Clean Selected';
+    }
     // Refresh phase bar if we are in the post-explore flow
     if (state.explorePhase === 'drawing') {
       const { _highlightAllInactive, _showPhaseBar } = await import('./explore.js');

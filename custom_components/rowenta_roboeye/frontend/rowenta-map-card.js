@@ -9,8 +9,9 @@
 // v2.7.3: keep legacy spot polygons visible while HA refreshes payload attrs.
 // v2.7.4: detect legacy room-shaped spot payloads by name/state.
 // v2.7.5: draw no-go zones with cross-hatch.
+// v2.7.6: make spot hatch visible in Opera with a fallback fill.
 
-const VERSION = "2.7.5";
+const VERSION = "2.7.6";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -443,8 +444,8 @@ class RowentaMapCard extends HTMLElement {
         if (p.length < 3) continue;
         spotLayer += `<polygon points="${pts2str(p)}"
           fill="url(#hatch-amber)" stroke="#F59E0B"
-          stroke-width="${(sw * 1.7).toFixed(1)}" stroke-linejoin="round"
-          opacity="0.68"/>`;
+          stroke-width="${(sw * 2.1).toFixed(1)}" stroke-linejoin="round"
+          opacity="0.82"/>`;
       }
     }
 
@@ -661,9 +662,10 @@ class RowentaMapCard extends HTMLElement {
             transform="rotate(-45 ${hatchSize / 2} ${hatchSize / 2})"/>
         </pattern>
         <pattern id="hatch-amber" patternUnits="userSpaceOnUse"
-          width="${hatchSize}" height="${hatchSize}" patternTransform="rotate(45)">
-          <line x1="0" y1="0" x2="0" y2="${hatchSize}"
-            stroke="#F59E0B" stroke-width="${hatchSW}" stroke-opacity="0.85"/>
+          width="${hatchSize}" height="${hatchSize}">
+          <rect width="${hatchSize}" height="${hatchSize}" fill="rgba(245,158,11,0.18)"/>
+          <path d="M ${-hatchSize * 0.25},${hatchSize * 0.25} L ${hatchSize * 0.25},${-hatchSize * 0.25} M 0,${hatchSize} L ${hatchSize},0 M ${hatchSize * 0.75},${hatchSize * 1.25} L ${hatchSize * 1.25},${hatchSize * 0.75}"
+            stroke="#F59E0B" stroke-width="${Math.max(2, hatchSW * 0.82)}" stroke-opacity="0.85"/>
         </pattern>
         <filter id="sel-glow" x="-20%" y="-20%" width="140%" height="140%">
           <feDropShadow dx="0" dy="0" stdDeviation="3"

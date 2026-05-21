@@ -10,6 +10,7 @@ import { setMode, fitToScreen } from './mode.js';
 import { executeSplit } from './split.js';
 import { startSplit } from './split.js';
 import { startMerge } from './merge.js';
+import { clearAreaSelection } from './areas.js';
 import { executeNogo, executeSpot, handleSpotClick, handleBlockClick } from './nogo.js';
 import { startGoTo, executeGoTo } from './robot.js';
 import { finishAreaDrag, startAreaDrag, updateAreaDrag } from './area_move.js';
@@ -81,10 +82,7 @@ export function initEvents(onAreaClick) {
     if (state.mode === 'select') {
       const tag = e.target.tagName;
       if (tag === 'svg' || tag === 'rect' || tag === 'g') {
-        state.selectedAreaId = null;
-        highlightArea(null);
-        areaDetailEl.classList.remove('visible');
-        areaListEl.querySelectorAll('.area-item').forEach(el => el.classList.remove('selected'));
+        clearAreaSelection();
       }
     }
   });

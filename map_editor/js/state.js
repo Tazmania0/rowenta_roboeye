@@ -7,6 +7,7 @@ export const state = {
   areas: [],
   bbox: null,          // {minX,minY,maxX,maxY}
   selectedAreaId: null,
+  selectedAreaIds: new Set(),
   mergeFirstId: null,
   mode: 'select',      // select | pan | split | merge | block | spot
   splitPoints: [],     // 0 or 1 SVG points for split line preview

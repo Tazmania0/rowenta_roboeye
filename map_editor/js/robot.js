@@ -7,6 +7,7 @@ import { showModal, showToast, showSpinner, showInstruction } from './modal.js';
 import { setMode } from './mode.js';
 import { svgToRobot, robotToSVG } from './coords.js';
 import { highlightArea } from './render.js';
+import { updateCleanSelectionButton } from './areas.js';
 import { loadMap } from './load.js';
 import { USE_PROXY, ROBOT_PORT } from './config.js';
 import * as config from './config.js';
@@ -29,12 +30,17 @@ export function startStatusPolling() {
 
 export function _updateRobotStatusUI() {
   const busy = state.robotMode === 'cleaning' || state.robotMode === 'go_home';
-  ['btn-clean-area', 'btn-explore'].forEach(id => {
+  ['btn-explore'].forEach(id => {
     const btn = document.getElementById(id);
     if (!btn) return;
     btn.disabled = busy;
     btn.title = busy ? `Robot is ${state.robotMode} — wait for it to finish` : '';
   });
+  const btnClean = document.getElementById('btn-clean-area');
+  if (btnClean) {
+    btnClean.title = busy ? `Robot is ${state.robotMode} - wait for it to finish` : 'Start cleaning selected area(s)';
+    updateCleanSelectionButton();
+  }
   const btnGH = document.getElementById('btn-go-home');
   if (btnGH) btnGH.disabled = state.robotMode === 'go_home';
   const dot  = document.getElementById('status-dot');

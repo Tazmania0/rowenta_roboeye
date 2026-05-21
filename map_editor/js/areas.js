@@ -16,39 +16,44 @@ const areaListEl   = document.getElementById('area-list');
 let _handleMergeClickCb = null;
 export function setHandleMergeClick(fn) { _handleMergeClickCb = fn; }
 
-export function onAreaClick(areaId) {
-  if (state.mode === 'merge') {
-    if (_handleMergeClickCb) _handleMergeClickCb(areaId);
+function _selectedAreaIds() {
+  if (!(state.selectedAreaIds instanceof Set)) {
+    state.selectedAreaIds = new Set(state.selectedAreaId !== null ? [state.selectedAreaId] : []);
+  }
+  return state.selectedAreaIds;
+}
+
+function _setAreaSelection(areaId, event = null) {
+  const ids = _selectedAreaIds();
+  const additive = !!(event?.ctrlKey || event?.metaKey || event?.shiftKey);
+
+  if (additive) {
+    if (ids.has(areaId)) ids.delete(areaId);
+    else ids.add(areaId);
+    state.selectedAreaId = ids.has(areaId) ? areaId : (ids.values().next().value ?? null);
     return;
   }
 
-  if (state.mode === 'split') {
-    if (state.selectedAreaId === null) {
-      // Step 1: pick the area to split
-      state.selectedAreaId = areaId;
-      highlightAreaSplit(areaId);
-      updateSplitListUI(areaId);
-      showInstruction('STEP 2 of 3', 'Click first point of the split line', 'green');
-    }
-    // If area already selected, clicks place points (handled by SVG click handler)
-    return;
-  }
-
-  // Normal select mode
+  ids.clear();
+  ids.add(areaId);
   state.selectedAreaId = areaId;
-  highlightArea(areaId);
-  updateSplitListUI(areaId);
+}
 
-  const area = state.areas.find(a => a.area_id === areaId);
-  if (!area) return;
+function _selectedCleanAreas() {
+  const ids = _selectedAreaIds();
+  return state.areas.filter(area => ids.has(area.area_id) && area.area_state === 'clean');
+}
 
-  if (area.area_state === 'inactive' && state.explorePhase === 'drawing') {
-    showToast('Use Split to divide this segment, or Merge to combine with adjacent segment', 'info');
-    highlightAreaSplit(areaId);
-    state.selectedAreaId = areaId;
-    return;
-  }
+export function updateCleanSelectionButton() {
+  const btnClean = document.getElementById('btn-clean-area');
+  if (!btnClean) return;
+  const count = _selectedCleanAreas().length;
+  const busy = state.robotMode === 'cleaning' || state.robotMode === 'go_home';
+  btnClean.disabled = count === 0 || busy;
+  btnClean.textContent = count > 1 ? `▶ Clean Selected (${count})` : '▶ Clean Selected';
+}
 
+function _showAreaDetail(area) {
   areaDetailEl.classList.add('visible');
   mergeHintEl.classList.remove('visible');
 
@@ -60,13 +65,66 @@ export function onAreaClick(areaId) {
   const floorTypeEl = document.getElementById('field-floor-type');
   if (floorTypeEl) floorTypeEl.value = area.floor_type || 'none';
   _renderAreaStats(area);
-  const btnClean = document.getElementById('btn-clean-area');
-  if (btnClean) btnClean.disabled = area.area_state !== 'clean';
+}
+
+export function clearAreaSelection() {
+  state.selectedAreaId = null;
+  state.selectedAreaIds = new Set();
+  highlightArea(null);
+  areaDetailEl.classList.remove('visible');
+  updateSplitListUI(null);
+  updateCleanSelectionButton();
+}
+
+export function onAreaClick(areaId, event = null) {
+  if (state.mode === 'merge') {
+    if (_handleMergeClickCb) _handleMergeClickCb(areaId);
+    return;
+  }
+
+  if (state.mode === 'split') {
+    if (state.selectedAreaId === null) {
+      // Step 1: pick the area to split
+      state.selectedAreaId = areaId;
+      state.selectedAreaIds = new Set([areaId]);
+      highlightAreaSplit(areaId);
+      updateSplitListUI(areaId);
+      updateCleanSelectionButton();
+      showInstruction('STEP 2 of 3', 'Click first point of the split line', 'green');
+    }
+    // If area already selected, clicks place points (handled by SVG click handler)
+    return;
+  }
+
+  // Normal select mode
+  _setAreaSelection(areaId, event);
+  highlightArea(state.selectedAreaId);
+  updateSplitListUI(state.selectedAreaId);
+  updateCleanSelectionButton();
+
+  const area = state.areas.find(a => a.area_id === state.selectedAreaId);
+  if (!area) {
+    areaDetailEl.classList.remove('visible');
+    return;
+  }
+
+  if (area.area_state === 'inactive' && state.explorePhase === 'drawing') {
+    showToast('Use Split to divide this segment, or Merge to combine with adjacent segment', 'info');
+    highlightAreaSplit(area.area_id);
+    state.selectedAreaId = area.area_id;
+    state.selectedAreaIds = new Set([area.area_id]);
+    updateCleanSelectionButton();
+    return;
+  }
+
+  _showAreaDetail(area);
 }
 
 export function updateSplitListUI(areaId) {
+  const ids = _selectedAreaIds();
   areaListEl.querySelectorAll('.area-item').forEach(el => {
-    el.classList.toggle('selected', parseInt(el.dataset.areaId) === areaId);
+    const id = parseInt(el.dataset.areaId, 10);
+    el.classList.toggle('selected', ids.has(id) || id === areaId);
   });
 }
 
@@ -277,6 +335,7 @@ export async function executeDeleteArea() {
     else await new Promise(r => setTimeout(r, 1500));
     state.areas = state.areas.filter(a => a.area_id !== areaId);
     state.selectedAreaId = null;
+    state.selectedAreaIds = new Set();
     state.mapHasUnsavedEdits = true;
     _updateSaveButton();
     renderMap(state._lastWalls, state._lastDock);
@@ -293,23 +352,30 @@ export async function executeDeleteArea() {
 // CLEAN AREA NOW
 // ─────────────────────────────────────────────────────────────────────────────
 export async function executeCleanArea() {
-  const areaId = state.selectedAreaId;
-  if (!areaId) { showToast('No area selected', 'error'); return; }
-  const area = state.areas.find(a => a.area_id === areaId);
-  if (!area) return;
+  const areas = _selectedCleanAreas();
+  if (areas.length === 0) {
+    showToast('Select at least one cleanable area', 'error');
+    updateCleanSelectionButton();
+    return;
+  }
+
+  const label = areas.length === 1 ? `"${getAreaName(areas[0])}"` : `${areas.length} areas`;
   try {
-    await showModal({ title: `Clean "${getAreaName(area)}"?`,
-      desc: 'Robot will start cleaning this room immediately.',
+    await showModal({ title: `Clean ${label}?`,
+      desc: areas.length === 1
+        ? 'Robot will start cleaning this room immediately.'
+        : 'Robot will start cleaning the selected areas immediately.',
       confirmLabel: 'Start Cleaning' });
   } catch { return; }
   showSpinner(true);
   try {
     const { api } = await import('./api.js');
-    const fan  = area.cleaning_parameter_set ?? 0;
-    const path = `/set/clean_map?map_id=${state.activeMapId}&area_ids=${areaId}`
+    const areaIds = areas.map(area => area.area_id).join(',');
+    const fan = Math.max(...areas.map(area => Number(area.cleaning_parameter_set ?? 0)));
+    const path = `/set/clean_map?map_id=${state.activeMapId}&area_ids=${areaIds}`
                + `&cleaning_parameter_set=${fan}&cleaning_strategy_mode=1`;
     await api(path);
-    showToast(`Cleaning "${getAreaName(area)}"…`, 'success');
+    showToast(`Cleaning ${label}...`, 'success');
   } catch (e) { showToast('Clean failed: ' + e.message.substring(0, 80), 'error'); }
   finally { showSpinner(false); }
 }

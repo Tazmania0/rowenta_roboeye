@@ -52,6 +52,12 @@ export function startAreaDrag(areaId, startSvg) {
   if (!isMovableArea(area)) return false;
 
   state.selectedAreaId = area.area_id;
+  state.selectedAreaIds = new Set([area.area_id]);
+  const btnClean = document.getElementById('btn-clean-area');
+  if (btnClean) {
+    const busy = state.robotMode === 'cleaning' || state.robotMode === 'go_home';
+    btnClean.disabled = area.area_state !== 'clean' || busy;
+  }
   state.areaDrag = {
     areaId: area.area_id,
     startSvg,
