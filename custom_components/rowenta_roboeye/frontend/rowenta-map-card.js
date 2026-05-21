@@ -4,8 +4,10 @@
 // v2.6.0: avoidance zones rendered as hatched red overlay.
 // v2.6.1: auto-unfreeze and full reload when active map_id changes.
 // v2.7.0: room selection + control bar (Start/Pause, Stop, Go Home, Clean Selected).
+// v2.7.1: only render real blocking zones as red no-go overlays.
+// v2.7.2: render clean spot zones with a separate amber hatch.
 
-const VERSION = "2.7.0";
+const VERSION = "2.7.2";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -70,6 +72,14 @@ function polyArea(pts) {
   return Math.abs(s) / 2;
 }
 
+function isBlockingZone(zone) {
+  return zone?.area_state === "blocking" || zone?.area_state === "proposed_blocking";
+}
+
+function isSpotZone(zone) {
+  return zone?.area_type === "to_be_cleaned" && !isBlockingZone(zone);
+}
+
 
 class RowentaMapCard extends HTMLElement {
   constructor() {
@@ -131,6 +141,7 @@ class RowentaMapCard extends HTMLElement {
 
     const rooms           = attrs.rooms            || [];
     const avoidanceZones  = attrs.avoidance_zones  || [];
+    const spotZones       = attrs.spot_zones       || avoidanceZones.filter(isSpotZone);
     const outline         = attrs.outline          || [];
     const walls           = attrs.walls            || [];
     const dock            = attrs.dock             || null;
@@ -158,7 +169,7 @@ class RowentaMapCard extends HTMLElement {
     const selCount         = this._selectedRooms.size;
 
     const svgHtml = this._buildSvg(
-      rooms, avoidanceZones, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
+      rooms, avoidanceZones, spotZones, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
       cleaningGrid, robotPath, sessionComplete, robotIsTentative
     );
 
@@ -304,7 +315,7 @@ class RowentaMapCard extends HTMLElement {
 
   // ── SVG renderer ──────────────────────────────────────────────────────
 
-  _buildSvg(rooms, avoidanceZones, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
+  _buildSvg(rooms, avoidanceZones, spotZones, outline, walls, dock, robot, liveOut, bounds, isActive, cfg,
             cleaningGrid, robotPath, sessionComplete,
             robotIsTentative = false) {
     if (!bounds) {
@@ -405,12 +416,27 @@ class RowentaMapCard extends HTMLElement {
       }
     }
 
-    // ── Layer 2.5: avoidance zones (hatched red) ────────────────────
+    // ── Layer 2.4: clean spot zones (hatched amber) ─────────────────
     const hatchSize = Math.max(20, (minDim * 0.025) | 0);
     const hatchSW   = Math.max(2,  (hatchSize * 0.25) | 0);
+    let spotLayer = "";
+    if (spotZones.length) {
+      for (const zone of spotZones) {
+        if (!isSpotZone(zone)) continue;
+        const p = zone.polygon || [];
+        if (p.length < 3) continue;
+        spotLayer += `<polygon points="${pts2str(p)}"
+          fill="url(#hatch-amber)" stroke="#F59E0B"
+          stroke-width="${(sw * 1.7).toFixed(1)}" stroke-linejoin="round"
+          opacity="0.68"/>`;
+      }
+    }
+
+    // ── Layer 2.5: avoidance zones (hatched red) ────────────────────
     let avoidanceLayer = "";
     if (avoidanceZones.length) {
       for (const zone of avoidanceZones) {
+        if (!isBlockingZone(zone)) continue;
         const p = zone.polygon || [];
         if (p.length < 3) continue;
         avoidanceLayer += `<polygon points="${pts2str(p)}"
@@ -614,6 +640,11 @@ class RowentaMapCard extends HTMLElement {
           <line x1="0" y1="0" x2="0" y2="${hatchSize}"
             stroke="#f44336" stroke-width="${hatchSW}" stroke-opacity="0.8"/>
         </pattern>
+        <pattern id="hatch-amber" patternUnits="userSpaceOnUse"
+          width="${hatchSize}" height="${hatchSize}" patternTransform="rotate(45)">
+          <line x1="0" y1="0" x2="0" y2="${hatchSize}"
+            stroke="#F59E0B" stroke-width="${hatchSW}" stroke-opacity="0.85"/>
+        </pattern>
         <filter id="sel-glow" x="-20%" y="-20%" width="140%" height="140%">
           <feDropShadow dx="0" dy="0" stdDeviation="3"
             flood-color="#2196F3" flood-opacity="0.7"/>
@@ -621,6 +652,7 @@ class RowentaMapCard extends HTMLElement {
       </defs>
       ${floorFill}
       ${roomFills}
+      ${spotLayer}
       ${avoidanceLayer}
       ${wallLines}
       ${gridLayer}

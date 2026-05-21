@@ -25,7 +25,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import CannotConnect, RobEyeApiClient
 from .const import (
-    AREA_STATES_SKIP,
+    AREA_STATE_BLOCKING,
     AREA_TYPE_AVOIDANCE,
     CHARGING_CHARGING,
     CMD_POLL_INTERVAL_S,
@@ -2303,22 +2303,27 @@ def _parse_live_outline(seen_polygon_raw: dict) -> list:
     return []
 
 
-def _classify_areas(areas: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Split areas into (rooms, avoidance_zones).
+def _classify_areas(areas: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    """Split areas into (rooms, avoidance_zones, spot_zones).
 
-    Avoidance zones: area_state in AREA_STATES_SKIP or area_type == "to_be_cleaned".
+    Avoidance zones are only real blocking/no-go areas.
+    Spot zones are non-blocking to_be_cleaned areas.
+
+    Inactive unnamed segments are still room geometry. They are redundant
+    auto-segments, not no-go zones, even though HA should not create room
+    entities for them.
     """
     rooms: list[dict] = []
     avoidance: list[dict] = []
+    spots: list[dict] = []
     for area in areas:
-        if (
-            area.get("area_state") in AREA_STATES_SKIP
-            or area.get("area_type") == AREA_TYPE_AVOIDANCE
-        ):
+        if area.get("area_state") in {AREA_STATE_BLOCKING, "proposed_blocking"}:
             avoidance.append(area)
+        elif area.get("area_type") == AREA_TYPE_AVOIDANCE:
+            spots.append(area)
         else:
             rooms.append(area)
-    return rooms, avoidance
+    return rooms, avoidance, spots
 
 
 def _build_live_map_payload(
@@ -2345,11 +2350,11 @@ def _build_live_map_payload(
     is_tentative flag on robot_position drives dimmed rendering in the card.
 
     Schema (used by rowenta-map-card.js):
-      map_id, is_active, rooms, outline, walls, dock, robot,
+      map_id, is_active, rooms, avoidance_zones, spot_zones, outline, walls, dock, robot,
       live_outline, bounds, scale
     """
     # ── Classify areas: rooms vs avoidance zones ──────────────────────
-    room_areas, avoidance_areas = _classify_areas(areas_data.get("areas", []))
+    room_areas, avoidance_areas, spot_areas = _classify_areas(areas_data.get("areas", []))
 
     # ── Rooms (from /get/areas?map_id) ───────────────────────────────
     rooms: list[dict[str, Any]] = []
@@ -2380,6 +2385,20 @@ def _build_live_map_payload(
         pts = [[p["x"], p["y"]] for p in raw_pts]
         avoidance_zones.append({
             "id": area.get("id"),
+            "area_type": area.get("area_type"),
+            "area_state": area.get("area_state"),
+            "polygon": pts,
+        })
+
+    # ── Spot zones (non-blocking area_type="to_be_cleaned") ───────────────
+    spot_zones: list[dict[str, Any]] = []
+    for area in spot_areas:
+        raw_pts = area.get("points", [])
+        pts = [[p["x"], p["y"]] for p in raw_pts]
+        spot_zones.append({
+            "id": area.get("id"),
+            "area_type": area.get("area_type"),
+            "area_state": area.get("area_state"),
             "polygon": pts,
         })
 
@@ -2468,6 +2487,7 @@ def _build_live_map_payload(
     all_pts: list[list[int]] = (
         [pt for r in rooms for pt in r["polygon"]]
         + [pt for z in avoidance_zones for pt in z["polygon"]]
+        + [pt for z in spot_zones for pt in z["polygon"]]
         + outline
         + live_outline
         + ([[dock["x"], dock["y"]]] if dock else [])
@@ -2496,6 +2516,7 @@ def _build_live_map_payload(
         "is_active": is_active,
         "rooms": rooms,
         "avoidance_zones": avoidance_zones,
+        "spot_zones": spot_zones,
         "outline": outline,
         "walls": walls,
         "dock": dock,

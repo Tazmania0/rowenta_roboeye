@@ -797,6 +797,47 @@ def test_no_robot_position_when_invalid_and_idle():
 
 # ── Multi-map support ────────────────────────────────────────────────
 
+def test_live_map_keeps_inactive_segments_out_of_avoidance_zones():
+    """Inactive unnamed room segments are redundant geometry, not no-go areas."""
+    areas = [
+        {
+            "id": 75,
+            "points": [{"x": 0, "y": 0}, {"x": 100, "y": 0}, {"x": 100, "y": 100}],
+            "area_type": "room",
+            "area_state": "inactive",
+            "area_meta_data": "",
+            "room_type": "none",
+        },
+        {
+            "id": 90,
+            "points": [{"x": 150, "y": 0}, {"x": 250, "y": 0}, {"x": 250, "y": 100}],
+            "area_type": "to_be_cleaned",
+            "area_state": "inactive",
+            "area_meta_data": "{\"name\":\"Spot\"}",
+            "room_type": "none",
+        },
+        {
+            "id": 91,
+            "points": [{"x": 300, "y": 0}, {"x": 400, "y": 0}, {"x": 400, "y": 100}],
+            "area_type": "to_be_cleaned",
+            "area_state": "blocking",
+            "area_meta_data": "{\"name\":\"\"}",
+            "room_type": "none",
+        },
+    ]
+
+    payload = _build_live_map_payload(**_make_live_map_kwargs(
+        areas_data={"areas": areas},
+    ))
+
+    assert {room["id"] for room in payload["rooms"]} == {75}
+    assert all(room["redundant"] for room in payload["rooms"])
+    assert [zone["id"] for zone in payload["avoidance_zones"]] == [91]
+    assert payload["avoidance_zones"][0]["area_state"] == "blocking"
+    assert [zone["id"] for zone in payload["spot_zones"]] == [90]
+    assert payload["spot_zones"][0]["area_type"] == "to_be_cleaned"
+
+
 def test_committed_active_map_id_set_at_construction(coordinator):
     """committed_active_map_id is initialised to the setup-time map_id."""
     assert coordinator.committed_active_map_id == "3"
