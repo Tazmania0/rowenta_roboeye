@@ -482,12 +482,10 @@ After a map switch or HA restart, the Rooms view may occasionally display entity
 
 | # | Item | Status |
 |---|------|--------|
-| 1 | Room sensor `unique_id` missing map prefix — collision on two-floor homes | 🔴 Fix pending |
-| 2 | `_format_date` shows `2001-xx-xx` instead of "Never" for un-cleaned rooms | 🔴 Fix pending |
-| 3 | `cleaning_parameter_set=0` shows blank in schedule sensor (should show "Default") | 🟡 Fix pending |
-| 4 | Root-level `icon.png` / `logo.png` are byte-for-byte duplicates of `brand/` variants — delete | 🟢 HACS hygiene |
-| 5 | `zip_release: false` in `hacs.json` conflicts with `release.yml` producing a zip artifact | 🟢 HACS hygiene |
-| 6 | Submit brand assets to [home-assistant/brands](https://github.com/home-assistant/brands) for official icon | 🟢 Future |
+| 1 | Room sensor `unique_id` includes map prefix — multi-floor collision resolved | ✅ Fixed |
+| 2 | Root-level `icon.png` / `logo.png` are byte-for-byte duplicates of `brand/` variants — delete | 🟢 HACS hygiene |
+| 3 | `zip_release: false` in `hacs.json` conflicts with `release.yml` producing a zip artifact | 🟢 HACS hygiene |
+| 4 | Submit brand assets to [home-assistant/brands](https://github.com/home-assistant/brands) for official icon | 🟢 Future |
 
 ---
 
