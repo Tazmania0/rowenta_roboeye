@@ -83,6 +83,7 @@ export async function loadMap(mapId) {
   state.activeMapId = mapId;
   state.selectedAreaId = null;
   state.selectedAreaIds = new Set();
+  state.cleaningGrid = null;
   state.splitPoints = [];
   renderMapChips({ onChipClick: loadMap, onDiscardClick: _discardExploreMap });
   showSpinner(true);

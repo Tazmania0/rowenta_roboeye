@@ -58,6 +58,48 @@
   }
   .header-sep { flex: 1; }
 
+  .battery-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 24px;
+    padding: 0 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.03);
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+  .battery-chip.ok { color: var(--accent2); border-color: rgba(16,185,129,0.35); }
+  .battery-chip.warn { color: var(--warn); border-color: rgba(245,158,11,0.4); }
+  .battery-chip.low { color: var(--danger); border-color: rgba(239,68,68,0.45); }
+  .battery-icon {
+    position: relative;
+    width: 22px;
+    height: 11px;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    padding: 1px;
+  }
+  .battery-icon::after {
+    content: '';
+    position: absolute;
+    right: -4px;
+    top: 3px;
+    width: 2px;
+    height: 5px;
+    border-radius: 0 1px 1px 0;
+    background: currentColor;
+  }
+  #battery-fill {
+    display: block;
+    height: 100%;
+    width: 0%;
+    border-radius: 1px;
+    background: currentColor;
+  }
+
   #ip-input {
     background: var(--panel);
     border: 1px solid var(--border);

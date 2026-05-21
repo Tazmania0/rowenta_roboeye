@@ -6,7 +6,7 @@ import { api, pollCmd } from './api.js';
 import { showModal, showToast, showSpinner, showInstruction } from './modal.js';
 import { setMode } from './mode.js';
 import { svgToRobot, robotToSVG } from './coords.js';
-import { highlightArea } from './render.js';
+import { highlightArea, renderMap } from './render.js';
 import { updateCleanSelectionButton } from './areas.js';
 import { loadMap } from './load.js';
 import { USE_PROXY, ROBOT_PORT } from './config.js';
@@ -18,14 +18,44 @@ const mapGroup = document.getElementById('map-group');
 // ─── Status polling ───────────────────────────────────────────────────────────
 export function startStatusPolling() {
   if (state.statusTimer) clearInterval(state.statusTimer);
-  state.statusTimer = setInterval(async () => {
+  const pollStatus = async () => {
     try {
       const res = await api('/get/status');
       state.robotMode    = res.mode;
       state.robotCharging = res.charging;
+      state.robotBatteryLevel = _extractBatteryLevel(res);
+      await _updateCleaningGrid();
       _updateRobotStatusUI();
     } catch {}
-  }, 5000);
+  };
+  pollStatus();
+  state.statusTimer = setInterval(pollStatus, 5000);
+}
+
+function _extractBatteryLevel(status) {
+  const raw = status?.battery_level ?? status?.battery ?? status?.batteryLevel ?? status?.charge_level;
+  const value = Number(raw);
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : null;
+}
+
+async function _updateCleaningGrid() {
+  if (!state.activeMapId) return;
+  const shouldShowGrid = state.robotMode === 'cleaning';
+  if (!shouldShowGrid) {
+    if (state.cleaningGrid) {
+      state.cleaningGrid = null;
+      renderMap(state._lastWalls, state._lastDock);
+      if (state.selectedAreaId !== null) highlightArea(state.selectedAreaId);
+    }
+    return;
+  }
+
+  try {
+    const grid = await api('/get/cleaning_grid_map');
+    state.cleaningGrid = grid?.size_x > 0 ? grid : null;
+    renderMap(state._lastWalls, state._lastDock);
+    if (state.selectedAreaId !== null) highlightArea(state.selectedAreaId);
+  } catch {}
 }
 
 export function _updateRobotStatusUI() {
@@ -43,6 +73,7 @@ export function _updateRobotStatusUI() {
   }
   const btnGH = document.getElementById('btn-go-home');
   if (btnGH) btnGH.disabled = state.robotMode === 'go_home';
+  _updateBatteryUI();
   const dot  = document.getElementById('status-dot');
   const text = document.getElementById('status-text');
   if (dot && text && state.connected) {
@@ -54,6 +85,26 @@ export function _updateRobotStatusUI() {
       dot.className = 'status-dot ok'; text.textContent = `Connected — ${state.maps.length} map(s)`;
     }
   }
+}
+
+function _updateBatteryUI() {
+  const chip = document.getElementById('battery-chip');
+  const fill = document.getElementById('battery-fill');
+  const text = document.getElementById('battery-text');
+  if (!chip || !fill || !text) return;
+
+  const level = state.robotBatteryLevel;
+  if (level === null) {
+    chip.className = 'battery-chip';
+    fill.style.width = '0%';
+    text.textContent = '--%';
+    return;
+  }
+
+  chip.className = 'battery-chip ' + (level <= 20 ? 'low' : level <= 40 ? 'warn' : 'ok');
+  fill.style.width = `${level}%`;
+  const charging = String(state.robotCharging || '').toLowerCase().includes('charging');
+  text.textContent = `${level}%${charging ? ' charging' : ''}`;
 }
 
 // ─── Robot position dot ───────────────────────────────────────────────────────

@@ -16,6 +16,68 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 let _onAreaClickCb = null;
 export function setAreaClickCallback(fn) { _onAreaClickCb = fn; }
 
+function decodeCleaningGrid(grid) {
+  if (!grid || !grid.size_x || !grid.size_y || !Array.isArray(grid.cleaned) || grid.cleaned.length === 0) {
+    return [];
+  }
+
+  const resolution = Number(grid.resolution || grid.res || 0);
+  const sizeX = Number(grid.size_x || 0);
+  if (!resolution || !sizeX) return [];
+
+  const lowerLeftX = Number(grid.lower_left_x ?? grid.lowerLeftX ?? 0);
+  const lowerLeftY = Number(grid.lower_left_y ?? grid.lowerLeftY ?? 0);
+  const rects = [];
+  let cellIdx = 0;
+  let isFilled = true;
+
+  for (const runLenRaw of grid.cleaned) {
+    let remaining = Number(runLenRaw || 0);
+    if (isFilled) {
+      while (remaining > 0) {
+        const col = cellIdx % sizeX;
+        const row = Math.floor(cellIdx / sizeX);
+        const runInRow = Math.min(remaining, sizeX - col);
+        rects.push({
+          x: lowerLeftX + col * resolution,
+          y: lowerLeftY + row * resolution,
+          w: runInRow * resolution,
+          h: resolution,
+        });
+        cellIdx += runInRow;
+        remaining -= runInRow;
+      }
+    } else {
+      cellIdx += remaining;
+    }
+    isFilled = !isFilled;
+  }
+  return rects;
+}
+
+function renderCleaningGridLayer() {
+  const rects = decodeCleaningGrid(state.cleaningGrid);
+  if (!rects.length) return null;
+
+  const group = document.createElementNS(SVG_NS, 'g');
+  group.id = 'cleaning-grid-layer';
+  group.setAttribute('pointer-events', 'none');
+
+  rects.forEach(rect => {
+    const topLeft = robotToSVG(rect.x, rect.y + rect.h);
+    const cell = document.createElementNS(SVG_NS, 'rect');
+    cell.setAttribute('x', topLeft.x.toFixed(1));
+    cell.setAttribute('y', topLeft.y.toFixed(1));
+    cell.setAttribute('width', rect.w.toFixed(1));
+    cell.setAttribute('height', rect.h.toFixed(1));
+    cell.setAttribute('fill', 'rgba(16,185,129,0.32)');
+    cell.setAttribute('stroke', 'rgba(5,150,105,0.22)');
+    cell.setAttribute('stroke-width', '1');
+    group.appendChild(cell);
+  });
+  return group;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAP CHIPS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -231,6 +293,9 @@ export function renderMap(walls=[], dock=null) {
     }
   });
   mapGroup.appendChild(areaGroup);
+
+  const cleaningGridLayer = renderCleaningGridLayer();
+  if (cleaningGridLayer) mapGroup.appendChild(cleaningGridLayer);
 
   // ── Layer 3: Walls
   if (walls.length > 0) {

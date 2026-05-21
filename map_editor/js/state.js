@@ -26,6 +26,8 @@ export const state = {
   robPoseTimer:       null,
   robotMode:          null,
   robotCharging:      null,
+  robotBatteryLevel:  null,
+  cleaningGrid:       null,
   statusTimer:        null,
   mapHasUnsavedEdits: false,
   _lastWalls:         [],
