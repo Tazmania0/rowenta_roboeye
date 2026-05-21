@@ -8,8 +8,9 @@
 // v2.7.2: render clean spot zones with a separate amber hatch.
 // v2.7.3: keep legacy spot polygons visible while HA refreshes payload attrs.
 // v2.7.4: detect legacy room-shaped spot payloads by name/state.
+// v2.7.5: draw no-go zones with cross-hatch.
 
-const VERSION = "2.7.4";
+const VERSION = "2.7.5";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -434,6 +435,7 @@ class RowentaMapCard extends HTMLElement {
     // ── Layer 2.4: clean spot zones (hatched amber) ─────────────────
     const hatchSize = Math.max(20, (minDim * 0.025) | 0);
     const hatchSW   = Math.max(2,  (hatchSize * 0.25) | 0);
+    const noGoHatchSW = Math.max(1.5, hatchSW * 0.55);
     let spotLayer = "";
     if (spotZones.length) {
       for (const zone of spotZones) {
@@ -650,9 +652,13 @@ class RowentaMapCard extends HTMLElement {
       style="display:block;height:auto">
       <defs>
         <pattern id="hatch-red" patternUnits="userSpaceOnUse"
-          width="${hatchSize}" height="${hatchSize}" patternTransform="rotate(45)">
+          width="${hatchSize}" height="${hatchSize}">
           <line x1="0" y1="0" x2="0" y2="${hatchSize}"
-            stroke="#f44336" stroke-width="${hatchSW}" stroke-opacity="0.8"/>
+            stroke="#f44336" stroke-width="${noGoHatchSW}" stroke-opacity="0.8"
+            transform="rotate(45 ${hatchSize / 2} ${hatchSize / 2})"/>
+          <line x1="0" y1="0" x2="0" y2="${hatchSize}"
+            stroke="#f44336" stroke-width="${noGoHatchSW}" stroke-opacity="0.8"
+            transform="rotate(-45 ${hatchSize / 2} ${hatchSize / 2})"/>
         </pattern>
         <pattern id="hatch-amber" patternUnits="userSpaceOnUse"
           width="${hatchSize}" height="${hatchSize}" patternTransform="rotate(45)">

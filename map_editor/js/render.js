@@ -10,6 +10,7 @@ const mapGroup  = document.getElementById('map-group');
 const mapBarEl  = document.getElementById('map-bar');
 const areaListEl = document.getElementById('area-list');
 const emptyState = document.getElementById('empty-state');
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
 // Callback injected by main.js to avoid circular dependency (render → areas → render)
 let _onAreaClickCb = null;
@@ -79,6 +80,20 @@ export function renderMap(walls=[], dock=null) {
   // Clear map group
   mapGroup.innerHTML = '';
 
+  const defs = document.createElementNS(SVG_NS, 'defs');
+  defs.innerHTML = `
+    <pattern id="editor-hatch-red" patternUnits="userSpaceOnUse" width="80" height="80">
+      <path d="M -20,20 L 20,-20 M 0,80 L 80,0 M 60,100 L 100,60"
+        stroke="#ef4444" stroke-width="6" stroke-opacity="0.8"/>
+      <path d="M -20,60 L 20,100 M 0,0 L 80,80 M 60,-20 L 100,20"
+        stroke="#ef4444" stroke-width="6" stroke-opacity="0.8"/>
+    </pattern>
+    <pattern id="editor-hatch-amber" patternUnits="userSpaceOnUse" width="80" height="80" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="80"
+        stroke="#f59e0b" stroke-width="12" stroke-opacity="0.75"/>
+    </pattern>`;
+  mapGroup.appendChild(defs);
+
   // ── Layer 1: Floor background
   const floor = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
   floor.setAttribute('x', minX); floor.setAttribute('y', minY);
@@ -110,7 +125,7 @@ export function renderMap(walls=[], dock=null) {
     // Style by state
     const st = area.area_state;
     if (isSpotArea(area)) {
-      poly.setAttribute('fill', 'rgba(245,158,11,0.18)');
+      poly.setAttribute('fill', 'url(#editor-hatch-amber)');
       poly.setAttribute('stroke', '#f59e0b');
       poly.setAttribute('stroke-width', '7');
       poly.setAttribute('stroke-dasharray', '18 10');
@@ -119,7 +134,7 @@ export function renderMap(walls=[], dock=null) {
       poly.setAttribute('stroke', '#3b82f6');
       poly.setAttribute('stroke-width', '8');
     } else if (st === 'blocking' || st === 'proposed_blocking') {
-      poly.setAttribute('fill', 'rgba(239,68,68,0.20)');
+      poly.setAttribute('fill', 'url(#editor-hatch-red)');
       poly.setAttribute('stroke', '#ef4444');
       poly.setAttribute('stroke-width', '6');
       poly.setAttribute('stroke-dasharray', '10 8');
@@ -273,7 +288,7 @@ export function setAreaPolyStyle(poly, area) {
   poly.removeAttribute('stroke-dasharray');
   if (st === 'clean') {
     if (isSpotArea(area)) {
-      poly.setAttribute('fill', 'rgba(245,158,11,0.18)');
+      poly.setAttribute('fill', 'url(#editor-hatch-amber)');
       poly.setAttribute('stroke', '#f59e0b');
       poly.setAttribute('stroke-width', '7');
       poly.setAttribute('stroke-dasharray', '18 10');
@@ -283,7 +298,7 @@ export function setAreaPolyStyle(poly, area) {
     poly.setAttribute('stroke', '#3b82f6');
     poly.setAttribute('stroke-width', '8');
   } else if (st === 'blocking' || st === 'proposed_blocking') {
-    poly.setAttribute('fill', 'rgba(239,68,68,0.20)');
+    poly.setAttribute('fill', 'url(#editor-hatch-red)');
     poly.setAttribute('stroke', '#ef4444');
     poly.setAttribute('stroke-width', '6');
     poly.setAttribute('stroke-dasharray', '10 8');
