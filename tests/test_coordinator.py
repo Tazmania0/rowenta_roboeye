@@ -832,6 +832,7 @@ def test_live_map_keeps_inactive_segments_out_of_avoidance_zones():
 
     assert {room["id"] for room in payload["rooms"]} == {75}
     assert all(room["redundant"] for room in payload["rooms"])
+    assert payload["rooms"][0]["area_type"] == "room"
     assert [zone["id"] for zone in payload["avoidance_zones"]] == [91]
     assert payload["avoidance_zones"][0]["area_state"] == "blocking"
     assert [zone["id"] for zone in payload["spot_zones"]] == [90]

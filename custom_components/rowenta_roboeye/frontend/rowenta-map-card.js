@@ -6,8 +6,9 @@
 // v2.7.0: room selection + control bar (Start/Pause, Stop, Go Home, Clean Selected).
 // v2.7.1: only render real blocking zones as red no-go overlays.
 // v2.7.2: render clean spot zones with a separate amber hatch.
+// v2.7.3: keep legacy spot polygons visible while HA refreshes payload attrs.
 
-const VERSION = "2.7.2";
+const VERSION = "2.7.3";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -80,6 +81,10 @@ function isSpotZone(zone) {
   return zone?.area_type === "to_be_cleaned" && !isBlockingZone(zone);
 }
 
+function isLegacyZone(zone) {
+  return zone && zone.area_type == null && zone.area_state == null;
+}
+
 
 class RowentaMapCard extends HTMLElement {
   constructor() {
@@ -139,9 +144,15 @@ class RowentaMapCard extends HTMLElement {
   _renderFull(mapState, attrs) {
     const cfg = this._config;
 
-    const rooms           = attrs.rooms            || [];
+    const roomsRaw        = attrs.rooms            || [];
     const avoidanceZones  = attrs.avoidance_zones  || [];
-    const spotZones       = attrs.spot_zones       || avoidanceZones.filter(isSpotZone);
+    const hasSpotZonesAttr = Array.isArray(attrs.spot_zones);
+    const spotZones       = [
+      ...(attrs.spot_zones || []),
+      ...(!hasSpotZonesAttr ? avoidanceZones.filter((z) => isSpotZone(z) || isLegacyZone(z)) : []),
+      ...roomsRaw.filter(isSpotZone),
+    ];
+    const rooms           = roomsRaw.filter((room) => !isSpotZone(room));
     const outline         = attrs.outline          || [];
     const walls           = attrs.walls            || [];
     const dock            = attrs.dock             || null;
@@ -422,7 +433,6 @@ class RowentaMapCard extends HTMLElement {
     let spotLayer = "";
     if (spotZones.length) {
       for (const zone of spotZones) {
-        if (!isSpotZone(zone)) continue;
         const p = zone.polygon || [];
         if (p.length < 3) continue;
         spotLayer += `<polygon points="${pts2str(p)}"

@@ -2370,6 +2370,7 @@ def _build_live_map_payload(
         rooms.append({
             "id": area.get("id"),
             "name": name,
+            "area_type": area.get("area_type", "room"),
             "room_type": area.get("room_type", "none"),
             "area_state": area.get("area_state", "inactive"),
             "polygon": pts,
