@@ -482,10 +482,9 @@ After a map switch or HA restart, the Rooms view may occasionally display entity
 
 | # | Item | Status |
 |---|------|--------|
-| 1 | Room sensor `unique_id` includes map prefix — multi-floor collision resolved | ✅ Fixed |
-| 2 | Root-level `icon.png` / `logo.png` are byte-for-byte duplicates of `brand/` variants — delete | 🟢 HACS hygiene |
-| 3 | `zip_release: false` in `hacs.json` conflicts with `release.yml` producing a zip artifact | 🟢 HACS hygiene |
-| 4 | Submit brand assets to [home-assistant/brands](https://github.com/home-assistant/brands) for official icon | 🟢 Future |
+| 1 | Root-level `icon.png` / `logo.png` are byte-for-byte duplicates of `brand/` variants — delete | 🟢 HACS hygiene |
+| 2 | `zip_release: false` in `hacs.json` conflicts with `release.yml` producing a zip artifact | 🟢 HACS hygiene |
+| 3 | Submit brand assets to [home-assistant/brands](https://github.com/home-assistant/brands) for official icon | 🟢 Future |
 
 ---
 
