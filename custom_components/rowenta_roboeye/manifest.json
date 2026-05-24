@@ -1,0 +1,27 @@
+{
+  "domain": "rowenta_roboeye",
+  "name": "Rowenta / Tefal RobEye Robot Vacuum",
+  "after_dependencies": [
+    "frontend",
+    "lovelace"
+  ],
+  "codeowners": [
+    "@Tazmania0"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "zeroconf",
+    "http"
+  ],
+  "documentation": "https://github.com/Tazmania0/rowenta_roboeye",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Tazmania0/rowenta_roboeye/issues",
+  "requirements": [],
+  "version": "1.0.0",
+  "zeroconf": [
+    {
+      "type": "_robeye._tcp.local."
+    }
+  ]
+}
