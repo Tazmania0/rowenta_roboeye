@@ -50,8 +50,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     Must be in async_setup (not async_setup_entry) so registration
     happens once regardless of how many config entries exist.
     """
+    hass.data.setdefault(DOMAIN, {})
+    reg = JSModuleRegistration(hass, VERSION)
+    hass.data[DOMAIN]["_js_registration"] = reg
+
     async def _register_frontend(_event: object = None) -> None:
-        reg = JSModuleRegistration(hass, VERSION)
         await reg.async_register()
 
     if hass.state == CoreState.running:
@@ -510,6 +513,12 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         friendly_name = entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
         manager = RobEyeDashboardManager(device_id=device_id, friendly_name=friendly_name)
     await manager.async_delete(hass)
+
+    # Remove the Lovelace JS resource when the last config entry is gone.
+    if not hass.config_entries.async_entries(DOMAIN):
+        reg = hass.data.get(DOMAIN, {}).get("_js_registration")
+        if reg is not None:
+            await reg.async_unregister()
 
 
 async def _async_update_listener(

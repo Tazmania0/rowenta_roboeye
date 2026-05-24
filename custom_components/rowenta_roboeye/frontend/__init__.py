@@ -11,6 +11,7 @@ Key rules:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -35,13 +36,22 @@ class JSModuleRegistration:
     def __init__(self, hass: HomeAssistant, version: str) -> None:
         self.hass = hass
         self.version = version
-        self.lovelace = self.hass.data.get("lovelace")
+        self.lovelace: Any = None
 
     async def async_register(self) -> None:
         """Register static path and Lovelace resources."""
         await self._async_register_path()
+        await self._async_retry_register_resources()
+
+    async def _async_retry_register_resources(self) -> None:
+        """Attempt Lovelace resource registration, retrying if lovelace is not ready."""
+        self.lovelace = self.hass.data.get("lovelace")
         if self.lovelace is None:
-            _LOGGER.debug("RobEye frontend: lovelace not in hass.data, skipping resource registration")
+            _LOGGER.debug("RobEye frontend: lovelace not in hass.data, retry in 5s")
+            async_call_later(
+                self.hass, 5,
+                lambda _now: asyncio.ensure_future(self._async_retry_register_resources()),
+            )
             return
         # Only works in storage mode
         if getattr(self.lovelace, "mode", None) != "storage":
