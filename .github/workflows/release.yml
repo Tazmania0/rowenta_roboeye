@@ -28,18 +28,16 @@ jobs:
         run: |
           TAG="${{ steps.version.outputs.version }}"
           if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
-            echo "Tag $TAG already exists, skipping release creation."
-            echo "skip=true" >> $GITHUB_ENV
+            echo "Tag $TAG already exists, skipping."
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git tag "$TAG"
             git push origin "$TAG"
-            echo "skip=false" >> $GITHUB_ENV
           fi
 
       - name: Create release zip
-        if: env.skip != 'true'
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           mkdir -p release
           cp -r custom_components release/
@@ -48,7 +46,7 @@ jobs:
           cd ..
 
       - name: Create GitHub Release
-        if: env.skip != 'true'
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}

@@ -100,7 +100,6 @@ class RobEyeApiClient:
     def __init__(
         self,
         host: str,
-        session: aiohttp.ClientSession | None = None,
         port: int = DEFAULT_PORT,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> None:

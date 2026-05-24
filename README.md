@@ -66,13 +66,7 @@ For multi-floor homes, use the **Active Map** selector to switch floors after ph
 
 ### 4 — Dashboard
 
-After setup the integration writes a ready-made Lovelace dashboard to:
-
-```
-config/rowenta_xplorer120_dashboard.yaml
-```
-
-Load it via **Settings → Dashboards → Add Dashboard → Raw configuration editor**.
+After setup the integration automatically creates a ready-made Lovelace dashboard visible in the HA sidebar under **Dashboards**. No manual steps required.
 
 The dashboard includes:
 
@@ -502,6 +496,7 @@ After a map switch or HA restart, the Rooms view may occasionally display entity
 |---------|-----|
 | Integration not found after install | Restart HA |
 | "Cannot connect" during setup | Check IP, confirm vacuum is powered on and on the same subnet, assign a DHCP reservation |
+| Dashboard does not appear in sidebar | Reload the integration (**Settings → Devices & Services → Rowenta RobEye → ⋮ → Reload**). If it still does not appear, restart HA — a persistent notification will be shown if auto-creation fails after all retries |
 | Rooms view shows wrong rooms or unavailable cards | Reload the integration — see Known Limitations |
 | Map card shows blank | Hard-refresh the browser; if still blank check HA logs for resource registration errors at startup |
 | Auto-discovery not working | Use manual IP entry; open a GitHub issue with the mDNS service type from your vacuum |
