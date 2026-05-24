@@ -66,7 +66,7 @@ For multi-floor homes, use the **Active Map** selector to switch floors after ph
 
 ### 4 — Dashboard
 
-After setup the integration automatically creates a ready-made Lovelace dashboard and adds it to the HA sidebar. No manual steps required — it appears within a few seconds of the first coordinator refresh.
+After setup the integration automatically creates a ready-made Lovelace dashboard visible in the HA sidebar under **Dashboards**. No manual steps required.
 
 The dashboard includes:
 
