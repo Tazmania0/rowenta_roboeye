@@ -124,8 +124,14 @@ class RobEyeApiClient:
         """
         url = self._url(path)
         try:
-            connector = aiohttp.TCPConnector(force_close=True)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            # Build the connector inline so it is owned by the ClientSession's
+            # context manager.  Assigning it to a local first would leak the
+            # socket/connector if the ClientSession constructor itself raised
+            # (that error is also not an aiohttp.ClientError, so it would escape
+            # the handler below uncaught).
+            async with aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(force_close=True)
+            ) as session:
                 async with session.get(
                     url, params=params, timeout=self._timeout
                 ) as resp:

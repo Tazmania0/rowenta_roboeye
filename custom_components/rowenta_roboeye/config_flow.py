@@ -13,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .api import CannotConnect, RobEyeApiClient
-from .const import CONF_HOSTNAME, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER
+from .const import CONF_HOSTNAME, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DEFAULT_PORT, DOMAIN, LOGGER
 
 
 class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -25,6 +25,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         """Initialise the config flow."""
         self._host: str = ""
         self._hostname: str = ""
+        self._serial: str = ""
 
     # ------------------------------------------------------------------
     # Step 1a — Manual IP entry (fallback when mDNS unavailable)
@@ -49,9 +50,11 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
             else:
                 serial = await self._fetch_serial(host)
-                # Use IP as unique_id for manual setup
-                await self.async_set_unique_id(host)
-                self._abort_if_unique_id_configured()
+                # Prefer the device serial as unique_id so the same robot can't
+                # be added twice (and dedupes against a zeroconf-discovered
+                # entry).  Fall back to the IP only when the serial is unknown.
+                await self.async_set_unique_id(serial or host)
+                self._abort_if_unique_id_configured(updates={CONF_HOST: host})
                 return self.async_create_entry(
                     title=f"{name} ({host})",
                     data={
@@ -84,14 +87,19 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         LOGGER.debug("Zeroconf discovery_info: %s", discovery_info)
 
         self._host = discovery_info.host
-        self._hostname = discovery_info.hostname
+        self._hostname = discovery_info.hostname or ""
 
         LOGGER.debug("Zeroconf host: %s  hostname: %s", self._host, self._hostname)
 
-        # Use stable mDNS hostname as unique_id — survives DHCP IP changes.
-        # Normalize: strip trailing dot and lowercase so two announcements that
-        # differ only in case or trailing dot are treated as the same device.
-        await self.async_set_unique_id(self._hostname.rstrip(".").lower())
+        if not self._hostname and not self._host:
+            return self.async_abort(reason="no_hostname")
+
+        # Provisional unique_id from the stable mDNS hostname (survives DHCP IP
+        # changes).  Normalize: strip trailing dot and lowercase so announcements
+        # differing only in case/trailing dot map to the same device.  This dedupes
+        # repeated discovery flows before we incur a network round-trip below.
+        provisional_uid = (self._hostname or self._host).rstrip(".").lower()
+        await self.async_set_unique_id(provisional_uid)
         self._abort_if_unique_id_configured(
             updates={CONF_HOST: self._host}  # silently update IP if hostname matches
         )
@@ -102,10 +110,18 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         except CannotConnect:
             return self.async_abort(reason="cannot_connect")
 
+        # Prefer the device serial as the final unique_id so a manual entry and a
+        # zeroconf discovery for the same robot dedupe against each other.  Keep
+        # the hostname-based id when the serial can't be read.
+        self._serial = await self._fetch_serial(self._host)
+        if self._serial and self._serial != provisional_uid:
+            await self.async_set_unique_id(self._serial)
+            self._abort_if_unique_id_configured(updates={CONF_HOST: self._host})
+
         self.context.update(
             {
                 "title_placeholders": {"host": self._host},
-                "configuration_url": f"http://{self._host}:{8080}",
+                "configuration_url": f"http://{self._host}:{DEFAULT_PORT}",
             }
         )
 
@@ -126,14 +142,14 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                 ),
             )
         name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
-        serial = await self._fetch_serial(self._host)
+        # Serial was already fetched in async_step_zeroconf; reuse it.
         return self.async_create_entry(
             title=f"{name} ({self._host})",
             data={
                 CONF_HOST: self._host,
-                CONF_HOSTNAME: self._hostname,
+                CONF_HOSTNAME: self._hostname or self._host,
                 CONF_NAME: name,
-                CONF_SERIAL: serial,
+                CONF_SERIAL: self._serial,
             },
         )
 

@@ -15,6 +15,7 @@ def _make_flow():
     flow.hass = MagicMock()
     flow._host = ""
     flow._hostname = ""
+    flow._serial = ""
     flow.context = {}
     flow.async_set_unique_id = AsyncMock()
     flow._abort_if_unique_id_configured = MagicMock()
@@ -44,6 +45,18 @@ async def test_user_step_success():
     assert result["data"]["host"] == "192.168.1.50"
     assert result["data"]["serial"] == "sn_abc123"
     assert "map_id" not in result["data"]
+    # unique_id prefers the device serial so the robot can't be added twice.
+    flow.async_set_unique_id.assert_awaited_once_with("sn_abc123")
+
+
+@pytest.mark.asyncio
+async def test_user_step_unique_id_falls_back_to_host_without_serial():
+    """When the serial can't be read, the IP is used as unique_id."""
+    flow = _make_flow()
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="")):
+        await flow.async_step_user({"host": "192.168.1.50"})
+    flow.async_set_unique_id.assert_awaited_once_with("192.168.1.50")
 
 
 @pytest.mark.asyncio
@@ -106,19 +119,43 @@ def _mock_zeroconf_info(host="192.168.1.100", hostname="xplorer120.local."):
 async def test_zeroconf_happy_path():
     flow = _make_flow()
 
-    with patch.object(flow, "_test_connection", new=AsyncMock()):
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="sn_zc")):
         result = await flow.async_step_zeroconf(_mock_zeroconf_info())
 
     # Should advance to confirmation form
     assert result["type"] == "form"
     assert result["step_id"] == "zeroconf_confirm"
+    # Serial fetched during discovery is stashed for the confirm step.
+    assert flow._serial == "sn_zc"
+
+
+@pytest.mark.asyncio
+async def test_zeroconf_prefers_serial_unique_id():
+    """Discovery upgrades the unique_id from hostname to the device serial."""
+    flow = _make_flow()
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="sn_zc")):
+        await flow.async_step_zeroconf(_mock_zeroconf_info())
+    # Provisional hostname id first, then upgraded to the serial.
+    uids = [c.args[0] for c in flow.async_set_unique_id.call_args_list]
+    assert uids == ["xplorer120.local", "sn_zc"]
+
+
+@pytest.mark.asyncio
+async def test_zeroconf_aborts_without_hostname_or_host():
+    flow = _make_flow()
+    result = await flow.async_step_zeroconf(_mock_zeroconf_info(host="", hostname=""))
+    assert result["type"] == "abort"
+    assert result["reason"] == "no_hostname"
 
 
 @pytest.mark.asyncio
 async def test_zeroconf_cannot_connect_aborts():
     flow = _make_flow()
 
-    with patch.object(flow, "_test_connection", new=AsyncMock(side_effect=CannotConnect)):
+    with patch.object(flow, "_test_connection", new=AsyncMock(side_effect=CannotConnect)), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="")):
         result = await flow.async_step_zeroconf(_mock_zeroconf_info())
 
     assert result["type"] == "abort"
@@ -130,9 +167,9 @@ async def test_zeroconf_confirm_creates_entry():
     flow = _make_flow()
     flow._host = "192.168.1.100"
     flow._hostname = "xplorer120.local."
+    flow._serial = "sn_xyz"  # already fetched during async_step_zeroconf
 
-    with patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="sn_xyz")):
-        result = await flow.async_step_zeroconf_confirm(user_input={})
+    result = await flow.async_step_zeroconf_confirm(user_input={})
 
     assert result["type"] == "create_entry"
     assert result["data"]["host"] == "192.168.1.100"
@@ -153,10 +190,12 @@ async def test_zeroconf_confirm_shows_form_without_input():
 
 @pytest.mark.asyncio
 async def test_zeroconf_unique_id_strips_trailing_dot():
-    """Trailing dot is stripped from hostname before setting unique_id."""
+    """Trailing dot is stripped from hostname before setting the provisional unique_id."""
     flow = _make_flow()
-    with patch.object(flow, "_test_connection", new=AsyncMock()):
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="")):
         await flow.async_step_zeroconf(_mock_zeroconf_info(hostname="xplorer120.local."))
+    # No serial → only the provisional hostname id is set.
     flow.async_set_unique_id.assert_called_once_with("xplorer120.local")
 
 
@@ -164,7 +203,8 @@ async def test_zeroconf_unique_id_strips_trailing_dot():
 async def test_zeroconf_unique_id_lowercased():
     """Hostname is lowercased so case variants produce the same unique_id."""
     flow = _make_flow()
-    with patch.object(flow, "_test_connection", new=AsyncMock()):
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="")):
         await flow.async_step_zeroconf(_mock_zeroconf_info(hostname="Xplorer120.Local."))
     flow.async_set_unique_id.assert_called_once_with("xplorer120.local")
 
@@ -173,7 +213,8 @@ async def test_zeroconf_unique_id_lowercased():
 async def test_zeroconf_unique_id_no_trailing_dot_passthrough():
     """Hostname without trailing dot is still normalised to lowercase."""
     flow = _make_flow()
-    with patch.object(flow, "_test_connection", new=AsyncMock()):
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="")):
         await flow.async_step_zeroconf(_mock_zeroconf_info(hostname="xplorer120.local"))
     flow.async_set_unique_id.assert_called_once_with("xplorer120.local")
 
@@ -184,7 +225,8 @@ async def test_zeroconf_updates_ip_for_existing_hostname():
     flow = _make_flow()
     flow._abort_if_unique_id_configured = MagicMock(side_effect=Exception("already_configured"))
 
-    with patch.object(flow, "_test_connection", new=AsyncMock()):
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="")):
         try:
             await flow.async_step_zeroconf(_mock_zeroconf_info(host="192.168.1.200"))
         except Exception:
