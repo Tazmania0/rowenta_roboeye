@@ -129,6 +129,28 @@ MOCK_ROB_POSE = {
 
 MOCK_SENSOR_VALUES = {"sensor_data": []}
 
+
+def make_sensor_values(**gpio_states):
+    """Build a /get/sensor_values payload with the given gpio__<descriptor> states.
+
+    Example: make_sensor_values(side_brush_left_stuck="active") yields a payload
+    that _parse_sensor_values flattens to {"gpio__side_brush_left_stuck": "active"}.
+    """
+    return {
+        "sensor_data": [
+            {
+                "device_type": "gpio",
+                "sensor_data": [
+                    {
+                        "device_descriptor": descriptor,
+                        "payload": {"data": {"value": value}},
+                    }
+                    for descriptor, value in gpio_states.items()
+                ],
+            }
+        ]
+    }
+
 MOCK_CLEANING_GRID = {
     "map_id": 3,
     "lower_left_x": -823,

@@ -283,6 +283,7 @@ sys.modules["homeassistant.components.http"] = ha_http
 ha_persistent = _make_module(
     "homeassistant.components.persistent_notification",
     async_create=MagicMock(),
+    async_dismiss=MagicMock(),
     dismiss=MagicMock(),
 )
 ha_components.persistent_notification = ha_persistent
