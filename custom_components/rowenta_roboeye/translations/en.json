@@ -2,10 +2,13 @@
   "config": {
     "abort": {
       "already_configured": "Device is already configured.",
-      "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address."
+      "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address.",
+      "reauth_successful": "Re-authentication was successful."
     },
     "error": {
       "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address.",
+      "invalid_auth": "The robot rejected the HTTP password. Check the 8-character code from the QR sticker on your robot.",
+      "invalid_password": "The HTTP password must be blank or exactly 8 characters.",
       "unknown": "Unexpected error occurred."
     },
     "flow_title": "{host}",
@@ -15,20 +18,34 @@
         "description": "Enter the local IP address of your vacuum. The map will be fetched automatically from the device.",
         "data": {
           "host": "Host",
-          "name": "Name"
+          "name": "Name",
+          "http_password": "HTTP Password (optional)"
         },
         "data_description": {
           "host": "Local IP address of the vacuum (e.g. 192.168.1.50).",
-          "name": "A friendly nickname for this vacuum (e.g. Merry, Daisy, Rosie)."
+          "name": "A friendly nickname for this vacuum (e.g. Merry, Daisy, Rosie).",
+          "http_password": "Only for Serie 130/140/375+ models where you enabled the HTTP lock in the native app. The 8-character code from the QR sticker on your robot. Leave blank for Serie 120/S220/S240 and for AICU models where the lock was never enabled (the default)."
         }
       },
       "zeroconf_confirm": {
         "description": "Do you want to add Rowenta Xplorer 120 at {host} to Home Assistant?",
         "data": {
-          "name": "Name"
+          "name": "Name",
+          "http_password": "HTTP Password (optional)"
         },
         "data_description": {
-          "name": "A friendly nickname for this vacuum (e.g. Merry, Daisy, Rosie)."
+          "name": "A friendly nickname for this vacuum (e.g. Merry, Daisy, Rosie).",
+          "http_password": "Leave blank unless you enabled the HTTP lock in the native app (Serie 130/140/375+). The 8-character code from the QR sticker on your robot."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Rowenta HTTP Password",
+        "description": "Your robot now requires an HTTP password (the HTTP lock is enabled). Enter the 8-character code from the QR sticker on your robot.",
+        "data": {
+          "http_password": "HTTP Password"
+        },
+        "data_description": {
+          "http_password": "The 8-character code from the QR sticker on your robot."
         }
       },
       "select_map": {
@@ -49,15 +66,19 @@
         "title": "Update Rowenta Xplorer 120 Settings",
         "data": {
           "host": "Host",
-          "name": "Name"
+          "name": "Name",
+          "http_password": "HTTP Password (optional)"
         },
         "data_description": {
-          "name": "A friendly nickname for this vacuum (e.g. Merry, Daisy, Rosie)."
+          "name": "A friendly nickname for this vacuum (e.g. Merry, Daisy, Rosie).",
+          "http_password": "The 8-character HTTP password (Serie 130/140/375+ only). Leave blank if your robot's HTTP lock is not enabled."
         }
       }
     },
     "error": {
       "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address.",
+      "invalid_auth": "The robot rejected the HTTP password. Check the 8-character code from the QR sticker on your robot.",
+      "invalid_password": "The HTTP password must be blank or exactly 8 characters.",
       "unknown": "Unexpected error occurred."
     }
   },
@@ -83,6 +104,19 @@
           "on": "Stuck",
           "off": "OK"
         }
+      },
+      "water_tank": {
+        "name": "Water Tank",
+        "state": {
+          "on": "Attached",
+          "off": "Removed"
+        }
+      },
+      "water_tank_empty": {
+        "name": "Water Tank Empty"
+      },
+      "water_pump_fault": {
+        "name": "Water Pump Fault"
       }
     },
     "sensor": {
@@ -165,11 +199,24 @@
       },
       "active_map": {
         "name": "Active map"
+      },
+      "pump_volume": {
+        "name": "Pump volume",
+        "state": {
+          "none": "Off",
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High",
+          "auto": "Auto"
+        }
       }
     },
     "switch": {
       "deep_clean_mode": {
         "name": "Deep clean mode"
+      },
+      "wet_cleaning": {
+        "name": "Wet cleaning"
       }
     },
     "vacuum": {

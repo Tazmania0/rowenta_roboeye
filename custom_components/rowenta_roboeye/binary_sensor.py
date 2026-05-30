@@ -40,11 +40,19 @@ async def async_setup_entry(
 ) -> None:
     """Set up binary sensor entities."""
     coordinator: RobEyeCoordinator = hass.data[DOMAIN][config_entry.entry_id]
-    async_add_entities([
+    entities: list[BinarySensorEntity] = [
         RowentaBrushLeftStuckSensor(coordinator),
         RowentaBrushRightStuckSensor(coordinator),
         RowentaDustbinSensor(coordinator),
-    ])
+    ]
+    # Water-tank / pump sensors — AICU wet-capable models only.
+    if coordinator.has_wet_support:
+        entities.extend([
+            RowentaWaterTankSensor(coordinator),
+            RowentaWaterTankEmptySensor(coordinator),
+            RowentaWaterPumpFaultSensor(coordinator),
+        ])
+    async_add_entities(entities)
 
 
 class RowentaBrushLeftStuckSensor(RobEyeEntity, BinarySensorEntity):
@@ -122,3 +130,55 @@ class RowentaDustbinSensor(RobEyeEntity, BinarySensorEntity):
         return (
             self.coordinator.sensor_values_parsed.get("gpio__dustbin") == "active"
         )
+
+
+# ── Water tank / pump sensors (AICU wet models only) ───────────────────
+
+class RowentaWaterTankSensor(RobEyeEntity, BinarySensorEntity):
+    """Binary sensor: water tank attached (on) or removed (off)."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "water_tank"
+
+    def __init__(self, coordinator: RobEyeCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"water_tank_{coordinator.device_id}"
+        self.entity_id = f"binary_sensor.{coordinator.device_id}_water_tank"
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.water_tank_attached
+
+
+class RowentaWaterTankEmptySensor(RobEyeEntity, BinarySensorEntity):
+    """Binary sensor: water tank empty (on = problem)."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "water_tank_empty"
+
+    def __init__(self, coordinator: RobEyeCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"water_tank_empty_{coordinator.device_id}"
+        self.entity_id = f"binary_sensor.{coordinator.device_id}_water_tank_empty"
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.water_tank_empty
+
+
+class RowentaWaterPumpFaultSensor(RobEyeEntity, BinarySensorEntity):
+    """Binary sensor: water pump stuck or missing (on = problem)."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "water_pump_fault"
+
+    def __init__(self, coordinator: RobEyeCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"water_pump_fault_{coordinator.device_id}"
+        self.entity_id = f"binary_sensor.{coordinator.device_id}_water_pump_fault"
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.water_pump_fault

@@ -19,12 +19,14 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import CannotConnect, RobEyeApiClient
+from .api import AuthFailed, CannotConnect, RobEyeApiClient
 from .const import (
+    AICU_UNIQUE_ID_PREFIX,
     AREA_STATE_BLOCKING,
     AREA_TYPE_AVOIDANCE,
     CHARGING_CHARGING,
@@ -59,6 +61,10 @@ from .const import (
     EVENT_DUSTBIN_MISSING,
     EVENT_ROBOT_LIFTED,
     EVENT_TYPE_LABELS,
+    FLAG_MISSING_WATER_PUMP,
+    FLAG_STUCK_WATER_PUMP,
+    FLAG_WATER_TANK_EMPTY,
+    FLAG_WATER_TANK_INSERTED,
     IMMEDIATE_COMMAND_NAMES,
     LOGGER,
     MAX_POLL_FAILURES,
@@ -66,6 +72,15 @@ from .const import (
     MODE_GO_HOME,
     MODE_RECHARGE_CONTINUE_POLL_S,
     MODE_RECHARGE_CONTINUE_WAIT_S,
+    PLATFORM_C5,
+    PLATFORM_HELIOS,
+    PLATFORM_L6,
+    PLATFORM_L7,
+    PLATFORM_LEGACY,
+    PLATFORM_RC100,
+    PLATFORM_UNKNOWN,
+    PUMP_VOLUME_NONE,
+    PUMP_VOLUME_OPTIONS,
     QUEUE_POST_DOCK_DELAY_S,
     SCAN_INTERVAL_BACKGROUND,
     SCAN_INTERVAL_EVENT_LOG,
@@ -204,6 +219,21 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Brush stuck notification state tracking
         self._brush_left_notified: bool = False
         self._brush_right_notified: bool = False
+
+        # ── Hardware platform + mopping capabilities (AICU) ───────────
+        # Detected once from /get/robot_id (unique_id + name) on the first poll.
+        # Default to LEGACY / no-wet so capability-gated entities never appear
+        # for Serie 120 or unknown models.
+        self.platform: str = PLATFORM_LEGACY
+        self.has_wet_support: bool = False
+        self.has_short_carpet_support: bool = False
+        self._platform_detected: bool = False
+        # Live mopping state (only meaningful when has_wet_support is True).
+        self.pump_volume: str = PUMP_VOLUME_NONE
+        self.wet_clean_active: bool = False
+        self.water_tank_attached: bool = False
+        self.water_tank_empty: bool = False
+        self.water_pump_fault: bool = False
 
         # Active map id — single source of truth.
         # All per-room entities check self._map_id == coordinator.active_map_id.
@@ -511,6 +541,100 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_background_refresh(datetime.utcnow())
         self._last_background_fetch = datetime.utcnow()
 
+    # ── Platform detection + mopping capabilities ─────────────────────
+
+    def _detect_platform(self, robot_id: dict) -> None:
+        """Detect hardware platform from /get/robot_id (unique_id + name).
+
+        Mirrors the app's parseRobotType logic. Wet support is inferred from the
+        model name; any unrecognised AICU sub-type defaults to no-wet (safe).
+        Idempotent — sets self.platform / capability flags and marks detection done.
+        """
+        unique_id = str(robot_id.get("unique_id", "") or "")
+        name = str(robot_id.get("name", "") or "")
+
+        has_wet = False
+        has_short_carpet = False
+        if not unique_id.startswith(AICU_UNIQUE_ID_PREFIX):
+            platform = PLATFORM_LEGACY
+        elif "Helios" in name:
+            platform = PLATFORM_HELIOS
+            has_wet = True
+            has_short_carpet = True
+        elif name == "Agon" or "HY100" in name:
+            platform = PLATFORM_L6
+            has_wet = True
+        elif name == "Agonoa":
+            platform = PLATFORM_L7
+            has_wet = True
+        elif "RC100" in name:
+            platform = PLATFORM_RC100
+        elif "Chronos20" in name:
+            platform = PLATFORM_C5
+        else:
+            platform = PLATFORM_UNKNOWN  # AICU but unknown sub-type — no wet
+
+        self.platform = platform
+        self.has_wet_support = has_wet
+        self.has_short_carpet_support = has_short_carpet
+        self._platform_detected = True
+        LOGGER.info(
+            "RobEye platform: %s (unique_id=%s name=%s wet=%s short_carpet=%s)",
+            platform, unique_id, name, has_wet, has_short_carpet,
+        )
+
+    def _parse_water_flags(self, flags: Any) -> None:
+        """Update water-tank / pump state from a /get/robot_flags payload.
+
+        The live shape is unconfirmed: handle both a ``notification`` list of
+        flag-name strings and a flat dict of boolean-ish keys.
+        """
+        if not isinstance(flags, dict):
+            return
+        notif = flags.get("notification")
+        if isinstance(notif, (list, tuple, set)):
+            names = {str(x) for x in notif}
+            self.water_tank_attached = FLAG_WATER_TANK_INSERTED in names
+            self.water_tank_empty = FLAG_WATER_TANK_EMPTY in names
+            self.water_pump_fault = (
+                FLAG_STUCK_WATER_PUMP in names or FLAG_MISSING_WATER_PUMP in names
+            )
+            return
+        # Fallback: direct boolean keys.
+        if FLAG_WATER_TANK_INSERTED in flags:
+            self.water_tank_attached = bool(flags.get(FLAG_WATER_TANK_INSERTED))
+        if FLAG_WATER_TANK_EMPTY in flags:
+            self.water_tank_empty = bool(flags.get(FLAG_WATER_TANK_EMPTY))
+        if FLAG_STUCK_WATER_PUMP in flags or FLAG_MISSING_WATER_PUMP in flags:
+            self.water_pump_fault = bool(
+                flags.get(FLAG_STUCK_WATER_PUMP) or flags.get(FLAG_MISSING_WATER_PUMP)
+            )
+
+    async def _fetch_wet_data(self, robot_flags: Any) -> None:
+        """Fetch mopping state — only meaningful when has_wet_support is True.
+
+        Each call is independently guarded so a single missing endpoint never
+        fails the whole update. AuthFailed is allowed to propagate.
+        """
+        try:
+            pv = await self.client.get_pump_volume_settings()
+            if isinstance(pv, dict):
+                mode = pv.get("mode")
+                if mode in PUMP_VOLUME_OPTIONS:
+                    self.pump_volume = mode
+        except CannotConnect:
+            LOGGER.debug("get_pump_volume_settings unavailable, skipping")
+
+        self._parse_water_flags(robot_flags)
+
+        # do_wet_clean live flag: try /get/uxd, no fallback (best effort).
+        try:
+            uxd = await self.client.get_uxd()
+            if isinstance(uxd, dict) and "do_wet_clean" in uxd:
+                self.wet_clean_active = bool(uxd.get("do_wet_clean"))
+        except CannotConnect:
+            LOGGER.debug("get_uxd unavailable, skipping wet_clean_active")
+
     # ── Entity state helpers ───────────────────────────────────────────
 
     def _is_live_map_enabled(self) -> bool:
@@ -625,6 +749,47 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
             self._last_mode = mode
+
+            # ── Every 3600 s: robot identity / wifi ──────────────────
+            # Fetched early (before the background-refresh bucket) so platform
+            # detection + mopping capability flags are set before capability-gated
+            # polling (wet data) and entity creation run on the very first refresh.
+            if self._last_robot_info is None or (
+                now - self._last_robot_info
+            ) >= timedelta(seconds=SCAN_INTERVAL_ROBOT_INFO):
+                robot_info: dict[str, Any] = {}
+                for fetch, key in (
+                    (self.client.get_robot_id, "robot_id"),
+                    (self.client.get_wifi_status, "wifi_status"),
+                    (self.client.get_protocol_version, "protocol_version"),
+                ):
+                    try:
+                        robot_info[key] = await fetch()
+                    except CannotConnect:
+                        LOGGER.debug("%s unavailable, skipping", key)
+                data[DATA_ROBOT_INFO] = robot_info
+                self._last_robot_info = now
+                # Detect hardware platform + mopping capabilities once, and
+                # refine the HTTP Basic-Auth username with the robot's real name.
+                _robot_id_blob = robot_info.get("robot_id", {})
+                if isinstance(_robot_id_blob, dict) and _robot_id_blob:
+                    if not self._platform_detected:
+                        self._detect_platform(_robot_id_blob)
+                    self.client.set_auth_username(_robot_id_blob.get("name"))
+                # Cache serial immediately so device_id is stable for the rest
+                # of this session even before async_setup_entry can persist it.
+                if not self._stable_device_id:
+                    _rid = robot_info.get("robot_id", {})
+                    _raw = (
+                        _rid.get("unique_id")
+                        or _rid.get("serial_number")
+                        or _rid.get("robot_id")
+                        or _rid.get("id")
+                    )
+                    if _raw:
+                        self._stable_device_id = (
+                            str(_raw).lower().replace("-", "_").replace(" ", "_")
+                        )
 
             # Effective map ID for this update cycle — always HA's selected map.
             _active_map_id: str = self._active_map_id
@@ -824,6 +989,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except CannotConnect:
                     LOGGER.debug("get_map_status unavailable, skipping")
 
+                # Mopping data (AICU wet models only).
+                if self.has_wet_support:
+                    await self._fetch_wet_data(data.get(DATA_ROBOT_FLAGS))
+
                 # Fallback seed for ha_fan_speed when /get/status returns 0
                 if self.ha_fan_speed is None:
                     try:
@@ -898,40 +1067,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     LOGGER.debug("get_event_log unavailable, skipping")
                 self._last_event_log = now
 
-            # ── Every 3600 s: robot identity / wifi ──────────────────
-            if self._last_robot_info is None or (
-                now - self._last_robot_info
-            ) >= timedelta(seconds=SCAN_INTERVAL_ROBOT_INFO):
-                robot_info: dict[str, Any] = {}
-                for fetch, key in (
-                    (self.client.get_robot_id, "robot_id"),
-                    (self.client.get_wifi_status, "wifi_status"),
-                    (self.client.get_protocol_version, "protocol_version"),
-                ):
-                    try:
-                        robot_info[key] = await fetch()
-                    except CannotConnect:
-                        LOGGER.debug("%s unavailable, skipping", key)
-                data[DATA_ROBOT_INFO] = robot_info
-                self._last_robot_info = now
-                # Cache serial immediately so device_id is stable for the rest
-                # of this session even before async_setup_entry can persist it.
-                if not self._stable_device_id:
-                    _rid = robot_info.get("robot_id", {})
-                    _raw = (
-                        _rid.get("unique_id")
-                        or _rid.get("serial_number")
-                        or _rid.get("robot_id")
-                        or _rid.get("id")
-                    )
-                    if _raw:
-                        self._stable_device_id = (
-                            str(_raw).lower().replace("-", "_").replace(" ", "_")
-                        )
-
             self._consecutive_failures = 0
             return data
 
+        except AuthFailed as err:
+            # HTTP 401 — lock_http is enabled and the password is missing/wrong.
+            # Surface a Home Assistant re-auth notification so the user can enter
+            # the 8-character code without removing the integration.
+            LOGGER.warning("RobEye: HTTP authentication failed — re-auth required")
+            raise ConfigEntryAuthFailed(str(err)) from err
         except CannotConnect as err:
             self._consecutive_failures += 1
             if self._consecutive_failures >= MAX_POLL_FAILURES:
@@ -1392,6 +1536,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     # Invalidate the areas cache so async_request_refresh() below
                     # re-polls /get/areas instead of serving the 300-s stale cache.
                     self.invalidate_areas_cache()
+                await self.async_request_refresh()
+            except AuthFailed as err:
+                # Locked robot (HTTP 401). Don't let it escape into the entity's
+                # service call as an unhandled error — request a refresh so the
+                # poll loop raises ConfigEntryAuthFailed and HA starts re-auth.
+                LOGGER.warning(
+                    "RobEye immediate command %s rejected (HTTP auth): %s", _label, err
+                )
                 await self.async_request_refresh()
             except CannotConnect as err:
                 LOGGER.error("RobEye immediate command %s failed: %s", _label, err)

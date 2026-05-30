@@ -40,6 +40,8 @@ Discovered endpoints (from ApolloLogs / network capture):
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 from typing import Any
 
 import aiohttp
@@ -62,6 +64,7 @@ from .const import (
     API_GET_POINTS_OF_INTEREST,
     API_GET_PRODUCT_FEATURE_SET,
     API_GET_PROTOCOL_VERSION,
+    API_GET_PUMP_VOLUME_SETTINGS,
     API_GET_ROB_POSE,
     API_GET_ROBOT_FLAGS,
     API_GET_ROBOT_ID,
@@ -74,15 +77,28 @@ from .const import (
     API_GET_TASK_HISTORY,
     API_GET_TILE_MAP,
     API_GET_TOPO_MAP,
+    API_GET_UXD,
     API_GET_WIFI_STATUS,
+    API_SET_ADD_AREA,
     API_SET_CLEAN_ALL,
     API_SET_CLEAN_MAP,
+    API_SET_CONFIRM_NOGO_AREAS,
+    API_SET_DELETE_MAP,
+    API_SET_EXPLORE,
     API_SET_FAN_SPEED,
     API_SET_GO_HOME,
+    API_SET_LIVE_PARAMETERS,
+    API_SET_MERGE_AREAS,
     API_SET_MODIFY_AREA,
+    API_SET_MODIFY_MAP,
     API_SET_MODIFY_SCHEDULED_TASK,
+    API_SET_PROPOSE_NOGO_AREAS,
+    API_SET_PUMP_VOLUME_SETTINGS,
+    API_SET_SAVE_MAP,
+    API_SET_SPLIT_AREA,
     API_SET_STOP,
     API_SET_CLEAN_START_OR_CONTINUE,
+    DEFAULT_AUTH_USERNAME,
     DEFAULT_PORT,
     DEFAULT_TIMEOUT,
     LOGGER,
@@ -94,6 +110,16 @@ class CannotConnect(Exception):
     """Raised when the API is unreachable, times out, or returns an HTTP error."""
 
 
+class AuthFailed(Exception):
+    """Raised when the robot rejects a request with HTTP 401 (lock_http enabled).
+
+    Deliberately NOT a subclass of CannotConnect so that the coordinator's
+    optional-endpoint ``except CannotConnect`` guards do not swallow it — it
+    propagates to the top-level handler which converts it into
+    ConfigEntryAuthFailed to trigger a Home Assistant re-auth notification.
+    """
+
+
 class RobEyeApiClient:
     """Async client for the RobEye local HTTP REST API."""
 
@@ -102,10 +128,41 @@ class RobEyeApiClient:
         host: str,
         port: int = DEFAULT_PORT,
         timeout: int = DEFAULT_TIMEOUT,
+        http_password: str = "",
+        auth_username: str = DEFAULT_AUTH_USERNAME,
     ) -> None:
         self._host = host
         self._port = port
         self._timeout = aiohttp.ClientTimeout(total=timeout)
+        # Optional HTTP Basic Auth (AICU models with lock_http enabled).
+        # Empty password ⇒ no Authorization header is ever sent (the common case).
+        self._http_password = (http_password or "").strip()
+        self._auth_username = auth_username or DEFAULT_AUTH_USERNAME
+        self._auth_header: dict[str, str] = self._build_auth_header()
+
+    # ── HTTP auth ─────────────────────────────────────────────────────
+
+    def _build_auth_header(self) -> dict[str, str]:
+        """Return the Basic-Auth header dict, or {} when no password is set."""
+        if not self._http_password:
+            return {}
+        creds = base64.b64encode(
+            f"{self._auth_username}:{self._http_password}".encode()
+        ).decode()
+        return {"Authorization": f"Basic {creds}"}
+
+    def set_auth_username(self, username: str | None) -> None:
+        """Update the Basic-Auth username (the robot's reported name).
+
+        No-op when no password is configured or the username is unchanged.
+        The robot's name is only known after the first successful /get/robot_id,
+        so the client bootstraps with DEFAULT_AUTH_USERNAME and is refined here.
+        """
+        if not self._http_password or not username:
+            return
+        if username != self._auth_username:
+            self._auth_username = username
+            self._auth_header = self._build_auth_header()
 
     # ── Internal ──────────────────────────────────────────────────────
 
@@ -120,6 +177,9 @@ class RobEyeApiClient:
         keep-alive connection that would block the native Rowenta app from connecting
         to the robot's embedded HTTP server.
 
+        When an HTTP password is configured (AICU lock_http), an Authorization
+        header is attached and a 401 response raises AuthFailed.
+
         Raises CannotConnect on network errors, timeouts, or HTTP errors.
         """
         url = self._url(path)
@@ -127,8 +187,17 @@ class RobEyeApiClient:
             connector = aiohttp.TCPConnector(force_close=True)
             async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.get(
-                    url, params=params, timeout=self._timeout
+                    url,
+                    params=params,
+                    timeout=self._timeout,
+                    headers=self._auth_header or None,
                 ) as resp:
+                    if resp.status == 401:
+                        raise AuthFailed(
+                            "Robot requires an HTTP password (lock_http is enabled). "
+                            "Enter the 8-character code from the QR sticker on your "
+                            "robot in the integration options."
+                        )
                     resp.raise_for_status()
                     return await resp.json(content_type=None)
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
@@ -420,6 +489,156 @@ class RobEyeApiClient:
         and other per-device features. Format unconfirmed.
         """
         return await self._get(API_GET_PRODUCT_FEATURE_SET)
+
+    # ── Mopping / wet clean (AICU Helios/L6/L7 only) ──────────────────
+    # All wire formats from APK DEX analysis; unconfirmed on live hardware.
+    # Callers must gate these behind coordinator.has_wet_support.
+
+    async def get_pump_volume_settings(self) -> dict[str, Any]:
+        """GET /get/pump_volume_settings — current water-flow mode.
+
+        Expected: {"mode": "none"|"low"|"medium"|"high"|"auto"}
+        """
+        return await self._get(API_GET_PUMP_VOLUME_SETTINGS)
+
+    async def set_pump_volume(self, mode: str) -> dict[str, Any]:
+        """GET /set/pump_volume_settings?mode=... — set water-flow level.
+
+        Settings write — bypasses the serial command queue (see
+        IMMEDIATE_COMMAND_NAMES). mode ∈ {none, low, medium, high, auto}.
+        """
+        return await self._get(API_SET_PUMP_VOLUME_SETTINGS, params={"mode": mode})
+
+    async def set_wet_clean(self, enabled: bool) -> dict[str, Any]:
+        """GET /set/live_parameters?do_wet_clean=true|false — toggle wet mopping.
+
+        Live parameter write — bypasses the serial command queue.
+        """
+        return await self._get(
+            API_SET_LIVE_PARAMETERS,
+            params={"do_wet_clean": "true" if enabled else "false"},
+        )
+
+    async def get_uxd(self) -> dict[str, Any]:
+        """GET /get/uxd — live UX data; carries do_wet_clean (shape unconfirmed)."""
+        return await self._get(API_GET_UXD)
+
+    # ── Map editor (confirmed wire formats; not yet surfaced as entities) ──
+    # area_meta_data is ALWAYS a JSON string, even when empty: '{"name":""}'.
+    # Polygon points are individual flat params x1..x4 / y1..y4 — never JSON.
+
+    async def add_area(
+        self,
+        map_id: str,
+        points: list[tuple[float, float]],
+        *,
+        area_type: str = "to_be_cleaned",
+        area_state: str = "blocking",
+        name: str = "",
+        cleaning_parameter_set: int = 0,
+        strategy_mode: str = "normal",
+        floor_type: str = "none",
+        room_type: str = "none",
+    ) -> dict[str, Any]:
+        """GET /set/add_area — add a blocking zone or spot area to a saved map.
+
+        ``points`` must be exactly four (x, y) corners. They are sent as flat
+        params x1,y1 … x4,y4. A blocking zone uses area_state="blocking"; a spot
+        area uses area_state="clean" with cleaning_parameter_set=1.
+        """
+        if len(points) != 4:
+            raise ValueError("add_area requires exactly 4 polygon points")
+        params: dict[str, Any] = {
+            "map_id": map_id,
+            "area_type": area_type,
+            "area_state": area_state,
+            "area_meta_data": json.dumps({"name": name}, separators=(",", ":")),
+            "cleaning_parameter_set": cleaning_parameter_set,
+            "floor_type": floor_type,
+            "room_type": room_type,
+            "strategy_mode": strategy_mode,
+        }
+        for idx, (x, y) in enumerate(points, start=1):
+            params[f"x{idx}"] = x
+            params[f"y{idx}"] = y
+        return await self._get(API_SET_ADD_AREA, params=params)
+
+    async def merge_areas(self, map_id: str, area_id1: str, area_id2: str) -> dict[str, Any]:
+        """GET /set/merge_areas?map_id=N&area_id1=A&area_id2=B — merge two rooms."""
+        return await self._get(
+            API_SET_MERGE_AREAS,
+            params={"map_id": map_id, "area_id1": area_id1, "area_id2": area_id2},
+        )
+
+    async def split_area(
+        self,
+        map_id: str,
+        area_id: str,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+    ) -> dict[str, Any]:
+        """GET /set/split_area — split a room along the given boundary line."""
+        return await self._get(
+            API_SET_SPLIT_AREA,
+            params={
+                "map_id": map_id,
+                "area_id": area_id,
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+            },
+        )
+
+    async def save_map(self, map_id: str) -> dict[str, Any]:
+        """GET /set/save_map?map_id=N — persist an explored map (poll ≤60 s)."""
+        return await self._get(API_SET_SAVE_MAP, params={"map_id": map_id})
+
+    async def delete_map(self, map_id: str) -> dict[str, Any]:
+        """GET /set/delete_map?map_id=N — delete a saved floor map."""
+        return await self._get(API_SET_DELETE_MAP, params={"map_id": map_id})
+
+    async def modify_map(
+        self, map_id: str, name: str, docking_pose: Any
+    ) -> dict[str, Any]:
+        """GET /set/modify_map — rename a map.
+
+        docking_pose MUST always be included; omitting it resets the dock to the
+        map origin. Pass the existing docking_pose JSON (string or object).
+        """
+        pose = docking_pose if isinstance(docking_pose, str) else json.dumps(
+            docking_pose, separators=(",", ":")
+        )
+        return await self._get(
+            API_SET_MODIFY_MAP,
+            params={"map_id": map_id, "name": name, "docking_pose": pose},
+        )
+
+    async def explore(self) -> dict[str, Any]:
+        """GET /set/explore — start a new-map exploration. Takes zero params."""
+        return await self._get(API_SET_EXPLORE)
+
+    async def propose_nogo_areas(self, map_id: str) -> dict[str, Any]:
+        """GET /set/propose_nogo_areas?map_id=N — ask the robot to propose no-go zones."""
+        return await self._get(API_SET_PROPOSE_NOGO_AREAS, params={"map_id": map_id})
+
+    async def confirm_nogo_areas(
+        self,
+        map_id: str,
+        confirmed_ids: list[str] | None = None,
+        declined_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """GET /set/confirm_nogo_areas — accept/decline proposed no-go zones."""
+        return await self._get(
+            API_SET_CONFIRM_NOGO_AREAS,
+            params={
+                "map_id": map_id,
+                "confirmed_ids": json.dumps(confirmed_ids or [], separators=(",", ":")),
+                "declined_ids": json.dumps(declined_ids or [], separators=(",", ":")),
+            },
+        )
 
     # ── Commands ──────────────────────────────────────────────────────
 

@@ -27,6 +27,8 @@ from .const import (
     FAN_SPEED_REVERSE_MAP,
     FAN_SPEEDS,
     LOGGER,
+    PUMP_VOLUME_NONE,
+    PUMP_VOLUME_OPTIONS,
     SIGNAL_AREAS_UPDATED,
     SIGNAL_MAPS_UPDATED,
     STRATEGY_DEFAULT,
@@ -58,6 +60,10 @@ async def async_setup_entry(
         RobEyeStrategySelect(coordinator),
         RobEyeActiveMapSelect(coordinator),
     ]
+
+    # Pump volume selector — AICU wet-capable models only.
+    if coordinator.has_wet_support:
+        entities.append(RobEyePumpVolumeSelect(coordinator))
 
     # Migration: re-enable all room entities that were disabled by the old
     # disable/enable model.  Availability is now gated by `available` only.
@@ -674,4 +680,40 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
             area_id=self._area_id,
             cleaning_parameter_set=current_cps,
             strategy_mode="normal",
+        )
+
+
+# ── Pump volume (water flow) select — AICU wet models only ─────────────
+
+class RobEyePumpVolumeSelect(RobEyeEntity, SelectEntity):
+    """Water-flow level selector for wet-capable AICU robots.
+
+    Only registered when coordinator.has_wet_support is True.  Writes via
+    /set/pump_volume_settings, which bypasses the serial command queue.
+    """
+
+    _attr_translation_key = "pump_volume"
+    _attr_icon = "mdi:water"
+    _attr_options = PUMP_VOLUME_OPTIONS
+
+    def __init__(self, coordinator: RobEyeCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"pump_volume_{coordinator.device_id}"
+        self.entity_id = f"select.{coordinator.device_id}_pump_volume"
+
+    @property
+    def current_option(self) -> str:
+        option = self.coordinator.pump_volume
+        return option if option in PUMP_VOLUME_OPTIONS else PUMP_VOLUME_NONE
+
+    async def async_select_option(self, option: str) -> None:
+        if option not in PUMP_VOLUME_OPTIONS:
+            LOGGER.warning("Unknown pump volume: %s", option)
+            return
+        # Optimistic update; settings write bypasses the command queue.
+        self.coordinator.pump_volume = option
+        self.async_write_ha_state()
+        await self.coordinator.async_send_command(
+            self.coordinator.client.set_pump_volume,
+            mode=option,
         )

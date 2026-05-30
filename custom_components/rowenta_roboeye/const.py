@@ -8,7 +8,7 @@ from datetime import timedelta
 from homeassistant.const import Platform
 
 DOMAIN = "rowenta_roboeye"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 LOGGER = logging.getLogger(__package__)
 
 PLATFORMS: list[Platform] = [
@@ -44,7 +44,27 @@ CONF_LAST_ACTIVE_MAP = "last_active_map"  # last map chosen via select entity; p
 CONF_HOSTNAME = "hostname"
 CONF_NAME = "name"
 CONF_SERIAL = "serial"  # device serial number; fetched at config-flow time, never changes
+CONF_HTTP_PASSWORD = "http_password"  # AICU only, optional — see HTTP Auth section below
 DEFAULT_DEVICE_NAME = "Rowenta Xplorer 120"
+
+# ── HTTP Auth (AICU models only, optional) ────────────────────────────
+# Serie 120/S220/S240 (Wi-Fi AP onboarding) never establish an HTTP password —
+# their API is permanently open.  AICU models (Serie 130/140/375/Helios/L6/L7)
+# are paired over BLE and an 8-character password is set during onboarding (the
+# QR sticker on the robot).  The native app may optionally call /set/lock_http,
+# after which every HTTP request needs `Authorization: Basic base64(name:pass)`.
+# lock_http is NOT enabled by default, so most installs need no password.
+#
+# ROBOT_PASSWORD_SIZE = 8 (confirmed from APK bytecode).  Unconfirmed on live
+# AICU hardware — implemented defensively and only active when a password is set.
+HTTP_PASSWORD_LENGTH = 8
+DEFAULT_AUTH_USERNAME = "robot"  # used until the robot's real name is learned
+
+
+def validate_http_password(password: str | None) -> bool:
+    """Return True if the HTTP password is blank (no auth) or exactly 8 chars."""
+    pwd = (password or "").strip()
+    return pwd == "" or len(pwd) == HTTP_PASSWORD_LENGTH
 
 # ── API transport ─────────────────────────────────────────────────────
 DEFAULT_PORT = 8080
@@ -69,6 +89,9 @@ API_GET_ROB_POSE = "/get/rob_pose"
 # API_GET_ROOMS = "/get/rooms"  # returns unknown_request on Xplorer 120 firmware — do not call
 API_GET_PRODUCT_FEATURE_SET = "/get/product_feature_set"
 API_GET_SAFETY_MCU_FIRMWARE = "/get/safety_mcu_firmware_version"
+# ── Mopping / wet-clean (AICU Helios/L6/L7 only) ──────────────────────
+API_GET_PUMP_VOLUME_SETTINGS = "/get/pump_volume_settings"
+API_GET_UXD = "/get/uxd"  # carries do_wet_clean live flag (unconfirmed shape)
 API_GET_CLEANING_PARAMETER_SET = "/get/cleaning_parameter_set"
 API_GET_SCHEDULE = "/get/schedule"
 API_GET_COMMAND_RESULT = "/get/command_result"
@@ -95,6 +118,19 @@ API_SET_CLEAN_START_OR_CONTINUE = "/set/clean_start_or_continue"
 API_SET_FAN_SPEED = "/set/switch_cleaning_parameter_set"
 API_SET_MODIFY_AREA = "/set/modify_area"  # write per-room fan speed / strategy to robot map
 API_SET_MODIFY_SCHEDULED_TASK = "/set/modify_scheduled_task"
+# ── Mopping / wet-clean (AICU Helios/L6/L7 only) ──────────────────────
+API_SET_PUMP_VOLUME_SETTINGS = "/set/pump_volume_settings"
+API_SET_LIVE_PARAMETERS = "/set/live_parameters"  # do_wet_clean live toggle
+# ── Map editor (confirmed wire formats; not yet surfaced as entities) ──
+API_SET_ADD_AREA = "/set/add_area"
+API_SET_MERGE_AREAS = "/set/merge_areas"
+API_SET_SPLIT_AREA = "/set/split_area"
+API_SET_SAVE_MAP = "/set/save_map"
+API_SET_DELETE_MAP = "/set/delete_map"
+API_SET_MODIFY_MAP = "/set/modify_map"
+API_SET_EXPLORE = "/set/explore"
+API_SET_PROPOSE_NOGO_AREAS = "/set/propose_nogo_areas"
+API_SET_CONFIRM_NOGO_AREAS = "/set/confirm_nogo_areas"
 
 # ── HA service names ──────────────────────────────────────────────────
 SERVICE_CLEAN_ROOM = "clean_room"
@@ -121,6 +157,47 @@ STRATEGY_OPTIONS: list[str] = [
 ]
 # Reverse map: label → API value
 STRATEGY_REVERSE_MAP: dict[str, str] = {v: k for k, v in STRATEGY_LABELS.items()}
+
+# ── Hardware platform detection (from parseRobotType APK bytecode) ────
+# Robart-SDK robots are identified by robot_id.unique_id + robot_id.name.
+# Wet-mop capability is inferred from the model name; UNKNOWN AICU sub-types
+# default to no-wet (the safe assumption).
+AICU_UNIQUE_ID_PREFIX = "aicu-"
+
+PLATFORM_LEGACY  = "LEGACY"   # Serie 120/S220/S240 — unique_id not "aicu-"
+PLATFORM_HELIOS  = "HELIOS"   # Wet mop + short-carpet boost
+PLATFORM_L6      = "L6"       # Wet mop (Agon / HY100)
+PLATFORM_L7      = "L7"       # Wet mop (Agonoa)
+PLATFORM_RC100   = "RC100"    # No wet
+PLATFORM_C5      = "C5"       # No wet (Chronos20)
+PLATFORM_UNKNOWN = "UNKNOWN"  # Other AICU — no wet assumed
+
+# ── Pump volume / water flow (AICU wet models only) ───────────────────
+PUMP_VOLUME_NONE   = "none"
+PUMP_VOLUME_LOW    = "low"
+PUMP_VOLUME_MEDIUM = "medium"
+PUMP_VOLUME_HIGH   = "high"
+PUMP_VOLUME_AUTO   = "auto"
+
+PUMP_VOLUME_OPTIONS: list[str] = [
+    PUMP_VOLUME_NONE,
+    PUMP_VOLUME_LOW,
+    PUMP_VOLUME_MEDIUM,
+    PUMP_VOLUME_HIGH,
+    PUMP_VOLUME_AUTO,
+]
+
+# ── Cleaning method ───────────────────────────────────────────────────
+CLEANING_METHOD_DRY = "dry"
+CLEANING_METHOD_WET = "wet"
+
+# ── Robot flags (water tank / pump — from /get/robot_flags) ───────────
+FLAG_WATER_TANK_INSERTED      = "WATER_TANK_INSERTED"
+FLAG_WATER_TANK_EMPTY         = "WATER_TANK_EMPTY"
+FLAG_STUCK_WATER_PUMP         = "STUCK_WATER_PUMP"
+FLAG_MISSING_WATER_PUMP       = "MISSING_WATER_PUMP"
+FLAG_STUCK_WET_PAD_AGITATOR   = "STUCK_WET_PAD_AGITATOR"
+FLAG_MISSING_WET_PAD_AGITATOR = "MISSING_WET_PAD_AGITATOR"
 
 # ── API mode strings ──────────────────────────────────────────────────
 MODE_CLEANING = "cleaning"
@@ -281,6 +358,9 @@ MODE_RECHARGE_CONTINUE_POLL_S: float = 30.0       # poll every 30 s during charg
 IMMEDIATE_COMMAND_NAMES: frozenset = frozenset({
     "modify_area",
     "set_fan_speed",
+    # Mopping settings writes (AICU wet models) — same rationale as above.
+    "set_pump_volume",
+    "set_wet_clean",
 })
 
 # ── Resilience ────────────────────────────────────────────────────────
