@@ -43,6 +43,7 @@ from .const import (
     STRATEGY_DEFAULT,
     STRATEGY_DEEP,
     room_selection_entity_id,
+    safe_int,
 )
 from .coordinator import RobEyeCoordinator
 from .entity import (
@@ -551,12 +552,12 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
             SCHEDULE_DAYS.get(d, str(d)) for d in sorted(t.get("days_of_week", []))
         )
         time_str = f"{t.get('hour', 0):02d}:{t.get('min', 0):02d}"
-        if int(task.get("cleaning_mode", CLEANING_MODE_ALL)) == CLEANING_MODE_ALL:
+        if safe_int(task.get("cleaning_mode", CLEANING_MODE_ALL), CLEANING_MODE_ALL) == CLEANING_MODE_ALL:
             rooms_str = "All rooms"
         else:
             area_ids = task.get("parameters", [])
             rooms_str = " + ".join(
-                self._area_name(int(a)) or str(a) for a in area_ids
+                self._area_name(safe_int(a)) or str(a) for a in area_ids
             ) or "Rooms"
         return f"{days_str} {time_str} — {rooms_str}"
 
@@ -576,7 +577,7 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
         if self._optimistic_enabled is not None:
             return self._optimistic_enabled
         entry = self._get_entry()
-        return bool(int(entry.get("enabled", 0))) if entry else False
+        return bool(safe_int(entry.get("enabled", 0))) if entry else False
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -584,7 +585,7 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
         # override so future coordinator updates drive the displayed state normally.
         if self._optimistic_enabled is not None:
             entry = self._get_entry()
-            if entry is not None and bool(int(entry.get("enabled", 0))) == self._optimistic_enabled:
+            if entry is not None and bool(safe_int(entry.get("enabled", 0))) == self._optimistic_enabled:
                 self._optimistic_enabled = None
         self.async_write_ha_state()
 
@@ -595,7 +596,7 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
             return {}
         t = entry.get("time", {})
         task = entry.get("task", {})
-        fan_raw = int(task.get("cleaning_parameter_set", 0))
+        fan_raw = safe_int(task.get("cleaning_parameter_set", 0))
         return {
             "task_id": self._task_id,
             "days": [SCHEDULE_DAYS.get(d, str(d)) for d in sorted(t.get("days_of_week", []))],

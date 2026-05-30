@@ -7,13 +7,21 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.rowenta_roboeye import async_unload_entry
-from custom_components.rowenta_roboeye.const import DOMAIN
+from custom_components.rowenta_roboeye.const import DOMAIN, safe_int
 from custom_components.rowenta_roboeye.frontend import (
     _read_module_version,
     _version_from_url,
 )
 
 
+def test_safe_int_coerces_and_defaults():
+    assert safe_int("3") == 3
+    assert safe_int(5) == 5
+    assert safe_int("") == 0
+    assert safe_int(None) == 0
+    assert safe_int("abc") == 0
+    assert safe_int("", 9) == 9
+    assert safe_int(None, -1) == -1
 
 
 def test_read_module_version_extracts_card_version():

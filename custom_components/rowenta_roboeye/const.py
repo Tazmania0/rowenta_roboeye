@@ -310,3 +310,16 @@ def room_selection_entity_id(device_id: str, map_id: str, area_id: str) -> str:
     Used by RobEyeRoomSelectSwitch, RobEyeCleanSelectedButton, and dashboard.
     """
     return f"switch.{device_id}_map{map_id}_room_{area_id}_selected"
+
+
+def safe_int(value, default: int = 0) -> int:
+    """Coerce a robot-supplied value to int, returning default on bad input.
+
+    Firmware fields are not guaranteed numeric (e.g. ``enabled: ""`` or None),
+    and these are read inside entity property getters where a raw ValueError
+    would error the entity instead of letting it degrade gracefully.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default

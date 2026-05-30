@@ -22,6 +22,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import CannotConnect, RobEyeApiClient
 from .const import (
@@ -508,8 +509,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         is now part of the regular tick; this method exists only so the
         existing __init__.py call site still works.
         """
-        await self._async_background_refresh(datetime.utcnow())
-        self._last_background_fetch = datetime.utcnow()
+        await self._async_background_refresh(dt_util.utcnow())
+        self._last_background_fetch = dt_util.utcnow()
 
     # ── Entity state helpers ───────────────────────────────────────────
 
@@ -530,7 +531,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ── Core update ───────────────────────────────────────────────────
 
     async def _async_update_data(self) -> dict[str, Any]:
-        now = datetime.utcnow()
+        now = dt_util.utcnow()
         data: dict[str, Any] = dict(self.data or {})
 
         try:
@@ -2078,10 +2079,15 @@ def _parse_map_entry(
     stats_raw = raw.get("statistics", {}) or {}
     lc = stats_raw.get("last_cleaned", {}) or {}
     never = lc.get("year", 2001) <= 2001
-    last_cleaned_str = (
-        None if never
-        else f"{lc['year']}-{lc['month']:02d}-{lc['day']:02d}"
-    )
+    # month/day may be absent even when year is set on some firmware payloads —
+    # use .get with safe defaults so a partial date never raises.
+    try:
+        last_cleaned_str = (
+            None if never
+            else f"{int(lc['year'])}-{int(lc.get('month', 1)):02d}-{int(lc.get('day', 1)):02d}"
+        )
+    except (TypeError, ValueError):
+        last_cleaned_str = None
 
     return {
         "map_id":       map_id,
@@ -2249,10 +2255,20 @@ def _extract_rob_pose(rob_pose: dict) -> dict | None:
     if not rob_pose.get("valid", False):
         return None
 
+    # A "valid" pose can still be missing coordinate fields on some firmware
+    # responses; guard against KeyError so a malformed payload degrades to "no
+    # fix" instead of crashing the whole update cycle (which only catches
+    # CannotConnect).
+    x = rob_pose.get("x1")
+    y = rob_pose.get("y1")
+    heading = rob_pose.get("heading")
+    if x is None or y is None or heading is None:
+        return None
+
     return {
-        "x":           rob_pose["x1"],
-        "y":           rob_pose["y1"],
-        "heading_deg": rob_pose["heading"],       # already degrees, no conversion
+        "x":           x,
+        "y":           y,
+        "heading_deg": heading,                   # already degrees, no conversion
         "is_tentative": rob_pose.get("is_tentative", False),
         "timestamp":   rob_pose.get("timestamp"), # monotonic counter for staleness
         "map_id":      rob_pose.get("map_id"),
