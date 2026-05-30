@@ -269,25 +269,38 @@ class RobEyeCleaningModeSelect(RobEyeEntity, SelectEntity, RestoreEntity):
         self.entity_id = f"select.{coordinator.device_id}_cleaning_mode"
         self._last_known: str | None = None
 
-    @property
-    def current_option(self) -> str | None:
-        # Once HA has a stored preference (_last_known), always return it.
-        # The device's reported fan speed is only used to populate the initial
-        # value on first setup (when no prior HA state exists).
-        if self._last_known is not None:
-            return self._last_known
+    def _device_fan_speed(self) -> str | None:
+        """Resolve the device's current fan-speed label, or None if unknown."""
         raw = str(self.coordinator.status.get("cleaning_parameter_set", ""))
         live = FAN_SPEED_MAP.get(raw)
         # /get/status returns 0 when docked with per-room defaults active, or
         # omits the key entirely — fall back to the value the coordinator seeded
-        # from /get/cleaning_parameter_set during the first 300 s areas fetch.
+        # from /get/cleaning_parameter_set during the background fetch.
         if live is None and self.coordinator.ha_fan_speed:
             raw = self.coordinator.ha_fan_speed
             live = FAN_SPEED_MAP.get(raw)
-        if live is not None:
-            self._last_known = live
-            self.coordinator.ha_fan_speed = raw
         return live
+
+    @property
+    def current_option(self) -> str | None:
+        # Pure getter — no side effects.  Once HA has a stored preference
+        # (_last_known) it wins; otherwise reflect the device's value without
+        # latching it (seeding happens in _handle_coordinator_update).
+        if self._last_known is not None:
+            return self._last_known
+        return self._device_fan_speed()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        # Seed the stored preference from the device the first time a concrete
+        # value is available.  Done on the write path so reading current_option
+        # never mutates state.
+        if self._last_known is None:
+            live = self._device_fan_speed()
+            if live is not None:
+                self._last_known = live
+                self.coordinator.ha_fan_speed = FAN_SPEED_REVERSE_MAP.get(live)
+        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()

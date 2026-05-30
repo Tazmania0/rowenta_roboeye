@@ -11,7 +11,6 @@ Key rules:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from pathlib import Path
@@ -66,10 +65,42 @@ _MODULES = [
 class JSModuleRegistration:
     """Registers the map card JavaScript module in Home Assistant."""
 
+    # Retry cadence for "lovelace/resources not ready yet" — bounded so a
+    # permanently-missing Lovelace store does not reschedule forever.
+    _RETRY_INTERVAL_S = 5
+    _MAX_RETRIES = 60  # ~5 minutes
+
     def __init__(self, hass: HomeAssistant, version: str) -> None:
         self.hass = hass
         self.version = version
         self.lovelace: Any = None
+        self._retry_count = 0
+        # Unsub handle for the pending async_call_later retry, so it can be
+        # cancelled on unregister instead of firing into a torn-down integration.
+        self._cancel_retry: Any = None
+
+    def _schedule_retry(self, action) -> None:
+        """Schedule one bounded retry of ``action`` via async_call_later.
+
+        ``action`` is an async callable taking an optional ``_now`` arg.
+        Stops (logging a warning) once _MAX_RETRIES is exceeded.
+        """
+        if self._retry_count >= self._MAX_RETRIES:
+            _LOGGER.warning(
+                "RobEye frontend: Lovelace not ready after %d retries — giving up; "
+                "reload the integration once Lovelace is available",
+                self._MAX_RETRIES,
+            )
+            return
+        self._retry_count += 1
+
+        def _fire(_now: Any) -> None:
+            self._cancel_retry = None
+            self.hass.async_create_task(action())
+
+        self._cancel_retry = async_call_later(
+            self.hass, self._RETRY_INTERVAL_S, _fire
+        )
 
     async def async_register(self) -> None:
         """Register static path and Lovelace resources."""
@@ -81,10 +112,7 @@ class JSModuleRegistration:
         self.lovelace = self.hass.data.get("lovelace")
         if self.lovelace is None:
             _LOGGER.debug("RobEye frontend: lovelace not in hass.data, retry in 5s")
-            async_call_later(
-                self.hass, 5,
-                lambda _now: asyncio.ensure_future(self._async_retry_register_resources()),
-            )
+            self._schedule_retry(self._async_retry_register_resources)
             return
         # Only works in storage mode
         if getattr(self.lovelace, "mode", None) != "storage":
@@ -112,11 +140,11 @@ class JSModuleRegistration:
             resources = getattr(self.lovelace, "resources", None)
             if resources is None:
                 _LOGGER.debug("RobEye frontend: resources not available yet, retry in 5s")
-                async_call_later(self.hass, 5, _try)
+                self._schedule_retry(_try)
                 return
             if not getattr(resources, "loaded", True):
                 _LOGGER.debug("RobEye frontend: resources not loaded yet, retry in 5s")
-                async_call_later(self.hass, 5, _try)
+                self._schedule_retry(_try)
                 return
             await self._async_register_modules(resources)
 
@@ -174,6 +202,11 @@ class JSModuleRegistration:
 
     async def async_unregister(self) -> None:
         """Remove our resources when integration is unloaded."""
+        # Cancel any pending "lovelace not ready" retry so it does not fire
+        # into a torn-down integration.
+        if self._cancel_retry is not None:
+            self._cancel_retry()
+            self._cancel_retry = None
         resources = getattr(self.lovelace, "resources", None)
         if resources is None:
             return

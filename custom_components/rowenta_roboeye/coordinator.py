@@ -1566,6 +1566,28 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if hasattr(self, "async_update_listeners"):
             self.async_update_listeners()
 
+    @property
+    def has_paused_jobs(self) -> bool:
+        """True when at least one job was drained into _paused_jobs by a stop."""
+        return bool(self._paused_jobs)
+
+    async def async_stop_and_advance_or_home(self) -> None:
+        """Stop the current job, then advance to the next queued job or dock.
+
+        Single entry point for the vacuum entity / Stop button so they don't
+        reach into private queue state.  Because the stop command drains
+        pending work into _paused_jobs synchronously inside async_send_command,
+        the has_paused_jobs check below observes the post-drain state — the
+        advance/home decision is made atomically here in the coordinator.
+        """
+        await self.async_send_command(self.client.stop, label="stop(advance)")
+        if self.has_paused_jobs:
+            LOGGER.debug("stop+advance: pending jobs found — advancing to next")
+            await self.async_advance_to_next_job()
+        else:
+            LOGGER.debug("stop+advance: no pending jobs — going home")
+            await self.async_send_command(self.client.go_home, label="go_home")
+
     async def async_advance_to_next_job(self) -> None:
         """Re-enqueue saved jobs for execution, discarding the job that was stopped.
 

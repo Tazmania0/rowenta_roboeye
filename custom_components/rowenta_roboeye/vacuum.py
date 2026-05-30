@@ -238,19 +238,7 @@ class RobEyeVacuumEntity(RobEyeEntity, StateVacuumEntity):
         Use async_pause to stop-in-place with the option to resume the same job.
         """
         LOGGER.debug("async_stop: stop current job")
-        await self.coordinator.async_send_command(
-            self.coordinator.client.stop,
-            label="stop(advance)",
-        )
-        if self.coordinator._paused_jobs:
-            LOGGER.debug("async_stop: pending jobs found — advancing to next")
-            await self.coordinator.async_advance_to_next_job()
-        else:
-            LOGGER.debug("async_stop: no pending jobs — going home")
-            await self.coordinator.async_send_command(
-                self.coordinator.client.go_home,
-                label="go_home",
-            )
+        await self.coordinator.async_stop_and_advance_or_home()
 
     async def async_pause(self, **kwargs: Any) -> None:
         """Pause cleaning — stop in place, save pending jobs for resume.

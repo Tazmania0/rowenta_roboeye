@@ -298,6 +298,31 @@ def test_cleaning_mode_current_option_maps_raw():
     assert entity.current_option == FAN_SPEED_MAP["2"]  # "eco"
 
 
+def test_cleaning_mode_current_option_is_pure_getter():
+    """Reading current_option must NOT mutate _last_known or coordinator state (M1)."""
+    coord = _make_mode_coordinator(status={"cleaning_parameter_set": 3})
+    coord.ha_fan_speed = None
+    entity = _mode_entity(coord)
+
+    # Multiple reads return the device value without latching it.
+    assert entity.current_option == "high"
+    assert entity._last_known is None          # not mutated by the getter
+    assert coord.ha_fan_speed is None          # coordinator untouched
+    assert entity.current_option == "high"     # stable across reads
+
+
+def test_cleaning_mode_handle_update_seeds_last_known():
+    """_handle_coordinator_update seeds _last_known + ha_fan_speed on the write path (M1)."""
+    coord = _make_mode_coordinator(status={"cleaning_parameter_set": 3})
+    coord.ha_fan_speed = None
+    entity = _mode_entity(coord)
+
+    entity._handle_coordinator_update()
+
+    assert entity._last_known == "high"
+    assert coord.ha_fan_speed == "3"
+
+
 def test_cleaning_mode_current_option_falls_back_to_last_known():
     coord = _make_mode_coordinator(status={"cleaning_parameter_set": None})
     entity = _mode_entity(coord)

@@ -392,6 +392,52 @@ async def test_cleaning_command_waits_for_active_mode_to_finish_before_next(
 
 
 @pytest.mark.asyncio
+async def test_stop_and_advance_goes_home_when_no_paused_jobs(coordinator, mock_client):
+    """No drained jobs after stop → robot is sent home."""
+    coordinator.async_send_command = AsyncMock()
+    coordinator.async_advance_to_next_job = AsyncMock()
+    coordinator._paused_jobs = []
+
+    await coordinator.async_stop_and_advance_or_home()
+
+    assert coordinator.async_send_command.await_count == 2
+    coordinator.async_send_command.assert_any_await(coordinator.client.stop, label="stop(advance)")
+    coordinator.async_send_command.assert_any_await(coordinator.client.go_home, label="go_home")
+    coordinator.async_advance_to_next_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stop_and_advance_advances_when_paused_jobs_present(coordinator, mock_client):
+    """Drained jobs after stop → advance to next job, no go_home."""
+    coordinator.async_advance_to_next_job = AsyncMock()
+
+    real_send = coordinator.async_send_command
+
+    async def fake_send(coro_func, *a, **kw):
+        # Simulate stop draining a pending job into _paused_jobs synchronously.
+        if getattr(coro_func, "__name__", "") == "stop" or coro_func is coordinator.client.stop:
+            coordinator._paused_jobs = [(1, 1, mock_client.clean_map, (), {})]
+
+    coordinator.async_send_command = AsyncMock(side_effect=fake_send)
+    coordinator._paused_jobs = []
+
+    await coordinator.async_stop_and_advance_or_home()
+
+    coordinator.async_send_command.assert_awaited_once_with(
+        coordinator.client.stop, label="stop(advance)"
+    )
+    coordinator.async_advance_to_next_job.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_has_paused_jobs_property(coordinator):
+    coordinator._paused_jobs = []
+    assert coordinator.has_paused_jobs is False
+    coordinator._paused_jobs = [("job",)]
+    assert coordinator.has_paused_jobs is True
+
+
+@pytest.mark.asyncio
 async def test_stop_drains_pending_cleans(coordinator, mock_client):
     """Pressing Stop clears queued room cleans and dispatches stop in place."""
     coordinator.async_request_refresh = AsyncMock()
