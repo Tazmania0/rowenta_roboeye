@@ -18,8 +18,32 @@ A native Home Assistant custom integration for **Rowenta / Tefal RobEye** robot 
 | Rowenta X-Plorer S220 | D-shape | RobEye / Robart | ✅ Compatible |
 | Rowenta X-Plorer S240 | D-shape | RobEye / Robart | ✅ Compatible |
 | Tefal X-Plorer Serie 120 | D-shape | RobEye / Robart | ✅ Compatible |
+| Rowenta X-Plorer Serie 130 / 140 / 375 (AICU) | D-shape | RobEye / Robart | 🧪 Likely — unconfirmed |
+| Rowenta X-Plorer Serie 375+ "Helios", Agon/HY100 (L6), Agonoa (L7) | D-shape | RobEye / Robart | 🧪 Wet-mop support — unconfirmed |
 
 > **Out of scope:** Rowenta Serie 50–80 / S85 and above use the **Tuya** protocol and are not supported.
+
+### AICU models, mopping & HTTP password
+
+Newer Robart-based robots whose `unique_id` starts with `aicu-` are detected
+automatically. Wet-capable models (Helios / Agon / HY100 / Agonoa) gain extra
+entities, gated so Serie 120 owners never see them:
+
+- **Pump Volume** select — `none / low / medium / high / auto`
+- **Wet Cleaning** switch — toggles `do_wet_clean`
+- **Water Tank**, **Water Tank Empty**, and **Water Pump Fault** binary sensors
+
+> ⚠️ The AICU/mopping wire formats were derived from APK analysis and are **not
+> yet confirmed on live hardware**. They are implemented defensively (each
+> endpoint is guarded; unknown models default to dry-only). Feedback from AICU
+> owners is welcome.
+
+**HTTP password (optional):** AICU models set up over Bluetooth may have the
+HTTP API locked in the native app. If yours is locked, enter the 8-character
+code from the QR sticker on the robot in the **HTTP Password** field during
+setup (or via the integration options / the automatic re-auth prompt). Leave it
+blank for Serie 120/S220/S240 and for AICU models where the lock was never
+enabled (the default).
 
 ---
 

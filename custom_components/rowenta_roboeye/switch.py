@@ -62,6 +62,11 @@ async def async_setup_entry(
     coordinator: RobEyeCoordinator = hass.data[DOMAIN][config_entry.entry_id]
 
     entities: list = [RobEyeDeepCleanSwitch(coordinator)]
+
+    # Wet-cleaning toggle — AICU wet-capable models only.
+    if coordinator.has_wet_support:
+        entities.append(RobEyeWetCleanSwitch(coordinator))
+
     # Per-map entity tracking: map_id -> {area_id -> [entities]}
     known_entities_by_map: dict[str, dict] = {}
     # Tracks last-known area names per map to detect renames: map_id -> {area_id -> name}.
@@ -296,6 +301,40 @@ class RobEyeDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         # not STRATEGY_DEFAULT — the user's prior choice must be preserved.
         self.coordinator.cleaning_strategy = self.coordinator.last_non_deep_strategy
         self.async_write_ha_state()
+
+
+class RobEyeWetCleanSwitch(RobEyeEntity, SwitchEntity):
+    """Enable/disable wet mopping during cleaning (AICU wet models only).
+
+    Writes via /set/live_parameters?do_wet_clean=... which bypasses the serial
+    command queue (live parameter, not a motion command).
+    """
+
+    _attr_translation_key = "wet_cleaning"
+    _attr_icon = "mdi:mop"
+
+    def __init__(self, coordinator: RobEyeCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"wet_cleaning_{coordinator.device_id}"
+        self.entity_id = f"switch.{coordinator.device_id}_wet_cleaning"
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.wet_clean_active
+
+    async def async_turn_on(self, **kwargs: Any) -> None:  # type: ignore[override]
+        self.coordinator.wet_clean_active = True
+        self.async_write_ha_state()
+        await self.coordinator.async_send_command(
+            self.coordinator.client.set_wet_clean, True
+        )
+
+    async def async_turn_off(self, **kwargs: Any) -> None:  # type: ignore[override]
+        self.coordinator.wet_clean_active = False
+        self.async_write_ha_state()
+        await self.coordinator.async_send_command(
+            self.coordinator.client.set_wet_clean, False
+        )
 
 
 class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):

@@ -79,6 +79,21 @@ def _make_module(name: str, **attrs) -> types.ModuleType:
 # homeassistant
 ha_root = _make_module("homeassistant")
 
+# homeassistant.exceptions
+class ConfigEntryAuthFailed(Exception):
+    """Stub mirroring HA's ConfigEntryAuthFailed (triggers re-auth)."""
+
+
+class HomeAssistantError(Exception):
+    pass
+
+
+ha_exceptions = _make_module(
+    "homeassistant.exceptions",
+    ConfigEntryAuthFailed=ConfigEntryAuthFailed,
+    HomeAssistantError=HomeAssistantError,
+)
+
 # homeassistant.core
 ha_core = _make_module(
     "homeassistant.core",
@@ -281,6 +296,7 @@ sys.modules["homeassistant.components.persistent_notification"] = ha_persistent
 _modules = {
     "homeassistant": ha_root,
     "homeassistant.core": ha_core,
+    "homeassistant.exceptions": ha_exceptions,
     "homeassistant.config_entries": ha_ce,
     "homeassistant.const": ha_const,
     "homeassistant.helpers": ha_helpers,

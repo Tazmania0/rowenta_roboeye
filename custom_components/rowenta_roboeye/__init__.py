@@ -13,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
-from .const import CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_ACTIVE_MAP_CHANGED, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION
+from .const import CONF_HTTP_PASSWORD, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_ACTIVE_MAP_CHANGED, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
@@ -81,7 +81,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     )
     friendly_name: str = config_entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
 
-    client = RobEyeApiClient(host=host)
+    # http_password is blank for Serie 120/S220/S240 and for AICU models that
+    # never enabled lock_http (the default).  When set, the client sends Basic
+    # Auth; the username bootstraps with DEFAULT_AUTH_USERNAME and is refined to
+    # the robot's reported name after the first /get/robot_id.
+    http_password: str = config_entry.data.get(CONF_HTTP_PASSWORD, "")
+    client = RobEyeApiClient(host=host, http_password=http_password)
 
     coordinator = RobEyeCoordinator(
         hass=hass,

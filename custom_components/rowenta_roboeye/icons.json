@@ -21,6 +21,19 @@
           "on": "mdi:star-three-points",
           "off": "mdi:star-three-points-outline"
         }
+      },
+      "water_tank": {
+        "default": "mdi:water",
+        "state": {
+          "on": "mdi:water",
+          "off": "mdi:water-off"
+        }
+      },
+      "water_tank_empty": {
+        "default": "mdi:water-alert"
+      },
+      "water_pump_fault": {
+        "default": "mdi:water-pump-off"
       }
     },
     "sensor": {
@@ -82,6 +95,14 @@
       },
       "active_map": {
         "default": "mdi:map"
+      },
+      "pump_volume": {
+        "default": "mdi:water"
+      }
+    },
+    "switch": {
+      "wet_cleaning": {
+        "default": "mdi:mop"
       }
     },
     "button": {

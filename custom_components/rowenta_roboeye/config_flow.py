@@ -12,8 +12,20 @@ from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
-from .api import CannotConnect, RobEyeApiClient
-from .const import CONF_HOSTNAME, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER
+from .api import AuthFailed, CannotConnect, RobEyeApiClient
+from .const import (
+    CONF_HOSTNAME,
+    CONF_HTTP_PASSWORD,
+    CONF_LAST_ACTIVE_MAP,
+    CONF_MAP_ID,
+    CONF_NAME,
+    CONF_SERIAL,
+    DEFAULT_DEVICE_NAME,
+    DEFAULT_MAP_ID,
+    DOMAIN,
+    LOGGER,
+    validate_http_password,
+)
 
 
 class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -39,28 +51,35 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             host: str = user_input[CONF_HOST].strip()
             name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
+            http_password: str = user_input.get(CONF_HTTP_PASSWORD, "").strip()
 
-            try:
-                await self._test_connection(host)
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001
-                LOGGER.exception("Unexpected error during connection test")
-                errors["base"] = "unknown"
+            if not validate_http_password(http_password):
+                errors["base"] = "invalid_password"
             else:
-                serial = await self._fetch_serial(host)
-                # Use IP as unique_id for manual setup
-                await self.async_set_unique_id(host)
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title=f"{name} ({host})",
-                    data={
-                        CONF_HOST: host,
-                        CONF_HOSTNAME: host,
-                        CONF_NAME: name,
-                        CONF_SERIAL: serial,
-                    },
-                )
+                try:
+                    await self._test_connection(host, http_password)
+                except AuthFailed:
+                    errors["base"] = "invalid_auth"
+                except CannotConnect:
+                    errors["base"] = "cannot_connect"
+                except Exception:  # noqa: BLE001
+                    LOGGER.exception("Unexpected error during connection test")
+                    errors["base"] = "unknown"
+                else:
+                    serial = await self._fetch_serial(host, http_password)
+                    # Use IP as unique_id for manual setup
+                    await self.async_set_unique_id(host)
+                    self._abort_if_unique_id_configured()
+                    return self.async_create_entry(
+                        title=f"{name} ({host})",
+                        data={
+                            CONF_HOST: host,
+                            CONF_HOSTNAME: host,
+                            CONF_NAME: name,
+                            CONF_SERIAL: serial,
+                            CONF_HTTP_PASSWORD: http_password,
+                        },
+                    )
 
         return self.async_show_form(
             step_id="user",
@@ -68,6 +87,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_HOST): cv.string,
                     vol.Optional(CONF_NAME, default=DEFAULT_DEVICE_NAME): cv.string,
+                    vol.Optional(CONF_HTTP_PASSWORD, default=""): cv.string,
                 }
             ),
             errors=errors,
@@ -115,26 +135,81 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Confirmation step for the auto-discovered device — lets user set a name."""
-        if user_input is None:
-            return self.async_show_form(
-                step_id="zeroconf_confirm",
-                description_placeholders={"host": self._host},
-                data_schema=vol.Schema(
-                    {
-                        vol.Optional(CONF_NAME, default=DEFAULT_DEVICE_NAME): cv.string,
-                    }
-                ),
-            )
-        name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
-        serial = await self._fetch_serial(self._host)
-        return self.async_create_entry(
-            title=f"{name} ({self._host})",
-            data={
-                CONF_HOST: self._host,
-                CONF_HOSTNAME: self._hostname,
-                CONF_NAME: name,
-                CONF_SERIAL: serial,
-            },
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            http_password: str = user_input.get(CONF_HTTP_PASSWORD, "").strip()
+            if not validate_http_password(http_password):
+                errors["base"] = "invalid_password"
+            else:
+                name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
+                serial = await self._fetch_serial(self._host, http_password)
+                return self.async_create_entry(
+                    title=f"{name} ({self._host})",
+                    data={
+                        CONF_HOST: self._host,
+                        CONF_HOSTNAME: self._hostname,
+                        CONF_NAME: name,
+                        CONF_SERIAL: serial,
+                        CONF_HTTP_PASSWORD: http_password,
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="zeroconf_confirm",
+            description_placeholders={"host": self._host},
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_NAME, default=DEFAULT_DEVICE_NAME): cv.string,
+                    vol.Optional(CONF_HTTP_PASSWORD, default=""): cv.string,
+                }
+            ),
+            errors=errors,
+        )
+
+    # ------------------------------------------------------------------
+    # Re-auth — triggered when the robot starts returning HTTP 401
+    # ------------------------------------------------------------------
+
+    async def async_step_reauth(
+        self, entry_data: dict[str, Any]
+    ) -> ConfigFlowResult:
+        """Start the re-auth flow (HTTP password missing or wrong)."""
+        self._host = entry_data.get(CONF_HOST, "")
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Prompt for the 8-character HTTP password and update the entry."""
+        errors: dict[str, str] = {}
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+
+        if user_input is not None and entry is not None:
+            http_password: str = user_input.get(CONF_HTTP_PASSWORD, "").strip()
+            host = entry.data.get(CONF_HOST, self._host)
+            if not validate_http_password(http_password) or not http_password:
+                errors["base"] = "invalid_password"
+            else:
+                try:
+                    await self._test_connection(host, http_password)
+                except AuthFailed:
+                    errors["base"] = "invalid_auth"
+                except CannotConnect:
+                    errors["base"] = "cannot_connect"
+                except Exception:  # noqa: BLE001
+                    errors["base"] = "unknown"
+                else:
+                    return self.async_update_reload_and_abort(
+                        entry,
+                        data={**entry.data, CONF_HTTP_PASSWORD: http_password},
+                    )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_HTTP_PASSWORD, default=""): cv.string}
+            ),
+            errors=errors,
         )
 
     # ------------------------------------------------------------------
@@ -151,15 +226,15 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
     # Helpers
     # ------------------------------------------------------------------
 
-    async def _test_connection(self, host: str) -> None:
-        """Verify connectivity; raises CannotConnect on failure."""
-        client = RobEyeApiClient(host=host)
+    async def _test_connection(self, host: str, http_password: str = "") -> None:
+        """Verify connectivity; raises CannotConnect (or AuthFailed) on failure."""
+        client = RobEyeApiClient(host=host, http_password=http_password)
         await client.test_connection()
 
-    async def _fetch_serial(self, host: str) -> str:
+    async def _fetch_serial(self, host: str, http_password: str = "") -> str:
         """Return normalised serial number from robot, empty string on any failure."""
         try:
-            client = RobEyeApiClient(host=host)
+            client = RobEyeApiClient(host=host, http_password=http_password)
             data = await client.get_robot_id()
             raw = (
                 data.get("unique_id")
@@ -188,32 +263,40 @@ class RobEyeOptionsFlow(OptionsFlow):
 
         current_host = self._config_entry.data.get(CONF_HOST, "")
         current_name = self._config_entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
+        current_password = self._config_entry.data.get(CONF_HTTP_PASSWORD, "")
 
         if user_input is not None:
             host: str = user_input[CONF_HOST].strip()
             name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
-            try:
-                client = RobEyeApiClient(host=host)
-                await client.test_connection()
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001
-                errors["base"] = "unknown"
+            http_password: str = user_input.get(CONF_HTTP_PASSWORD, "").strip()
+            if not validate_http_password(http_password):
+                errors["base"] = "invalid_password"
             else:
-                return self.async_create_entry(
-                    title=f"{name} ({host})",
-                    data={
-                        CONF_HOST: host,
-                        CONF_HOSTNAME: self._config_entry.data.get(CONF_HOSTNAME, host),
-                        CONF_NAME: name,
-                        # Preserve stable identifiers so entity unique_ids never change
-                        CONF_SERIAL: self._config_entry.data.get(CONF_SERIAL, ""),
-                        "_device_id": self._config_entry.data.get("_device_id", ""),
-                        # Preserve map selection so the active map survives options saves
-                        CONF_MAP_ID: self._config_entry.data.get(CONF_MAP_ID, DEFAULT_MAP_ID),
-                        CONF_LAST_ACTIVE_MAP: self._config_entry.data.get(CONF_LAST_ACTIVE_MAP),
-                    },
-                )
+                try:
+                    client = RobEyeApiClient(host=host, http_password=http_password)
+                    await client.test_connection()
+                except AuthFailed:
+                    errors["base"] = "invalid_auth"
+                except CannotConnect:
+                    errors["base"] = "cannot_connect"
+                except Exception:  # noqa: BLE001
+                    errors["base"] = "unknown"
+                else:
+                    return self.async_create_entry(
+                        title=f"{name} ({host})",
+                        data={
+                            CONF_HOST: host,
+                            CONF_HOSTNAME: self._config_entry.data.get(CONF_HOSTNAME, host),
+                            CONF_NAME: name,
+                            CONF_HTTP_PASSWORD: http_password,
+                            # Preserve stable identifiers so entity unique_ids never change
+                            CONF_SERIAL: self._config_entry.data.get(CONF_SERIAL, ""),
+                            "_device_id": self._config_entry.data.get("_device_id", ""),
+                            # Preserve map selection so the active map survives options saves
+                            CONF_MAP_ID: self._config_entry.data.get(CONF_MAP_ID, DEFAULT_MAP_ID),
+                            CONF_LAST_ACTIVE_MAP: self._config_entry.data.get(CONF_LAST_ACTIVE_MAP),
+                        },
+                    )
 
         return self.async_show_form(
             step_id="init",
@@ -221,6 +304,7 @@ class RobEyeOptionsFlow(OptionsFlow):
                 {
                     vol.Required(CONF_HOST, default=current_host): cv.string,
                     vol.Optional(CONF_NAME, default=current_name): cv.string,
+                    vol.Optional(CONF_HTTP_PASSWORD, default=current_password): cv.string,
                 }
             ),
             errors=errors,
