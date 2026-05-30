@@ -31,7 +31,11 @@ export function eventToSVGPoint(evt) {
   const pt = mapSvg.createSVGPoint();
   pt.x = evt.clientX;
   pt.y = evt.clientY;
-  return pt.matrixTransform(mapSvg.getScreenCTM().inverse());
+  // getScreenCTM() returns null when the SVG isn't laid out / is hidden
+  // (e.g. empty-state shown) — guard so the mousemove/wheel handlers don't throw.
+  const ctm = mapSvg.getScreenCTM();
+  if (!ctm) return { x: 0, y: 0 };
+  return pt.matrixTransform(ctm.inverse());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
