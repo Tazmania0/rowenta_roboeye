@@ -530,29 +530,31 @@ export function isBlockingArea(area) {
   return area?.area_state === 'blocking' || area?.area_state === 'proposed_blocking';
 }
 
+// Shared stats formatting (used by the detail panel, list summary, and SVG
+// badge) so the m²/avg-min conversions live in one place.
+export function formatAreaSizeM2(stats) {
+  return (typeof stats?.area_size === 'number' && stats.area_size > 0)
+    ? `${(stats.area_size / 1_000_000).toFixed(1)} m2` : null;
+}
+
+export function formatAvgCleanMin(stats) {
+  return (typeof stats?.average_cleaning_time === 'number' && stats.average_cleaning_time > 0)
+    ? `avg ${(stats.average_cleaning_time / 60000).toFixed(1)} min` : null;
+}
+
 function formatAreaStatsSummary(area) {
   const stats = area?._raw?.statistics;
   if (!stats) return '';
-
-  const parts = [];
-  if (typeof stats.area_size === 'number' && stats.area_size > 0) {
-    parts.push(`${(stats.area_size / 1_000_000).toFixed(1)} m2`);
-  }
-  if (typeof stats.average_cleaning_time === 'number' && stats.average_cleaning_time > 0) {
-    parts.push(`avg ${(stats.average_cleaning_time / 60000).toFixed(1)} min`);
-  }
-  return parts.join(' · ');
+  return [formatAreaSizeM2(stats), formatAvgCleanMin(stats)]
+    .filter(Boolean).join(' · ');
 }
 
 function svgAreaStatsLines(area) {
   const stats = area?._raw?.statistics;
   const lines = [`ID #${area.area_id}`];
   if (!stats) return lines;
-  if (typeof stats.area_size === 'number' && stats.area_size > 0) {
-    lines.push(`${(stats.area_size / 1_000_000).toFixed(1)} m2`);
-  }
-  if (typeof stats.average_cleaning_time === 'number' && stats.average_cleaning_time > 0) {
-    lines.push(`avg ${(stats.average_cleaning_time / 60000).toFixed(1)} min`);
+  for (const v of [formatAreaSizeM2(stats), formatAvgCleanMin(stats)]) {
+    if (v) lines.push(v);
   }
   return lines;
 }
