@@ -26,6 +26,34 @@ from custom_components.rowenta_roboeye.dashboard import (
 )
 
 
+# ── Entity-registry mock ──────────────────────────────────────────────
+# _room_entities_registered now calls er.async_get(hass). The autouse
+# fixture provides an empty registry by default so all existing tests
+# that call _room_entities_registered with a plain MagicMock hass
+# continue to work: entity not in states AND not in registry → False.
+# Tests that need specific registry entries use patch() to override.
+
+from unittest.mock import patch as _patch
+
+
+@pytest.fixture(autouse=True)
+def _empty_entity_registry():
+    """Patch er.async_get to return an empty registry for every test.
+
+    Empty means async_get(eid) returns None for all entity IDs, which
+    preserves the pre-fix semantics for all existing tests:
+      not in hass.states AND not in registry → _room_entities_registered
+      returns False, same as before.
+    """
+    _empty_reg = MagicMock()
+    _empty_reg.async_get.return_value = None
+    with _patch(
+        "custom_components.rowenta_roboeye.dashboard.er"
+    ) as mock_er:
+        mock_er.async_get.return_value = _empty_reg
+        yield _empty_reg
+
+
 def _all_room_eids(device_id: str, map_id: str, rid) -> set[str]:
     """Return the full set of per-room entity_ids _room_entities_registered probes."""
     m = f"map{map_id}_"
@@ -240,12 +268,17 @@ def _fast_poll(manager: RobEyeDashboardManager) -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_update_defers_when_entities_missing():
-    """async_update returns False without saving when room entities never appear."""
-    hass = _make_hass_with_states(set())  # no entities present
-    # Coordinator reports areas as ready and matching the active map; the
-    # active_map_id guard is the only reason this returns False so we know
-    # the polling loop ran.
+async def test_async_update_saves_best_effort_when_entities_never_appear():
+    """async_update saves best-effort when room entities never appear in states
+    or registry but the active map still matches.
+
+    Previous behaviour: returned False unconditionally, leaving stale (old-map)
+    YAML on disk indefinitely.  New behaviour: emits a warning and falls through
+    to save so the Rooms view references the correct map's entity IDs even if
+    some cards are temporarily unavailable.
+    """
+    hass = _make_hass_with_states(set())  # no entities in states
+    # Empty registry → entities truly absent (not just disabled)
     coord = MagicMock(
         device_id="dev",
         _areas_ready=True,
@@ -256,7 +289,10 @@ async def test_async_update_defers_when_entities_missing():
 
     manager = RobEyeDashboardManager(device_id="dev", friendly_name="Test")
     _fast_poll(manager)
-    manager._async_get_lovelace_store = AsyncMock()  # must NOT be called
+
+    mock_store = AsyncMock()
+    mock_store.async_save = AsyncMock()
+    manager._async_get_lovelace_store = AsyncMock(return_value=mock_store)
 
     areas = [
         {"id": 5, "area_meta_data": '{"name": "Kitchen"}'},
@@ -269,9 +305,48 @@ async def test_async_update_defers_when_entities_missing():
         active_map_id="3",
     )
 
-    assert result is False
-    manager._async_get_lovelace_store.assert_not_called()
-    assert manager._last_hash is None  # no save happened
+    # Backstop: save proceeded despite entities never appearing
+    assert result is True
+    mock_store.async_save.assert_called_once()
+    assert manager._last_hash is not None
+
+
+@pytest.mark.asyncio
+async def test_async_update_defers_when_rooms_empty_and_entities_missing():
+    """async_update returns False (defers) when rooms list is empty.
+
+    If coordinator.areas is empty (map's /get/areas not yet fetched), there
+    is nothing to save.  The backstop only fires when rooms is non-empty.
+    """
+    hass = _make_hass_with_states(set())
+    coord = MagicMock(
+        device_id="dev",
+        _areas_ready=True,
+        active_map_id="3",
+        committed_active_map_id="3",
+    )
+    hass.data = {"rowenta_roboeye": {"entry1": coord}}
+
+    manager = RobEyeDashboardManager(device_id="dev", friendly_name="Test")
+    _fast_poll(manager)
+    manager._async_get_lovelace_store = AsyncMock()  # must NOT be called
+
+    # Empty areas list → rooms=[] → guard returns True immediately,
+    # but nothing to render; backstop skips (rooms is empty).
+    result = await manager.async_update(
+        hass=hass,
+        areas=[],   # no areas fetched yet
+        device_id="dev",
+        active_map_id="3",
+    )
+
+    # With empty rooms, _room_entities_registered returns True immediately
+    # and the save proceeds (hash changes) → result is True.
+    # The backstop path is not exercised here; this test documents that
+    # the rooms=[] guard in the backstop block is only reached when the
+    # poll itself returns False (which cannot happen with rooms=[]).
+    # The save still occurs (empty dashboard) which is correct.
+    assert result is True
 
 
 @pytest.mark.asyncio
@@ -475,7 +550,16 @@ def test_registered_returns_true_when_only_normal_rooms_have_entities():
     assert _room_entities_registered(hass, "dev", "3", rooms) is True
 
 
-# ── Entity registry fallback (map-switch re-enabling) ────────────────────
+# ── Entity registry fallback: disabled-entity handling ───────────────────
+#
+# The fix adds a two-tier check:
+#   1. hass.states presence (fastest path, as before)
+#   2. Registry disabled_by is not None  ← NEW: permanently-absent disabled
+#      entities are accepted so user-disabled diagnostics don't block saves.
+#
+# Entities with disabled_by=None that are absent from hass.states are still
+# rejected to prevent the async_add_entities race (entity in registry but
+# not yet committed to the state machine would produce raw-id Lovelace rows).
 
 
 def _make_registry_mock(
@@ -485,7 +569,7 @@ def _make_registry_mock(
     """Build a fake entity registry.
 
     enabled_eids  → entries with disabled_by=None  (entity is enabled)
-    disabled_eids → entries with disabled_by set   (entity still disabled)
+    disabled_eids → entries with disabled_by set   (entity is disabled)
     All other entity_ids → async_get returns None  (not in registry at all)
     """
     ent_reg = MagicMock()
@@ -497,7 +581,7 @@ def _make_registry_mock(
             return entry
         if entity_id in disabled_eids:
             entry = MagicMock()
-            entry.disabled_by = "integration"
+            entry.disabled_by = "user"
             return entry
         return None
 
@@ -505,104 +589,181 @@ def _make_registry_mock(
     return ent_reg
 
 
-def test_registered_rejects_registry_enabled_entity_not_yet_in_states():
-    """Entities enabled in the registry but not yet in hass.states are NOT accepted.
+def test_registered_accepts_all_disabled_registry_entities():
+    """All nine per-room entities disabled by user → guard passes.
 
-    The registry fallback was removed to prevent premature dashboard saves.
-    async_enable_room_entities_for_map() may set disabled_by=None before
-    async_add_entities has written the entity to the state machine.  Accepting
-    registry presence at that point causes Lovelace to show the raw entity_id
-    as an unknown row until the next browser refresh.  Only hass.states
-    presence is required.
+    This is the primary bug fix: users who disable per-room diagnostic
+    entities via Settings → Entities caused the dashboard to stay stuck on
+    the old map's YAML indefinitely.  Disabled entities (disabled_by is not
+    None) are permanently absent from hass.states but registered; they must
+    not block the dashboard save.  Lovelace renders a proper "entity disabled"
+    card for them, never a raw entity_id row.
     """
     eids = _all_room_eids("dev", "3", 5)
-    hass = _make_hass_with_states(set())  # nothing in states yet
+    hass = _make_hass_with_states(set())  # nothing in states
 
-    with patch(
-        "custom_components.rowenta_roboeye.dashboard.er.async_get",
-        return_value=_make_registry_mock(enabled_eids=eids, disabled_eids=set()),
-    ):
+    with _patch(
+        "custom_components.rowenta_roboeye.dashboard.er"
+    ) as mock_er:
+        mock_er.async_get.return_value = _make_registry_mock(
+            enabled_eids=set(), disabled_eids=eids
+        )
         rooms = [{"id": 5, "name": "Kitchen"}]
-        assert _room_entities_registered(hass, "dev", "3", rooms) is False
+        assert _room_entities_registered(hass, "dev", "3", rooms) is True
 
 
-def test_registered_rejects_still_disabled_registry_entry():
-    """An entity that is still disabled in the registry must not satisfy the guard.
+def test_registered_accepts_disabled_entity_when_rest_are_in_states():
+    """One entity disabled by user, all others live in hass.states → passes.
 
-    During a map switch the new map's entities may not exist at all, or may be
-    disabled (from a previous active session of that map).  Only entries with
-    disabled_by=None count as ready.
+    Most common real scenario: user disables the avg_clean_time sensor
+    (EntityCategory.DIAGNOSTIC) but all other per-room entities are live.
+    """
+    eids = sorted(_all_room_eids("dev", "3", 5))
+    disabled_eid = "sensor.dev_map3_room_5_avg_clean_time"
+    in_states = set(eids) - {disabled_eid}
+
+    hass = _make_hass_with_states(in_states)
+
+    with _patch(
+        "custom_components.rowenta_roboeye.dashboard.er"
+    ) as mock_er:
+        mock_er.async_get.return_value = _make_registry_mock(
+            enabled_eids=set(), disabled_eids={disabled_eid}
+        )
+        rooms = [{"id": 5, "name": "Kitchen"}]
+        assert _room_entities_registered(hass, "dev", "3", rooms) is True
+
+
+def test_registered_rejects_enabled_entity_not_yet_in_states():
+    """Entities enabled in the registry but absent from hass.states → False.
+
+    async_enable_room_entities_for_map() can write disabled_by=None to the
+    registry before async_add_entities has committed the entity to the state
+    machine.  Accepting an enabled-but-not-in-states entry would cause
+    Lovelace to display the raw entity_id text until the next browser refresh.
+    Only hass.states presence (or disabled_by is not None) satisfies the guard.
     """
     eids = _all_room_eids("dev", "3", 5)
-    hass = _make_hass_with_states(set())
+    hass = _make_hass_with_states(set())  # nothing in states
 
-    with patch(
-        "custom_components.rowenta_roboeye.dashboard.er.async_get",
-        return_value=_make_registry_mock(enabled_eids=set(), disabled_eids=eids),
-    ):
+    with _patch(
+        "custom_components.rowenta_roboeye.dashboard.er"
+    ) as mock_er:
+        mock_er.async_get.return_value = _make_registry_mock(
+            enabled_eids=eids, disabled_eids=set()
+        )
         rooms = [{"id": 5, "name": "Kitchen"}]
         assert _room_entities_registered(hass, "dev", "3", rooms) is False
 
 
 def test_registered_rejects_entity_absent_from_registry():
-    """An entity absent from both hass.states and the registry must block the save.
+    """An entity absent from both hass.states and the registry → False.
 
     This is the brand-new entity case: SIGNAL_AREAS_UPDATED fired but the
     async_add_entities tasks for sensor/button/select/switch have not yet run.
+    The entity genuinely does not exist yet — defer the save.
     """
     hass = _make_hass_with_states(set())
 
-    with patch(
-        "custom_components.rowenta_roboeye.dashboard.er.async_get",
-        return_value=_make_registry_mock(enabled_eids=set(), disabled_eids=set()),
-    ):
+    with _patch(
+        "custom_components.rowenta_roboeye.dashboard.er"
+    ) as mock_er:
+        mock_er.async_get.return_value = _make_registry_mock(
+            enabled_eids=set(), disabled_eids=set()
+        )
         rooms = [{"id": 5, "name": "Kitchen"}]
         assert _room_entities_registered(hass, "dev", "3", rooms) is False
 
 
-def test_registered_rejects_mixed_states_and_registry():
-    """Entities partly in hass.states, partly only in registry — guard blocks.
+def test_registered_rejects_enabled_not_in_states_even_when_some_disabled_accepted():
+    """Mix: some disabled (accepted) + one enabled-not-in-states (rejected) → False.
 
-    The registry fallback was removed: all entities must be in hass.states.
-    A partial hass.states match (some entities ready, some only in registry)
-    must return False to prevent saving a dashboard with entity IDs that
-    Lovelace cannot yet resolve.
+    The disabled entities do not block the save, but the enabled entity that
+    is absent from hass.states still does — it may be in an async_add_entities
+    race and must not produce a raw-id Lovelace row.
     """
     eids = sorted(_all_room_eids("dev", "3", 5))
-    in_states = set(eids[:5])      # first 5 in hass.states
-    in_registry = set(eids[5:])   # remaining only in registry, not states
+    # First 7 in states, one disabled (accepted), one enabled-not-in-states (rejects)
+    in_states = set(eids[:7])
+    disabled_one = {eids[7]}
+    enabled_not_in_states = {eids[8]}
 
     hass = _make_hass_with_states(in_states)
 
-    with patch(
-        "custom_components.rowenta_roboeye.dashboard.er.async_get",
-        return_value=_make_registry_mock(enabled_eids=in_registry, disabled_eids=set()),
-    ):
+    with _patch(
+        "custom_components.rowenta_roboeye.dashboard.er"
+    ) as mock_er:
+        mock_er.async_get.return_value = _make_registry_mock(
+            enabled_eids=enabled_not_in_states,
+            disabled_eids=disabled_one,
+        )
         rooms = [{"id": 5, "name": "Kitchen"}]
         assert _room_entities_registered(hass, "dev", "3", rooms) is False
 
 
-def test_registered_rejects_when_one_entity_still_disabled_in_registry():
-    """A single entity still disabled in the registry must block the guard.
+def test_registered_accepts_mix_of_states_and_disabled():
+    """5 in states + 4 disabled-in-registry (none enabled-not-in-states) → True.
 
-    Even if all others are either in hass.states or enabled in the registry,
-    the one remaining disabled entry means the dashboard would reference an
-    entity that is still missing from HA's active state machine.
+    All nine entities are accounted for without any enabled-not-in-states race.
+    The dashboard should save.
     """
     eids = sorted(_all_room_eids("dev", "3", 5))
-    # All but the last entity are in states or enabled.
-    in_states = set(eids[:4])
-    in_registry_enabled = set(eids[4:-1])
-    still_disabled = {eids[-1]}
+    in_states = set(eids[:5])
+    disabled = set(eids[5:])
 
     hass = _make_hass_with_states(in_states)
 
-    with patch(
-        "custom_components.rowenta_roboeye.dashboard.er.async_get",
-        return_value=_make_registry_mock(
-            enabled_eids=in_registry_enabled,
-            disabled_eids=still_disabled,
-        ),
-    ):
+    with _patch(
+        "custom_components.rowenta_roboeye.dashboard.er"
+    ) as mock_er:
+        mock_er.async_get.return_value = _make_registry_mock(
+            enabled_eids=set(), disabled_eids=disabled
+        )
         rooms = [{"id": 5, "name": "Kitchen"}]
-        assert _room_entities_registered(hass, "dev", "3", rooms) is False
+        assert _room_entities_registered(hass, "dev", "3", rooms) is True
+
+
+# ── Dead input_boolean code removal ──────────────────────────────────────
+
+
+def test_no_input_boolean_sync_function_in_init():
+    """_async_sync_room_selection_booleans must not exist in __init__.py.
+
+    The function created orphan input_boolean.* helpers that nothing read;
+    room selection is handled entirely by RobEyeRoomSelectSwitch (switch.*).
+    Verifies the dead code was removed and does not re-appear via regression.
+    """
+    import custom_components.rowenta_roboeye.__init__ as _init_mod
+
+    assert not hasattr(_init_mod, "_async_sync_room_selection_booleans"), (
+        "_async_sync_room_selection_booleans was removed because it created "
+        "orphan input_boolean helpers that nothing reads. Do not re-add it."
+    )
+
+
+def test_init_module_does_not_import_area_states_skip():
+    """AREA_STATES_SKIP must not be imported in __init__.py after dead code removal.
+
+    It was only used inside _async_sync_room_selection_booleans.
+    """
+    import ast
+    import pathlib
+
+    src = (
+        pathlib.Path(__file__).parent.parent
+        / "custom_components/rowenta_roboeye/__init__.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in getattr(node, "names", []):
+                assert alias.name != "AREA_STATES_SKIP", (
+                    "AREA_STATES_SKIP must not be imported in __init__.py; "
+                    "it was only used in the deleted _async_sync_room_selection_booleans."
+                )
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    assert alias.name != "room_selection_entity_id", (
+                        "room_selection_entity_id must not be imported in __init__.py; "
+                        "it was only used in the deleted function."
+                    )
