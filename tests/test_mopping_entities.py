@@ -153,3 +153,23 @@ async def test_auth_failed_raises_config_entry_auth_failed(mock_client, mock_con
     coord.data = {}
     with pytest.raises(ConfigEntryAuthFailed):
         await coord._async_update_data()
+
+
+@pytest.mark.asyncio
+async def test_immediate_command_swallows_auth_failed(mock_client, mock_config_entry):
+    """A settings write (e.g. set_wet_clean) that 401s must NOT escape into the
+    entity's service call; it requests a refresh so the poll loop drives re-auth."""
+    coord = RobEyeCoordinator(
+        hass=MagicMock(),
+        config_entry=mock_config_entry,
+        client=mock_client,
+        map_id="3",
+    )
+    coord.async_request_refresh = AsyncMock()
+
+    async def set_wet_clean(*args, **kwargs):
+        raise AuthFailed("locked")
+
+    # Must not raise out of async_send_command (bypass path).
+    await coord.async_send_command(set_wet_clean, True)
+    coord.async_request_refresh.assert_awaited()

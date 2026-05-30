@@ -1537,6 +1537,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     # re-polls /get/areas instead of serving the 300-s stale cache.
                     self.invalidate_areas_cache()
                 await self.async_request_refresh()
+            except AuthFailed as err:
+                # Locked robot (HTTP 401). Don't let it escape into the entity's
+                # service call as an unhandled error — request a refresh so the
+                # poll loop raises ConfigEntryAuthFailed and HA starts re-auth.
+                LOGGER.warning(
+                    "RobEye immediate command %s rejected (HTTP auth): %s", _label, err
+                )
+                await self.async_request_refresh()
             except CannotConnect as err:
                 LOGGER.error("RobEye immediate command %s failed: %s", _label, err)
             return
