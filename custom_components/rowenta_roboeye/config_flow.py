@@ -145,18 +145,33 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
             if not validate_http_password(http_password):
                 errors["base"] = "invalid_password"
             else:
-                name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
-                serial = await self._fetch_serial(self._host, http_password)
-                return self.async_create_entry(
-                    title=f"{name} ({self._host})",
-                    data={
-                        CONF_HOST: self._host,
-                        CONF_HOSTNAME: self._hostname,
-                        CONF_NAME: name,
-                        CONF_SERIAL: serial,
-                        CONF_HTTP_PASSWORD: http_password,
-                    },
-                )
+                # When a password is supplied, verify it against the robot before
+                # saving — otherwise a wrong password is accepted here and only
+                # surfaces as a re-auth prompt after setup (the manual/options
+                # flows validate the same way).
+                try:
+                    if http_password:
+                        await self._test_connection(self._host, http_password)
+                except AuthFailed:
+                    errors["base"] = "invalid_auth"
+                except CannotConnect:
+                    errors["base"] = "cannot_connect"
+                except Exception:  # noqa: BLE001
+                    LOGGER.exception("Unexpected error during zeroconf confirm test")
+                    errors["base"] = "unknown"
+                else:
+                    name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
+                    serial = await self._fetch_serial(self._host, http_password)
+                    return self.async_create_entry(
+                        title=f"{name} ({self._host})",
+                        data={
+                            CONF_HOST: self._host,
+                            CONF_HOSTNAME: self._hostname,
+                            CONF_NAME: name,
+                            CONF_SERIAL: serial,
+                            CONF_HTTP_PASSWORD: http_password,
+                        },
+                    )
 
         return self.async_show_form(
             step_id="zeroconf_confirm",

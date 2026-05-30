@@ -155,6 +155,40 @@ async def test_zeroconf_confirm_creates_entry():
 
 
 @pytest.mark.asyncio
+async def test_zeroconf_confirm_bad_password_shows_invalid_auth():
+    """A wrong password entered at the confirm step is validated against the
+    robot and rejected, rather than saved and failing later at setup."""
+    flow = _make_flow()
+    flow._host = "192.168.1.100"
+    flow._hostname = "xplorer120.local."
+
+    with patch.object(flow, "_test_connection", new=AsyncMock(side_effect=AuthFailed)):
+        result = await flow.async_step_zeroconf_confirm(
+            user_input={"http_password": "wrongpwd"}
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"]["base"] == "invalid_auth"
+
+
+@pytest.mark.asyncio
+async def test_zeroconf_confirm_good_password_creates_entry():
+    flow = _make_flow()
+    flow._host = "192.168.1.100"
+    flow._hostname = "xplorer120.local."
+
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="sn_xyz")):
+        result = await flow.async_step_zeroconf_confirm(
+            user_input={"http_password": "abcd1234"}
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"]["http_password"] == "abcd1234"
+    assert result["data"]["serial"] == "sn_xyz"
+
+
+@pytest.mark.asyncio
 async def test_zeroconf_confirm_shows_form_without_input():
     flow = _make_flow()
     flow._host = "192.168.1.100"
