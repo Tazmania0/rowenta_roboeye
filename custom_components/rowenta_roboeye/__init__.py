@@ -436,17 +436,21 @@ async def _async_update_listener(
 ) -> None:
     """Handle config entry update.
 
-    Reloads the integration when host changes (new API endpoint needed).
-    Silently skips reload for data-only writes that do not affect connectivity —
-    specifically CONF_LAST_ACTIVE_MAP updates written by the map Select entity
-    and serial/device-id caching written by async_setup_entry.  Those writes
-    must not trigger a reload loop.
+    Reloads the integration when host or HTTP password changes (new API endpoint
+    or credentials needed).  Silently skips reload for data-only writes that do
+    not affect connectivity — specifically CONF_LAST_ACTIVE_MAP updates written
+    by the map Select entity and serial/device-id caching written by
+    async_setup_entry.  Those writes must not trigger a reload loop.
     """
     coordinator = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
     if coordinator is not None:
-        if coordinator.client._host == config_entry.data.get(CONF_HOST):
+        new_password = (config_entry.data.get(CONF_HTTP_PASSWORD) or "").strip()
+        if (
+            coordinator.client._host == config_entry.data.get(CONF_HOST)
+            and coordinator.client._http_password == new_password
+        ):
             LOGGER.debug(
-                "_async_update_listener: host unchanged — skipping reload for %s",
+                "_async_update_listener: host + password unchanged — skipping reload for %s",
                 config_entry.entry_id,
             )
             return

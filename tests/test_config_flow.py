@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.rowenta_roboeye.api import CannotConnect
+from custom_components.rowenta_roboeye.api import AuthFailed, CannotConnect
 from custom_components.rowenta_roboeye.config_flow import RobEyeConfigFlow, RobEyeOptionsFlow
-from custom_components.rowenta_roboeye.const import DEFAULT_MAP_ID
+from custom_components.rowenta_roboeye.const import CONF_HTTP_PASSWORD, DEFAULT_MAP_ID
 
 
 def _make_flow():
@@ -126,6 +126,19 @@ async def test_zeroconf_cannot_connect_aborts():
 
 
 @pytest.mark.asyncio
+async def test_zeroconf_auth_failed_proceeds_to_confirm():
+    """A locked AICU robot (401) must reach the confirm step to enter a password,
+    not abort discovery."""
+    flow = _make_flow()
+
+    with patch.object(flow, "_test_connection", new=AsyncMock(side_effect=AuthFailed)):
+        result = await flow.async_step_zeroconf(_mock_zeroconf_info())
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "zeroconf_confirm"
+
+
+@pytest.mark.asyncio
 async def test_zeroconf_confirm_creates_entry():
     flow = _make_flow()
     flow._host = "192.168.1.100"
@@ -230,6 +243,38 @@ async def test_options_flow_happy_path():
     # so the active map survives host/name changes without reverting to default
     assert result["data"].get("map_id") == "3"       # DEFAULT_MAP_ID fallback when not set
     assert result["data"].get("last_active_map") is None  # not yet set in this test entry
+
+
+@pytest.mark.asyncio
+async def test_options_flow_writes_password_to_entry_data():
+    """The HTTP password set in options must land in entry.data (where setup
+    reads it), not only in entry.options."""
+    flow = _make_options_flow(serial="sn_persisted")
+
+    with patch(
+        "custom_components.rowenta_roboeye.config_flow.RobEyeApiClient"
+    ) as MockClient:
+        MockClient.return_value.test_connection = AsyncMock(return_value=True)
+        result = await flow.async_step_init(
+            {"host": "192.168.1.100", "http_password": "abcd1234"}
+        )
+
+    # entry.data was updated (the source async_setup_entry reads).
+    flow.hass.config_entries.async_update_entry.assert_called_once()
+    _, kwargs = flow.hass.config_entries.async_update_entry.call_args
+    assert kwargs["data"][CONF_HTTP_PASSWORD] == "abcd1234"
+    # And the returned result still carries the new data.
+    assert result["data"][CONF_HTTP_PASSWORD] == "abcd1234"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_rejects_bad_password_length():
+    flow = _make_options_flow()
+    result = await flow.async_step_init(
+        {"host": "192.168.1.100", "http_password": "short"}
+    )
+    assert result["type"] == "form"
+    assert result["errors"]["base"] == "invalid_password"
 
 
 @pytest.mark.asyncio

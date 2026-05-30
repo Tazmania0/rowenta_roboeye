@@ -119,6 +119,10 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         # Verify the REST API is reachable at the discovered IP
         try:
             await self._test_connection(self._host)
+        except AuthFailed:
+            # Robot has lock_http enabled — proceed to the confirm step where the
+            # user can enter the password, rather than aborting discovery.
+            LOGGER.debug("Zeroconf: robot requires HTTP password, prompting at confirm")
         except CannotConnect:
             return self.async_abort(reason="cannot_connect")
 
@@ -282,20 +286,27 @@ class RobEyeOptionsFlow(OptionsFlow):
                 except Exception:  # noqa: BLE001
                     errors["base"] = "unknown"
                 else:
+                    new_data = {
+                        CONF_HOST: host,
+                        CONF_HOSTNAME: self._config_entry.data.get(CONF_HOSTNAME, host),
+                        CONF_NAME: name,
+                        CONF_HTTP_PASSWORD: http_password,
+                        # Preserve stable identifiers so entity unique_ids never change
+                        CONF_SERIAL: self._config_entry.data.get(CONF_SERIAL, ""),
+                        "_device_id": self._config_entry.data.get("_device_id", ""),
+                        # Preserve map selection so the active map survives options saves
+                        CONF_MAP_ID: self._config_entry.data.get(CONF_MAP_ID, DEFAULT_MAP_ID),
+                        CONF_LAST_ACTIVE_MAP: self._config_entry.data.get(CONF_LAST_ACTIVE_MAP),
+                    }
+                    # Write to entry.data (where async_setup_entry reads host +
+                    # http_password); async_create_entry alone would only update
+                    # entry.options, which setup never reads. The update fires
+                    # _async_update_listener, which reloads on host/password change.
+                    self.hass.config_entries.async_update_entry(
+                        self._config_entry, data=new_data
+                    )
                     return self.async_create_entry(
-                        title=f"{name} ({host})",
-                        data={
-                            CONF_HOST: host,
-                            CONF_HOSTNAME: self._config_entry.data.get(CONF_HOSTNAME, host),
-                            CONF_NAME: name,
-                            CONF_HTTP_PASSWORD: http_password,
-                            # Preserve stable identifiers so entity unique_ids never change
-                            CONF_SERIAL: self._config_entry.data.get(CONF_SERIAL, ""),
-                            "_device_id": self._config_entry.data.get("_device_id", ""),
-                            # Preserve map selection so the active map survives options saves
-                            CONF_MAP_ID: self._config_entry.data.get(CONF_MAP_ID, DEFAULT_MAP_ID),
-                            CONF_LAST_ACTIVE_MAP: self._config_entry.data.get(CONF_LAST_ACTIVE_MAP),
-                        },
+                        title=f"{name} ({host})", data=new_data
                     )
 
         return self.async_show_form(
