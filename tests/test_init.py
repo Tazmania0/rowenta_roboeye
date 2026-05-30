@@ -8,6 +8,34 @@ import pytest
 
 from custom_components.rowenta_roboeye import async_unload_entry
 from custom_components.rowenta_roboeye.const import DOMAIN
+from custom_components.rowenta_roboeye.frontend import (
+    _read_module_version,
+    _version_from_url,
+)
+
+
+
+
+def test_read_module_version_extracts_card_version():
+    """The cache-bust version is read from the card's own const VERSION."""
+    ver = _read_module_version("rowenta-map-card.js", "1.0.0")
+    # Real card declares a 2.x version; must not fall back to the integration one.
+    assert ver != "1.0.0"
+    assert ver.split(".")[0].isdigit()
+
+
+def test_read_module_version_falls_back_when_missing():
+    assert _read_module_version("does-not-exist.js", "9.9.9") == "9.9.9"
+
+
+def test_version_from_url_parses_query():
+    assert _version_from_url("/rowenta_roboeye/x.js?v=2.7.6") == "2.7.6"
+    assert _version_from_url("/rowenta_roboeye/x.js?a=1&v=3.0") == "3.0"
+
+
+def test_version_from_url_handles_missing_query():
+    # Old naive split('?v=')[-1] returned the whole URL here — must be None now.
+    assert _version_from_url("/rowenta_roboeye/x.js") is None
 
 
 def _make_hass(unload_ok: bool):

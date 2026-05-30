@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
@@ -24,6 +26,37 @@ _LOGGER = logging.getLogger(__name__)
 
 _URL_BASE = "/rowenta_roboeye"
 _FRONTEND_DIR = Path(__file__).parent
+
+# Matches the card's own `const VERSION = "x.y.z";` declaration so the cache-bust
+# query string tracks the card file, not the integration version.  A card-only
+# edit that bumps this constant therefore reaches browsers without needing a
+# manifest/const.py version bump.
+_CARD_VERSION_RE = re.compile(r'const\s+VERSION\s*=\s*["\']([^"\']+)["\']')
+
+
+def _read_module_version(filename: str, fallback: str) -> str:
+    """Extract the `const VERSION` from a frontend module file.
+
+    Runs in an executor (blocking file read).  Returns ``fallback`` when the
+    file is missing or has no recognisable version declaration.
+    """
+    path = _FRONTEND_DIR / filename
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return fallback
+    match = _CARD_VERSION_RE.search(text)
+    return match.group(1) if match else fallback
+
+
+def _version_from_url(url: str) -> str | None:
+    """Return the ``v`` query parameter of a resource URL, or None if absent.
+
+    Robust against URLs registered without a ``?v=`` (the old naive
+    ``split('?v=')[-1]`` returned the whole URL in that case, forcing a
+    perpetual "update" on every setup).
+    """
+    return parse_qs(urlsplit(url).query).get("v", [None])[0]
 
 _MODULES = [
     {"name": "Rowenta Map Card", "filename": "rowenta-map-card.js"},
@@ -98,7 +131,12 @@ class JSModuleRegistration:
 
         for module in _MODULES:
             base_url = f"{_URL_BASE}/{module['filename']}"
-            versioned_url = f"{base_url}?v={self.version}"
+            # Cache-bust on the card file's own version so card-only edits reach
+            # browsers; fall back to the integration version if it can't be read.
+            module_version = await self.hass.async_add_executor_job(
+                _read_module_version, module["filename"], self.version
+            )
+            versioned_url = f"{base_url}?v={module_version}"
 
             # Check if already registered
             match = next(
@@ -108,7 +146,7 @@ class JSModuleRegistration:
 
             if match is None:
                 # Not registered yet — create
-                _LOGGER.info("RobEye frontend: registering %s v%s", module["name"], self.version)
+                _LOGGER.info("RobEye frontend: registering %s v%s", module["name"], module_version)
                 try:
                     await resources.async_create_item({
                         "res_type": "module",
@@ -117,12 +155,12 @@ class JSModuleRegistration:
                 except Exception as err:
                     _LOGGER.warning("RobEye frontend: create_item failed: %s", err)
             else:
-                current_ver = match.get("url", "").split("?v=")[-1]
-                if current_ver != self.version:
+                current_ver = _version_from_url(match.get("url", ""))
+                if current_ver != module_version:
                     # Version changed — update URL to bust browser cache
                     _LOGGER.info(
                         "RobEye frontend: updating %s %s → %s",
-                        module["name"], current_ver, self.version,
+                        module["name"], current_ver, module_version,
                     )
                     try:
                         await resources.async_update_item(
