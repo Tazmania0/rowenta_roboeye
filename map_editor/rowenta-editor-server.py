@@ -20,13 +20,14 @@ import sys
 import os
 import json
 import argparse
+import ipaddress
 import threading
 import webbrowser
 import urllib.request
 import urllib.error
 import urllib.parse
 import mimetypes
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 mimetypes.add_type('application/javascript', '.js')
@@ -39,6 +40,69 @@ STATIC_DIR   = Path(__file__).parent
 
 # Shared mutable config — safe because GIL + single write path
 _config = {"robot_ip": "", "port": DEFAULT_PORT}
+
+# Loopback host names accepted in the Host header (anti DNS-rebinding) and as
+# the Origin host (anti cross-site request) while the server is bound locally.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+# Set in main(): True when bound to a loopback address.  While True the request
+# guard rejects non-loopback Host headers and cross-origin requests so that no
+# other LAN host or web page can drive the robot proxy.
+_enforce_local = True
+
+# Opener that refuses to follow HTTP redirects — prevents a malicious/compromised
+# target from bouncing a proxied request to an arbitrary host (SSRF hardening).
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+_PROXY_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _validate_robot_ip(raw):
+    """Return a normalised robot IP if it is a usable private LAN address, else None.
+
+    Rejects public, loopback, and link-local addresses.  Link-local notably
+    covers cloud metadata endpoints (e.g. 169.254.169.254), closing the SSRF
+    vector where an attacker repoints the proxy at an arbitrary host.
+    """
+    if not raw:
+        return None
+    try:
+        addr = ipaddress.ip_address(str(raw).strip())
+    except ValueError:
+        return None
+    if not addr.is_private or addr.is_loopback or addr.is_link_local:
+        return None
+    return str(addr)
+
+
+def _host_label(header_value):
+    """Extract the bare hostname from a Host/Origin header value (drop port, brackets)."""
+    h = (header_value or "").strip().lower()
+    if h.startswith("["):                 # [::1] or [::1]:8765
+        return h[1:].split("]", 1)[0]
+    if h.count(":") == 1:                 # 127.0.0.1:8765 / localhost:8765
+        return h.rsplit(":", 1)[0]
+    return h                              # bare hostname or raw IPv6
+
+
+def _host_ok(host_header):
+    """True when the Host header names a loopback host (DNS-rebinding guard)."""
+    if not _enforce_local:
+        return True
+    return _host_label(host_header) in _LOOPBACK_HOSTS
+
+
+def _origin_ok(origin_header):
+    """True when the request has no Origin or a loopback Origin (cross-site guard)."""
+    if not _enforce_local or not origin_header:
+        return True
+    try:
+        host = urllib.parse.urlparse(origin_header).hostname or ""
+    except ValueError:
+        return False
+    return host.lower() in _LOOPBACK_HOSTS
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -59,7 +123,25 @@ class Handler(BaseHTTPRequestHandler):
                 return raw[idx:]
         return raw
 
+    def _guard(self):
+        """Reject requests that could come from another LAN host or web page.
+
+        Returns True when the request may proceed.  Sends a 403 and returns
+        False otherwise.  Active only while the server is bound to loopback.
+        """
+        if not _host_ok(self.headers.get('Host')):
+            self._respond(403, 'application/json',
+                          json.dumps({"error": "Host not allowed"}).encode())
+            return False
+        if not _origin_ok(self.headers.get('Origin')):
+            self._respond(403, 'application/json',
+                          json.dumps({"error": "Cross-origin request rejected"}).encode())
+            return False
+        return True
+
     def do_GET(self):
+        if not self._guard():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path   = self._clean_path(parsed.path)
         query  = parsed.query
@@ -88,6 +170,8 @@ class Handler(BaseHTTPRequestHandler):
         self._respond(404, 'text/plain', b'Not found')
 
     def do_POST(self):
+        if not self._guard():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path   = self._clean_path(parsed.path)
 
@@ -98,7 +182,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 data = json.loads(body)
                 if 'robot_ip' in data:
-                    _config['robot_ip'] = data['robot_ip'].strip()
+                    candidate = _validate_robot_ip(data['robot_ip'])
+                    if candidate is None:
+                        self._respond(400, 'application/json', json.dumps(
+                            {"error": "Invalid robot IP — must be a private LAN address."}
+                        ).encode())
+                        return
+                    _config['robot_ip'] = candidate
                     print(f"  config  robot_ip updated -> {_config['robot_ip']}", flush=True)
                 self._respond(200, 'application/json',
                               json.dumps({"ok": True}).encode())
@@ -110,8 +200,9 @@ class Handler(BaseHTTPRequestHandler):
         self._respond(404, 'text/plain', b'Not found')
 
     def do_OPTIONS(self):
+        if not self._guard():
+            return
         self.send_response(204)
-        self._cors_headers()
         self.end_headers()
 
     def _serve_editor(self):
@@ -139,10 +230,10 @@ class Handler(BaseHTTPRequestHandler):
         self._respond(200, ctype, body)
 
     def _proxy(self, path, query):
-        ip = _config.get('robot_ip', '').strip()
+        ip = _validate_robot_ip(_config.get('robot_ip', ''))
         if not ip:
             self._respond(502, 'application/json',
-                          json.dumps({"error": "Robot IP not set. Enter it in the editor UI or pass it as a command-line argument."}).encode())
+                          json.dumps({"error": "Robot IP not set or not a valid private LAN address. Enter it in the editor UI or pass it as a command-line argument."}).encode())
             return
 
         url = f"http://{ip}:{ROBOT_PORT}{path}"
@@ -151,7 +242,7 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with _PROXY_OPENER.open(req, timeout=15) as resp:
                 body  = resp.read()
                 ctype = resp.headers.get('Content-Type', 'application/json')
                 self._respond(resp.status, ctype, body)
@@ -164,11 +255,6 @@ class Handler(BaseHTTPRequestHandler):
             self._respond(500, 'application/json',
                           json.dumps({"error": str(e)}).encode())
 
-    def _cors_headers(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-
     def _respond(self, status, ctype, body):
         try:
             self.send_response(status)
@@ -176,7 +262,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Length', len(body))
             self.send_header('Cache-Control', 'no-store, max-age=0')
             self.send_header('Pragma', 'no-cache')
-            self._cors_headers()
+            # No Access-Control-Allow-Origin: the UI is served same-origin via this
+            # proxy, so CORS is unnecessary; a wildcard would let any web page read
+            # robot data and drive the proxy cross-origin.
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
@@ -192,11 +280,27 @@ def main():
     parser.add_argument('robot_ip', nargs='?', default=None,
                         help='Robot IP, e.g. 192.168.1.50')
     parser.add_argument('--port', '-p', type=int, default=DEFAULT_PORT)
+    parser.add_argument('--host', default='127.0.0.1',
+                        help='Bind address (default 127.0.0.1). Use 0.0.0.0 only '
+                             'when running behind a trusted front-end such as the '
+                             'Home Assistant add-on ingress.')
     parser.add_argument('--no-browser', action='store_true')
     args = parser.parse_args()
 
     if args.robot_ip:
-        _config['robot_ip'] = args.robot_ip
+        validated = _validate_robot_ip(args.robot_ip)
+        if validated is None:
+            print(f"\n✗  Invalid robot IP: {args.robot_ip} "
+                  "(must be a private LAN address, e.g. 192.168.1.50)\n")
+            sys.exit(1)
+        _config['robot_ip'] = validated
+
+    # Enforce loopback-only request checks unless explicitly bound elsewhere.
+    global _enforce_local
+    try:
+        _enforce_local = ipaddress.ip_address(args.host).is_loopback
+    except ValueError:
+        _enforce_local = args.host.strip().lower() in _LOOPBACK_HOSTS
 
     if not HTML_FILE.exists():
         print(f"\n✗  HTML file not found: {HTML_FILE}")
@@ -215,13 +319,18 @@ def main():
     else:
         print("  Robot:  enter IP in the browser UI")
     print("  Stop:   Ctrl+C")
+    if not _enforce_local:
+        print()
+        print(f"  ⚠  Bound to {args.host} — the editor and robot proxy are reachable")
+        print("     by other hosts on this network. Only do this behind a trusted")
+        print("     front-end (e.g. HA add-on ingress).")
     print()
 
     if not args.no_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
 
     try:
-        server = HTTPServer(('', args.port), Handler)
+        server = ThreadingHTTPServer((args.host, args.port), Handler)
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n  Stopped.")

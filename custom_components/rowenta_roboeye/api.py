@@ -131,7 +131,11 @@ class RobEyeApiClient:
                 ) as resp:
                     resp.raise_for_status()
                     return await resp.json(content_type=None)
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+        # ValueError covers json.JSONDecodeError: this firmware returns plain-text
+        # bodies (e.g. "unknown_request") and occasionally empty/HTML responses,
+        # which would otherwise escape as a raw decode error the coordinator does
+        # not catch.  Surface them as CannotConnect like every other failure.
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as err:
             raise CannotConnect(
                 f"Error communicating with RobEye API at {url}: {err}"
             ) from err

@@ -1187,16 +1187,28 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         while True:
             # ── Fix B: detect recharge-and-continue ──────────────────
             if self.is_recharging_mid_clean:
+                # A user-issued stop/go_home (priority 0) must be able to abort an
+                # otherwise multi-hour recharge wait.  The generic immediate-command
+                # check below is unreachable while this branch loops, so check it
+                # here first and bail so the worker can dispatch the urgent command.
+                if self._has_immediate_command_pending():
+                    LOGGER.debug(
+                        "RobEye: immediate command pending during recharge — "
+                        "aborting command-result poll"
+                    )
+                    return
                 LOGGER.info(
                     "RobEye: recharge-and-continue active "
                     "(mode=cleaning+charging=charging) — extending wait to %ds",
                     int(MODE_RECHARGE_CONTINUE_WAIT_S),
                 )
-                # Reset deadline; poll slowly to avoid hammering robot while charging
+                # Reset deadline; poll slowly to avoid hammering robot while charging.
+                # Use the interruptible sleep so an immediate command wakes us within
+                # the poll window instead of waiting the full interval.
                 deadline = (
                     asyncio.get_event_loop().time() + MODE_RECHARGE_CONTINUE_WAIT_S
                 )
-                await asyncio.sleep(MODE_RECHARGE_CONTINUE_POLL_S)
+                await self._interruptible_sleep(MODE_RECHARGE_CONTINUE_POLL_S)
                 continue
 
             if asyncio.get_event_loop().time() > deadline:

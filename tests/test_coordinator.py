@@ -1459,8 +1459,6 @@ async def test_wait_for_robot_idle_extends_during_recharge(coordinator, mock_cli
     """
     poll_count = 0
 
-    original_sleep = asyncio.sleep
-
     async def fake_sleep(seconds):
         nonlocal poll_count
         poll_count += 1
@@ -1477,12 +1475,35 @@ async def test_wait_for_robot_idle_extends_during_recharge(coordinator, mock_cli
         "commands": [{"cmd_id": 212, "status": "done", "error_code": 0}]
     }
 
-    import unittest.mock as _mock
-    with _mock.patch("asyncio.sleep", fake_sleep):
-        await coordinator._wait_for_robot_idle(cmd_id=212)
+    # The recharge branch and the normal cmd_id poll both use _interruptible_sleep
+    # so an enqueued immediate command can wake the wait instantly.
+    coordinator._interruptible_sleep = fake_sleep
+    await coordinator._wait_for_robot_idle(cmd_id=212)
 
     # Recharge branch polled at least once before falling through to cmd_id check
     assert poll_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_recharge_wait_aborts_on_immediate_command(coordinator, mock_client):
+    """A pending stop/go_home must break the multi-hour recharge wait at once.
+
+    Without the early immediate-command check the worker is stuck in the
+    recharge loop and never dispatches the urgent command, so Stop/Return-home
+    are ignored for the entire charge cycle.
+    """
+    coordinator.data = {DATA_STATUS: {
+        "mode": "cleaning", "charging": "charging", "battery_level": 25
+    }}
+    # Simulate a priority-0 command waiting in the queue.
+    coordinator._has_immediate_command_pending = lambda: True
+    coordinator._interruptible_sleep = AsyncMock()
+
+    await coordinator._wait_for_robot_idle(cmd_id=212)
+
+    # Returned immediately — never slept, never polled the robot.
+    coordinator._interruptible_sleep.assert_not_called()
+    mock_client.get_command_result.assert_not_called()
 
 
 # ── Fix A: modify_area / set_fan_speed bypass queue ───────────────────
