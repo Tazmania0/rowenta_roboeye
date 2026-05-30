@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -185,6 +186,25 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             coordinator.active_map_id,
         )
 
+    # Track in-flight rebuild tasks so an unload/reload cancels any that are
+    # still sleeping in the retry backoff.  Otherwise a task that already
+    # passed its config_entry.state guard would resume and write through the
+    # now-stale dashboard_manager, racing the entry that replaced it.
+    _rebuild_tasks: set[asyncio.Task] = set()
+
+    def _spawn_rebuild() -> None:
+        task = hass.async_create_task(_rebuild_dashboard_safe())
+        _rebuild_tasks.add(task)
+        task.add_done_callback(_rebuild_tasks.discard)
+
+    @callback
+    def _cancel_rebuild_tasks() -> None:
+        for task in _rebuild_tasks:
+            if not task.done():
+                task.cancel()
+
+    config_entry.async_on_unload(_cancel_rebuild_tasks)
+
     # ── Trigger 1: snapshot diff — areas changed for some map ────────────
     @callback
     def _on_areas_updated(map_id: str) -> None:
@@ -200,7 +220,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             "Active map %s areas changed — rebuilding dashboard", map_id,
         )
         dashboard_manager.invalidate()
-        hass.async_create_task(_rebuild_dashboard_safe())
+        _spawn_rebuild()
 
     # ── Trigger 2: user selected a different map ─────────────────────────
     @callback
@@ -212,7 +232,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             "Active map changed to %s — rebuilding dashboard", map_id,
         )
         dashboard_manager.invalidate()
-        hass.async_create_task(_rebuild_dashboard_safe())
+        _spawn_rebuild()
 
     # ── Trigger 3: map added or removed on the device ────────────────────
     @callback
@@ -224,7 +244,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         if removed:
             LOGGER.info("Maps removed: %s", removed)
         dashboard_manager.invalidate()
-        hass.async_create_task(_rebuild_dashboard_safe())
+        _spawn_rebuild()
 
     # ── Trigger 4: schedule-only change (no area / map change) ───────────
     # Schedule updates that don't accompany an area change still need to
@@ -255,7 +275,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         if dashboard_manager._save_lock.locked():
             return
         _last_sched_hash = sig
-        hass.async_create_task(_rebuild_dashboard_safe())
+        _spawn_rebuild()
 
     config_entry.async_on_unload(
         coordinator.async_add_listener(_on_coord_update)
@@ -381,10 +401,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     coordinator = hass.data[DOMAIN].get(entry.entry_id)
-    if coordinator and coordinator._command_worker_task:
-        coordinator._command_worker_task.cancel()
 
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        # Cancel the serial command worker only after platforms have unloaded
+        # cleanly, and await it so it cannot touch the coordinator after we pop
+        # it from hass.data.  If unload failed the entry stays loaded, so the
+        # worker is left running to keep that entry functional.
+        if coordinator and coordinator._command_worker_task:
+            coordinator._command_worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await coordinator._command_worker_task
+
         hass.data[DOMAIN].pop(entry.entry_id, None)
         # Do NOT pop the dashboard manager here.  async_remove_entry (called
         # immediately after on full removal) needs it to find the correct
