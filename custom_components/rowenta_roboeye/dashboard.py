@@ -87,22 +87,35 @@ def _room_entities_registered(
     rooms: list[dict[str, Any]],
 ) -> bool:
     """Return True when every per-room entity referenced by the dashboard is
-    present in hass.states (entity ID is known to HA).
+    present in hass.states, OR is registered-but-disabled in the entity
+    registry.
 
-    The guard prevents saving a dashboard that references entity IDs that do
-    not yet exist — e.g. right after a map switch when SIGNAL_AREAS_UPDATED
-    has fired but the four async_add_entities calls (sensor, button, select,
-    switch) have not yet completed their entity-setup tasks.  Entities that
-    exist but are transiently "unavailable" are accepted: Lovelace
-    auto-refreshes when the entity transitions to a live value.
+    Two-tier check (order matters):
 
-    Only hass.states presence is checked (no registry fallback) to prevent
-    premature saves when async_add_entities has not yet written the entity
-    to the state machine — which would cause Lovelace to display the raw
-    entity_id as an unknown row until the next browser refresh.
+    1. hass.states presence — fastest path; covers all normal live entities,
+       including those that are "unavailable" or "unknown".  Lovelace
+       auto-refreshes when the entity transitions to a live value, so
+       transiently unavailable entities are accepted.
+
+    2. Entity registry with disabled_by is not None — covers entities the
+       user has disabled via Settings → Entities.  Disabled entities are
+       permanently absent from hass.states until re-enabled; deferring the
+       dashboard save for them would leave stale (old-map) YAML indefinitely.
+       Lovelace renders a disabled entity as a greyed "entity disabled" card,
+       never as a raw entity_id row, so accepting it here is safe.
+
+    Entities with disabled_by=None that are not yet in hass.states are still
+    rejected: async_enable_room_entities_for_map() can write disabled_by=None
+    before async_add_entities has committed the entity to the state machine,
+    so accepting them would cause Lovelace to display the raw entity_id text
+    until the next browser refresh.
+
+    Entities absent from both hass.states and the registry are rejected: the
+    async_add_entities task for that platform has not yet run.
     """
     if not rooms or not active_map_id:
         return True
+    _ent_reg = er.async_get(hass)
     _m = f"map{active_map_id}_"
     for room in rooms:
         rid = room.get("id")
@@ -120,8 +133,12 @@ def _room_entities_registered(
             room_selection_entity_id(device_id, active_map_id, str(rid)),
         )
         for eid in eids:
-            if hass.states.get(eid) is None:
-                return False
+            if hass.states.get(eid) is not None:
+                continue  # live in state machine — accepted
+            entry = _ent_reg.async_get(eid)
+            if entry is not None and entry.disabled_by is not None:
+                continue  # registered but disabled — permanently absent, accepted
+            return False  # not in states and not disabled-in-registry — defer
     return True
 
 
@@ -703,12 +720,28 @@ class RobEyeDashboardManager:
                     active_map_id, coordinator.active_map_id,
                 )
                 return False
-            _LOGGER.debug(
-                "Dashboard update deferred — room entities for map %s "
-                "not registered after %.1fs",
+            if not rooms:
+                # No rooms to render — nothing useful to save yet.
+                _LOGGER.debug(
+                    "Dashboard update deferred — no rooms for map %s "
+                    "after %.1fs (areas not yet fetched)",
+                    active_map_id, self._ENTITY_POLL_TIMEOUT_S,
+                )
+                return False
+            # Entity readiness timed out but we are still on the correct map
+            # and have rooms to render.  Save best-effort so the Rooms view
+            # references the correct map's entity IDs (some cards may be
+            # transiently unavailable) rather than the old map's stale YAML.
+            # This handles permanently-broken entity states (e.g. all nine
+            # entity types for a room were somehow never created) without
+            # leaving the user stuck on the wrong map indefinitely.
+            _LOGGER.warning(
+                "RobEye dashboard: room entities for map %s not fully "
+                "registered after %.1fs — saving best-effort to prevent "
+                "stale map references in the Rooms view",
                 active_map_id, self._ENTITY_POLL_TIMEOUT_S,
             )
-            return False
+            # fall through to save
 
         title = friendly_name or self._title
         config = _build_config(hass, rooms, device_id, active_map_id=active_map_id, title=title, available_maps=available_maps, schedule_entries=schedule_entries, device_info_entities=_device_info_entities, live_entities=_live_entities)

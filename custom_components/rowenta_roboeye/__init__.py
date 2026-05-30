@@ -13,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
-from .const import AREA_STATES_SKIP, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_ACTIVE_MAP_CHANGED, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION, room_selection_entity_id
+from .const import CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_ACTIVE_MAP_CHANGED, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
@@ -65,83 +65,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-async def _async_sync_room_selection_booleans(
-    hass: HomeAssistant,
-    coordinator: RobEyeCoordinator,
-) -> None:
-    """Create or remove input_boolean entities for room selection.
-
-    Creates one input_boolean per named, non-blocking room on the active map.
-    Removes stale ones when rooms change (map switch, area rename).
-
-    Entity IDs follow the pattern:
-      input_boolean.{device_id}_map{map_id}_room_{area_id}_selected
-    """
-    import json as _json
-
-    device_id = coordinator.device_id
-    map_id = coordinator.active_map_id
-    areas = coordinator.areas
-
-    # Collect all named, non-blocking rooms
-    desired: dict[str, str] = {}  # entity_id → friendly_name
-    for area in areas:
-        area_id = area.get("id")
-        if area_id is None:
-            continue
-        if area.get("area_state") in AREA_STATES_SKIP:
-            continue
-        meta_raw = area.get("area_meta_data", "")
-        if not meta_raw:
-            continue
-        try:
-            meta = _json.loads(meta_raw)
-        except Exception:
-            continue
-        name = meta.get("name", "").strip()
-        if not name:
-            continue
-        eid = room_selection_entity_id(device_id, map_id, str(area_id))
-        desired[eid] = f"Select {name}"
-
-    # Use the input_boolean component's storage to create/remove
-    component = hass.data.get("input_boolean")
-    if component is None:
-        LOGGER.debug("input_boolean component not loaded — skipping room selection setup")
-        return
-
-    # Get existing selection entity IDs for this device+map
-    existing_ids = {
-        eid for eid in hass.states.async_entity_ids("input_boolean")
-        if eid.startswith(f"input_boolean.{device_id}_map{map_id}_room_")
-        and eid.endswith("_selected")
-    }
-
-    # Create missing ones
-    for eid, friendly_name in desired.items():
-        if eid not in existing_ids:
-            try:
-                item_id = eid.replace("input_boolean.", "")
-                await component.async_add_item({
-                    "name": friendly_name,
-                    "id": item_id,
-                    "initial": False,
-                    "icon": "mdi:checkbox-marked-circle-outline",
-                })
-                LOGGER.debug("Created room selection boolean: %s", eid)
-            except Exception as err:
-                LOGGER.warning("Could not create %s: %s", eid, err)
-
-    # Remove stale ones (rooms removed or map switched)
-    stale = existing_ids - set(desired.keys())
-    for eid in stale:
-        try:
-            item_id = eid.replace("input_boolean.", "")
-            await component.async_remove_item(item_id)
-            LOGGER.debug("Removed stale room selection boolean: %s", eid)
-        except Exception as err:
-            LOGGER.debug("Could not remove %s: %s", eid, err)
-
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up Rowenta RobEye from a config entry."""
@@ -171,9 +94,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     # Pre-fetch areas for every permanent map so all per-map entities can be
     # created at setup time.  Errors on individual maps are non-fatal.
     await coordinator.async_load_all_map_areas()
-
-    # Create input_boolean selection entities for all discovered rooms
-    await _async_sync_room_selection_booleans(hass, coordinator)
 
     # Persist the resolved device_id to config entry data so that:
     #  - async_remove_entry can reconstruct the correct dashboard URL path.
@@ -280,10 +200,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             "Active map %s areas changed — rebuilding dashboard", map_id,
         )
         dashboard_manager.invalidate()
-        # Sync room-selection helpers independently (non-blocking).
-        hass.async_create_task(
-            _async_sync_room_selection_booleans(hass, coordinator)
-        )
         hass.async_create_task(_rebuild_dashboard_safe())
 
     # ── Trigger 2: user selected a different map ─────────────────────────
@@ -467,17 +383,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = hass.data[DOMAIN].get(entry.entry_id)
     if coordinator and coordinator._command_worker_task:
         coordinator._command_worker_task.cancel()
-
-    # Remove room selection input_booleans for this entry
-    component = hass.data.get("input_boolean")
-    if component:
-        device_id = entry.data.get("_device_id") or entry.entry_id.lower()
-        for eid in list(hass.states.async_entity_ids("input_boolean")):
-            if f"_{device_id}_map" in eid and eid.endswith("_selected"):
-                try:
-                    await component.async_remove_item(eid.replace("input_boolean.", ""))
-                except Exception:
-                    pass
 
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id, None)

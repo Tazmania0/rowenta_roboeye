@@ -425,10 +425,11 @@ class RobEyeRoomCleanButton(RobEyeBaseButton):
 class RobEyeCleanSelectedButton(RobEyeBaseButton):
     """Clean all currently selected rooms in a single clean_map call.
 
-    Reads input_boolean.{device_id}_map{map_id}_room_{area_id}_selected
-    for all rooms. Sends area_ids as comma-separated list.
+    Reads switch.{device_id}_map{map_id}_room_{area_id}_selected
+    (RobEyeRoomSelectSwitch) for all rooms on the active map.
+    Sends area_ids as comma-separated list in a single /set/clean_map call.
     Resolves fan speed and strategy across selected rooms (most intensive wins).
-    Resets all selection booleans to off after pressing.
+    Resets all room-selection switches to off after enqueuing the command.
 
     Disabled (unavailable) when no rooms are selected.
     """
