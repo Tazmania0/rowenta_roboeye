@@ -237,8 +237,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     # ── Trigger 3: map added or removed on the device ────────────────────
     @callback
     def _on_maps_updated(payload) -> None:
-        added = payload.get("added", set()) if isinstance(payload, dict) else set()
-        removed = payload.get("removed", set()) if isinstance(payload, dict) else payload
+        # SIGNAL_MAPS_UPDATED always carries a {"added", "removed"} dict.
+        payload = payload if isinstance(payload, dict) else {}
+        added = payload.get("added", set())
+        removed = payload.get("removed", set())
         if added:
             LOGGER.info("Maps added: %s", added)
         if removed:

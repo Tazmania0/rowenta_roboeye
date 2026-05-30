@@ -304,7 +304,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
 
     Bidirectional sync: toggling the switch writes strategy_mode to the robot
     immediately via modify_area ("deep" when ON, "normal" when OFF).  The
-    coordinator's 300 s areas poll reads the robot's stored strategy_mode back,
+    coordinator's 600 s areas poll reads the robot's stored strategy_mode back,
     so changes made in the native app are reflected in HA.
 
     Only "deep" is synced from the robot — when the robot reports "normal" the
@@ -374,7 +374,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         Both "deep" and "normal" are acted on — when the robot's stored
         strategy_mode changes, _is_on is updated to match.  This means native
         app changes (both enabling and disabling deep clean) are reflected in HA
-        within 300 s (the areas poll interval).
+        within 600 s (the areas poll interval).
 
         _last_robot_strategy prevents redundant state writes between polls.
 
@@ -400,7 +400,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         """Return the current raw cleaning_parameter_set for this room.
 
         Reads from the per-room fan-speed select's HA state (optimistic, up to date)
-        and falls back to coordinator.areas (may be stale by up to 300 s).
+        and falls back to coordinator.areas (may be stale by up to 600 s).
         Always including cleaning_parameter_set prevents the firmware from resetting
         it when only strategy_mode is supplied in a partial modify_area call.
         """

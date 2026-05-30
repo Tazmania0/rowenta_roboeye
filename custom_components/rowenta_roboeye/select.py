@@ -330,7 +330,7 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
     """Per-room fan speed select.
 
     Bidirectional sync: changes are written to the robot immediately via
-    modify_area; the coordinator's 300 s areas poll reads the robot's stored
+    modify_area; the coordinator's 600 s areas poll reads the robot's stored
     value back, so external changes made in the native app are reflected in HA.
 
     _last_robot_raw guards against mid-cycle overwrites: the entity only updates
@@ -402,7 +402,7 @@ class RobEyeRoomFanSpeedSelect(RobEyeEntity, SelectEntity, RestoreEntity):
     def _handle_coordinator_update(self) -> None:
         """Sync fan speed from robot on every areas refresh.
 
-        coordinator.areas is re-fetched every 300 s. Between refreshes the cache
+        coordinator.areas is re-fetched every 600 s. Between refreshes the cache
         holds the same data, so _last_robot_raw stays equal to the cached value
         and this method is a no-op — meaning a user's just-made HA selection is
         never overwritten by the stale pre-poll cache.

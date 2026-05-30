@@ -196,7 +196,7 @@ class RobEyeApiClient:
         """GET /get/permanent_statistics — alternative / complementary lifetime stats."""
         return await self._get(API_GET_PERMANENT_STATISTICS)
 
-    # ── Area / map data (polled every 300 s) ─────────────────────────
+    # ── Area / map data (polled every 600 s) ─────────────────────────
 
     async def get_areas(self, map_id: str | None = None) -> dict[str, Any]:
         """GET /get/areas[?map_id=X] — room objects with statistics and area_meta_data."""
@@ -280,7 +280,7 @@ class RobEyeApiClient:
         """GET /get/protocol_version — firmware / API protocol version string."""
         return await self._get(API_GET_PROTOCOL_VERSION)
 
-    # ── Diagnostics (polled every 300 s alongside areas) ─────────────
+    # ── Diagnostics (polled every 600 s alongside areas) ─────────────
 
     async def get_robot_flags(self) -> dict[str, Any]:
         """GET /get/robot_flags — capability and feature-flag bitmask."""

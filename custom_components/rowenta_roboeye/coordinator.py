@@ -593,7 +593,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # ── Session lifecycle tracking ────────────────────────────
             was_cleaning = self._last_mode == MODE_CLEANING
-            now_docked   = not is_active and mode not in (MODE_CLEANING, MODE_GO_HOME)
+            # is_active already means mode is cleaning/go_home, so "not is_active"
+            # fully captures the docked/idle case.
+            now_docked   = not is_active
 
             if mode == MODE_CLEANING and self._last_mode != MODE_CLEANING:
                 self._robot_path = []
