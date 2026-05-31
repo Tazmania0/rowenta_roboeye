@@ -62,9 +62,11 @@ _PROXY_OPENER = urllib.request.build_opener(_NoRedirect)
 def _validate_robot_ip(raw):
     """Return a normalised robot IP if it is a usable private LAN address, else None.
 
-    Rejects public, loopback, and link-local addresses.  Link-local notably
-    covers cloud metadata endpoints (e.g. 169.254.169.254), closing the SSRF
-    vector where an attacker repoints the proxy at an arbitrary host.
+    Accepts only private unicast addresses.  Rejects public, loopback,
+    link-local (e.g. cloud metadata 169.254.169.254), the unspecified address
+    (0.0.0.0 — connecting to it targets the local host, a local-SSRF path),
+    and multicast/reserved addresses.  This closes the vector where an attacker
+    repoints the proxy at an arbitrary or local endpoint.
     """
     if not raw:
         return None
@@ -72,7 +74,14 @@ def _validate_robot_ip(raw):
         addr = ipaddress.ip_address(str(raw).strip())
     except ValueError:
         return None
-    if not addr.is_private or addr.is_loopback or addr.is_link_local:
+    if (
+        not addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_unspecified
+        or addr.is_multicast
+        or addr.is_reserved
+    ):
         return None
     return str(addr)
 

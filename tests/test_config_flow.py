@@ -19,6 +19,8 @@ def _make_flow():
     flow.context = {}
     flow.async_set_unique_id = AsyncMock()
     flow._abort_if_unique_id_configured = MagicMock()
+    # No pre-existing entries by default — legacy dedup is a no-op.
+    flow._async_current_entries = MagicMock(return_value=[])
     flow.async_create_entry = lambda title="", data=None, **kw: {
         "type": "create_entry", "title": title, "data": data or {}
     }
@@ -70,6 +72,48 @@ async def test_user_step_serial_fetch_failure_still_creates_entry():
 
     assert result["type"] == "create_entry"
     assert result["data"]["serial"] == ""
+
+
+@pytest.mark.asyncio
+async def test_user_step_dedupes_legacy_ip_entry():
+    """Re-adding a robot whose existing entry is keyed by the legacy IP aborts
+    and migrates that entry's unique_id to the serial."""
+    flow = _make_flow()
+    legacy = MagicMock()
+    legacy.unique_id = "192.168.1.50"      # pre-serial entry keyed by IP
+    legacy.data = {"host": "192.168.1.50"}
+    flow._async_current_entries = MagicMock(return_value=[legacy])
+    flow.hass.config_entries.async_update_entry = MagicMock()
+
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="sn_abc123")):
+        result = await flow.async_step_user({"host": "192.168.1.50"})
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "already_configured"
+    # Legacy entry migrated to the serial unique_id.
+    kwargs = flow.hass.config_entries.async_update_entry.call_args.kwargs
+    assert kwargs["unique_id"] == "sn_abc123"
+    # No brand-new entry created on top of the existing one.
+    flow.async_set_unique_id.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_user_step_no_dedupe_when_serial_unknown():
+    """With no serial, the legacy migration is skipped (falls back to IP id)."""
+    flow = _make_flow()
+    legacy = MagicMock()
+    legacy.unique_id = "192.168.1.50"
+    legacy.data = {"host": "192.168.1.50"}
+    flow._async_current_entries = MagicMock(return_value=[legacy])
+    flow.hass.config_entries.async_update_entry = MagicMock()
+
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="")):
+        await flow.async_step_user({"host": "192.168.1.50"})
+
+    flow.hass.config_entries.async_update_entry.assert_not_called()
+    flow.async_set_unique_id.assert_awaited_once_with("192.168.1.50")
 
 
 @pytest.mark.asyncio

@@ -50,6 +50,10 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
             else:
                 serial = await self._fetch_serial(host)
+                # Dedupe against an existing entry that predates serial-based
+                # unique_ids (its unique_id is still the IP or hostname).
+                if (legacy := self._legacy_entry_abort(serial, [host], CONF_HOST, host)):
+                    return legacy
                 # Prefer the device serial as unique_id so the same robot can't
                 # be added twice (and dedupes against a zeroconf-discovered
                 # entry).  Fall back to the IP only when the serial is unknown.
@@ -115,6 +119,13 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         # the hostname-based id when the serial can't be read.
         self._serial = await self._fetch_serial(self._host)
         if self._serial and self._serial != provisional_uid:
+            # Dedupe against a legacy entry whose unique_id is still the IP /
+            # hostname (the provisional hostname check above only catches a
+            # legacy zeroconf entry, not a manually-added one keyed by IP).
+            if (legacy := self._legacy_entry_abort(
+                self._serial, [self._host, provisional_uid], CONF_HOST, self._host
+            )):
+                return legacy
             await self.async_set_unique_id(self._serial)
             self._abort_if_unique_id_configured(updates={CONF_HOST: self._host})
 
@@ -166,6 +177,34 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @callback
+    def _legacy_entry_abort(self, serial, legacy_uids, host_key, host):
+        """Dedupe against a pre-serial entry keyed by IP/hostname.
+
+        Older installs created their config entry with unique_id = IP (manual)
+        or mDNS hostname (zeroconf).  Once we switch to serial-based unique_ids,
+        ``_abort_if_unique_id_configured(serial)`` would no longer recognise
+        that entry, so re-adding the same robot would create a duplicate.
+
+        If an existing entry matches one of ``legacy_uids``, migrate its
+        unique_id to ``serial`` (refreshing its host) and return an abort
+        result for the caller to return.  Returns None when there is nothing to
+        dedupe (no serial, or no matching legacy entry).
+        """
+        if not serial:
+            return None
+        candidates = {str(u).strip().lower() for u in legacy_uids if u}
+        for entry in self._async_current_entries():
+            existing_uid = (entry.unique_id or "").strip().lower()
+            if existing_uid and existing_uid in candidates:
+                self.hass.config_entries.async_update_entry(
+                    entry,
+                    unique_id=serial,
+                    data={**entry.data, host_key: host},
+                )
+                return self.async_abort(reason="already_configured")
+        return None
 
     async def _test_connection(self, host: str) -> None:
         """Verify connectivity; raises CannotConnect on failure."""
