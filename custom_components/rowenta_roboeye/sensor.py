@@ -50,6 +50,14 @@ from .const import (
     AREA_STATES_SKIP,
     CLEANING_MODE_ALL,
     CLEANING_MODE_ROOMS,
+    DROP_SENSOR_CLEAN_M2,
+    DUSTBIN_CLEAN_M2,
+    FILTER_CLEAN_M2,
+    MAIN_BRUSH_CLEAN_M2,
+    MAIN_BRUSH_REPLACE_HOURS,
+    MOP_PAD_REPLACE_HOURS,
+    SIDE_BRUSH_CLEAN_M2,
+    SIDE_BRUSH_REPLACE_HOURS,
     DOMAIN,
     EVENT_TYPE_LABELS,
     FAN_SPEED_LABELS,
@@ -390,6 +398,9 @@ async def async_setup_entry(
 
     # Selected room count sensor (used by dashboard "Clean Selected" button label)
     entities.append(RobEyeSelectedRoomCountSensor(coordinator))
+
+    # Maintenance counter sensors (runtime / area since reset)
+    entities.extend(build_maintenance_sensors(coordinator))
 
     # ── Per-room sensors (from all known maps) ────────────────────────
     # Per-map entity tracking: map_id -> {area_id -> [entities]}.
@@ -990,6 +1001,175 @@ def _safe_round(
         return round(float(value) / divisor, precision)
     except (TypeError, ValueError):
         return None
+
+
+# ── Maintenance sensors ────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, kw_only=True)
+class RobEyeMaintenanceSensorDescription:
+    """Description for a single maintenance counter sensor."""
+
+    key: str            # MaintenanceStore component key, e.g. "main_brush_replace"
+    translation_key: str
+    entity_suffix: str  # entity_id suffix after the device_id
+    unit: str | None
+    icon: str
+    limit: float
+    value_fn: Callable[[RobEyeCoordinator], float]
+    wet_only: bool = False
+
+
+def _runtime_replace(component: str) -> Callable[[RobEyeCoordinator], float]:
+    return lambda c: c.maintenance.runtime_since_replace_h(
+        component, c.perm_total_cleaning_time
+    )
+
+
+def _area_clean(component: str) -> Callable[[RobEyeCoordinator], float]:
+    return lambda c: c.maintenance.area_since_clean_m2(
+        component, c.perm_total_area_cleaned
+    )
+
+
+MAINTENANCE_SENSORS: tuple[RobEyeMaintenanceSensorDescription, ...] = (
+    # ── Replacement counters (runtime hours) ──────────────────────────
+    RobEyeMaintenanceSensorDescription(
+        key="main_brush_replace",
+        translation_key="main_brush_runtime",
+        entity_suffix="main_brush_runtime",
+        unit=UnitOfTime.HOURS, icon="mdi:brush",
+        limit=MAIN_BRUSH_REPLACE_HOURS,
+        value_fn=_runtime_replace("main_brush"),
+    ),
+    RobEyeMaintenanceSensorDescription(
+        key="side_brush_replace",
+        translation_key="side_brush_runtime",
+        entity_suffix="side_brush_runtime",
+        unit=UnitOfTime.HOURS, icon="mdi:rotate-right",
+        limit=SIDE_BRUSH_REPLACE_HOURS,
+        value_fn=_runtime_replace("side_brush"),
+    ),
+    RobEyeMaintenanceSensorDescription(
+        key="mop_pad_replace",
+        translation_key="mop_pad_runtime",
+        entity_suffix="mop_pad_runtime",
+        unit=UnitOfTime.HOURS, icon="mdi:mop",
+        limit=MOP_PAD_REPLACE_HOURS,
+        value_fn=_runtime_replace("mop_pad"),
+        wet_only=True,
+    ),
+    # ── Cleaning counters (area m²) ───────────────────────────────────
+    RobEyeMaintenanceSensorDescription(
+        key="main_brush_clean",
+        translation_key="main_brush_area_since_clean",
+        entity_suffix="main_brush_area_since_clean",
+        unit=UnitOfArea.SQUARE_METERS, icon="mdi:brush",
+        limit=MAIN_BRUSH_CLEAN_M2,
+        value_fn=_area_clean("main_brush"),
+    ),
+    RobEyeMaintenanceSensorDescription(
+        key="side_brush_clean",
+        translation_key="side_brush_area_since_clean",
+        entity_suffix="side_brush_area_since_clean",
+        unit=UnitOfArea.SQUARE_METERS, icon="mdi:rotate-right",
+        limit=SIDE_BRUSH_CLEAN_M2,
+        value_fn=_area_clean("side_brush"),
+    ),
+    RobEyeMaintenanceSensorDescription(
+        key="dustbin_clean",
+        translation_key="dustbin_area_since_empty",
+        entity_suffix="dustbin_area_since_empty",
+        unit=UnitOfArea.SQUARE_METERS, icon="mdi:delete-empty",
+        limit=DUSTBIN_CLEAN_M2,
+        value_fn=_area_clean("dustbin"),
+    ),
+    RobEyeMaintenanceSensorDescription(
+        key="filter_clean",
+        translation_key="filter_area_since_clean",
+        entity_suffix="filter_area_since_clean",
+        unit=UnitOfArea.SQUARE_METERS, icon="mdi:air-filter",
+        limit=FILTER_CLEAN_M2,
+        value_fn=_area_clean("filter"),
+    ),
+    RobEyeMaintenanceSensorDescription(
+        key="drop_sensor_clean",
+        translation_key="drop_sensor_area_since_clean",
+        entity_suffix="drop_sensor_area_since_clean",
+        unit=UnitOfArea.SQUARE_METERS, icon="mdi:leak",
+        limit=DROP_SENSOR_CLEAN_M2,
+        value_fn=_area_clean("drop_sensor"),
+    ),
+)
+
+
+class RobEyeMaintenanceSensor(RobEyeEntity, SensorEntity):
+    """A maintenance counter sensor (runtime hours or area since reset)."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        coordinator: RobEyeCoordinator,
+        description: RobEyeMaintenanceSensorDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self._desc = description
+        self._attr_translation_key = description.translation_key
+        self._attr_icon = description.icon
+        self._attr_native_unit_of_measurement = description.unit
+        self._attr_suggested_display_precision = 2
+        self._attr_unique_id = f"{description.entity_suffix}_{coordinator.device_id}"
+        self.entity_id = f"sensor.{coordinator.device_id}_{description.entity_suffix}"
+
+    @property
+    def available(self) -> bool:
+        return (
+            super().available
+            and self.coordinator.maintenance is not None
+            and bool(self.coordinator.permanent_statistics)
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.maintenance is None:
+            return None
+        try:
+            return round(self._desc.value_fn(self.coordinator), 2)
+        except Exception:  # noqa: BLE001
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self.coordinator.maintenance is None:
+            return {}
+        try:
+            val = self._desc.value_fn(self.coordinator)
+        except Exception:  # noqa: BLE001
+            return {}
+        limit = self._desc.limit
+        pct = min(100.0, val / limit * 100) if limit else None
+        attrs: dict[str, Any] = {
+            "limit": limit,
+            "percent": round(pct, 1) if pct is not None else None,
+            "remaining": round(max(0.0, limit - val), 2),
+            "due": val >= limit,
+        }
+        last = self.coordinator.maintenance.last_reset_iso(self._desc.key)
+        if last:
+            attrs["last_reset"] = last
+        return attrs
+
+
+def build_maintenance_sensors(
+    coordinator: RobEyeCoordinator,
+) -> list[SensorEntity]:
+    """Build all maintenance counter sensors for the device."""
+    return [
+        RobEyeMaintenanceSensor(coordinator, desc)
+        for desc in MAINTENANCE_SENSORS
+        if not desc.wet_only or coordinator.has_wet_support
+    ]
 
 
 def _format_date(last_cleaned: dict[str, Any]) -> str | None:

@@ -283,6 +283,54 @@ IMMEDIATE_COMMAND_NAMES: frozenset = frozenset({
     "set_fan_speed",
 })
 
+# ── Maintenance tracking ──────────────────────────────────────────────
+# Raw-unit conversions for /get/permanent_statistics fields.
+# Per the RobEye SDK semantics (and the existing total_area_cleaned sensor's
+# own "0.01 cm² units" comment, i.e. mm²):
+#   total_cleaning_time → seconds   → hours via / SECONDS_PER_HOUR
+#   total_area_cleaned  → mm²       → m²    via / MM2_PER_M2
+#   total_distance_driven → mm      → m     via / MM_PER_M
+# NOTE: these differ from the divisors used by the legacy lifetime sensors in
+# sensor.py (/60, /100).  Maintenance thresholds below are expressed in real
+# hours / m²; if a real robot shows alerts firing too early/late, recalibrate
+# these three constants — every maintenance calculation derives from them.
+SECONDS_PER_HOUR = 3600
+MM2_PER_M2 = 1_000_000
+MM_PER_M = 1000
+
+# Replacement intervals (runtime hours)
+MAIN_BRUSH_REPLACE_HOURS = 140
+SIDE_BRUSH_REPLACE_HOURS = 60
+MOP_PAD_REPLACE_HOURS = 60          # AICU wet models only
+
+# Cleaning intervals (area m²)
+MAIN_BRUSH_CLEAN_M2 = 10.0
+SIDE_BRUSH_CLEAN_M2 = 10.0
+DUSTBIN_CLEAN_M2 = 15.0
+DUSTBIN_CLEAN_HOURS = 2.0           # whichever comes first
+FILTER_CLEAN_M2 = 30.0
+DROP_SENSOR_CLEAN_M2 = 50.0
+
+# Warn when a replacement counter reaches N % of its limit.
+MAINTENANCE_WARN_PCT = 80
+
+# Maintenance component keys (shared by sensor/binary_sensor/button platforms).
+# (key, limit_unit) — limit/threshold lives with the platform that needs it.
+MAINTENANCE_REPLACE_KEYS: tuple[str, ...] = (
+    "main_brush_replace",
+    "side_brush_replace",
+)
+MAINTENANCE_CLEAN_KEYS: tuple[str, ...] = (
+    "main_brush_clean",
+    "side_brush_clean",
+    "dustbin_clean",
+    "filter_clean",
+    "drop_sensor_clean",
+)
+# Persistent-notification id prefix for maintenance alerts.
+MAINTENANCE_NOTIFICATION_PREFIX = f"{DOMAIN}_maintenance_"
+
+
 # ── Resilience ────────────────────────────────────────────────────────
 MAX_POLL_FAILURES = 3
 

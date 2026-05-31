@@ -19,6 +19,9 @@ tick (5 s while cleaning, 15 s idle) by the sensor_values fetch.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Callable
+
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
@@ -28,7 +31,18 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    DROP_SENSOR_CLEAN_M2,
+    DUSTBIN_CLEAN_HOURS,
+    DUSTBIN_CLEAN_M2,
+    FILTER_CLEAN_M2,
+    MAIN_BRUSH_CLEAN_M2,
+    MAIN_BRUSH_REPLACE_HOURS,
+    MOP_PAD_REPLACE_HOURS,
+    SIDE_BRUSH_CLEAN_M2,
+    SIDE_BRUSH_REPLACE_HOURS,
+)
 from .coordinator import RobEyeCoordinator
 from .entity import RobEyeEntity
 
@@ -40,11 +54,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up binary sensor entities."""
     coordinator: RobEyeCoordinator = hass.data[DOMAIN][config_entry.entry_id]
-    async_add_entities([
+    entities: list[BinarySensorEntity] = [
         RowentaBrushLeftStuckSensor(coordinator),
         RowentaBrushRightStuckSensor(coordinator),
         RowentaDustbinSensor(coordinator),
-    ])
+    ]
+    entities.extend(build_maintenance_due_sensors(coordinator))
+    async_add_entities(entities)
 
 
 class RowentaBrushLeftStuckSensor(RobEyeEntity, BinarySensorEntity):
@@ -122,3 +138,133 @@ class RowentaDustbinSensor(RobEyeEntity, BinarySensorEntity):
         return (
             self.coordinator.sensor_values_parsed.get("gpio__dustbin") == "active"
         )
+
+
+# ── Maintenance "due" alerts ───────────────────────────────────────────
+
+
+def _due_replace(component: str, limit: float):
+    return lambda c: c.maintenance.runtime_since_replace_h(
+        component, c.perm_total_cleaning_time
+    ) >= limit
+
+
+def _due_clean(component: str, limit: float):
+    return lambda c: c.maintenance.area_since_clean_m2(
+        component, c.perm_total_area_cleaned
+    ) >= limit
+
+
+def _due_dustbin(c: RobEyeCoordinator) -> bool:
+    return (
+        c.maintenance.area_since_clean_m2("dustbin", c.perm_total_area_cleaned)
+        >= DUSTBIN_CLEAN_M2
+        or c.maintenance.runtime_since_clean_h("dustbin", c.perm_total_cleaning_time)
+        >= DUSTBIN_CLEAN_HOURS
+    )
+
+
+@dataclass(frozen=True, kw_only=True)
+class RobEyeMaintenanceDueDescription:
+    """Description for a maintenance "due" binary sensor."""
+
+    key: str               # MaintenanceStore component key
+    translation_key: str
+    entity_suffix: str
+    icon: str
+    is_due_fn: Callable[[RobEyeCoordinator], bool]
+    wet_only: bool = False
+
+
+MAINTENANCE_DUE_SENSORS: tuple[RobEyeMaintenanceDueDescription, ...] = (
+    RobEyeMaintenanceDueDescription(
+        key="main_brush_replace", translation_key="main_brush_due",
+        entity_suffix="main_brush_due", icon="mdi:brush",
+        is_due_fn=_due_replace("main_brush", MAIN_BRUSH_REPLACE_HOURS),
+    ),
+    RobEyeMaintenanceDueDescription(
+        key="side_brush_replace", translation_key="side_brush_due",
+        entity_suffix="side_brush_due", icon="mdi:rotate-right",
+        is_due_fn=_due_replace("side_brush", SIDE_BRUSH_REPLACE_HOURS),
+    ),
+    RobEyeMaintenanceDueDescription(
+        key="mop_pad_replace", translation_key="mop_pad_due",
+        entity_suffix="mop_pad_due", icon="mdi:mop",
+        is_due_fn=_due_replace("mop_pad", MOP_PAD_REPLACE_HOURS),
+        wet_only=True,
+    ),
+    RobEyeMaintenanceDueDescription(
+        key="main_brush_clean", translation_key="main_brush_clean_due",
+        entity_suffix="main_brush_clean_due", icon="mdi:brush",
+        is_due_fn=_due_clean("main_brush", MAIN_BRUSH_CLEAN_M2),
+    ),
+    RobEyeMaintenanceDueDescription(
+        key="side_brush_clean", translation_key="side_brush_clean_due",
+        entity_suffix="side_brush_clean_due", icon="mdi:rotate-right",
+        is_due_fn=_due_clean("side_brush", SIDE_BRUSH_CLEAN_M2),
+    ),
+    RobEyeMaintenanceDueDescription(
+        key="dustbin_clean", translation_key="dustbin_empty_due",
+        entity_suffix="dustbin_empty_due", icon="mdi:delete-alert",
+        is_due_fn=_due_dustbin,
+    ),
+    RobEyeMaintenanceDueDescription(
+        key="filter_clean", translation_key="filter_clean_due",
+        entity_suffix="filter_clean_due", icon="mdi:air-filter",
+        is_due_fn=_due_clean("filter", FILTER_CLEAN_M2),
+    ),
+    RobEyeMaintenanceDueDescription(
+        key="drop_sensor_clean", translation_key="drop_sensor_clean_due",
+        entity_suffix="drop_sensor_clean_due", icon="mdi:leak",
+        is_due_fn=_due_clean("drop_sensor", DROP_SENSOR_CLEAN_M2),
+    ),
+)
+
+
+class RobEyeMaintenanceDueSensor(RobEyeEntity, BinarySensorEntity):
+    """True when a maintenance threshold has been crossed."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        coordinator: RobEyeCoordinator,
+        description: RobEyeMaintenanceDueDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self._desc = description
+        self._attr_translation_key = description.translation_key
+        self._attr_icon = description.icon
+        self._attr_unique_id = f"{description.entity_suffix}_{coordinator.device_id}"
+        self.entity_id = (
+            f"binary_sensor.{coordinator.device_id}_{description.entity_suffix}"
+        )
+
+    @property
+    def available(self) -> bool:
+        return (
+            super().available
+            and self.coordinator.maintenance is not None
+            and bool(self.coordinator.permanent_statistics)
+        )
+
+    @property
+    def is_on(self) -> bool:
+        if self.coordinator.maintenance is None:
+            return False
+        try:
+            return bool(self._desc.is_due_fn(self.coordinator))
+        except Exception:  # noqa: BLE001
+            return False
+
+
+def build_maintenance_due_sensors(
+    coordinator: RobEyeCoordinator,
+) -> list[BinarySensorEntity]:
+    """Build all maintenance "due" binary sensors for the device."""
+    return [
+        RobEyeMaintenanceDueSensor(coordinator, desc)
+        for desc in MAINTENANCE_DUE_SENSORS
+        if not desc.wet_only or coordinator.has_wet_support
+    ]
