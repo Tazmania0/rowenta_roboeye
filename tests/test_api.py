@@ -186,6 +186,34 @@ async def test_client_error_raises_cannot_connect(client):
             await client.get_status()
 
 
+@pytest.mark.asyncio
+async def test_http_error_status_raises_cannot_connect(client):
+    """A non-2xx response (raise_for_status raising) surfaces as CannotConnect."""
+    resp = _mock_response({}, status=500)
+    resp.raise_for_status = MagicMock(
+        side_effect=aiohttp.ClientResponseError(
+            request_info=MagicMock(), history=(), status=500
+        )
+    )
+    p_connector, p_session, sess = _patch_session(resp)
+    with p_connector, p_session:
+        with pytest.raises(CannotConnect):
+            await client.get_status()
+
+
+@pytest.mark.asyncio
+async def test_malformed_json_raises_cannot_connect(client):
+    """A non-JSON / empty body (e.g. firmware 'unknown_request') → CannotConnect,
+    not a raw JSONDecodeError that would escape the coordinator."""
+    import json as _json
+    resp = _mock_response({})
+    resp.json = AsyncMock(side_effect=_json.JSONDecodeError("Expecting value", "", 0))
+    p_connector, p_session, sess = _patch_session(resp)
+    with p_connector, p_session:
+        with pytest.raises(CannotConnect):
+            await client.get_status()
+
+
 # ── SET commands ──────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

@@ -43,6 +43,7 @@ from .const import (
     STRATEGY_DEFAULT,
     STRATEGY_DEEP,
     room_selection_entity_id,
+    safe_int,
 )
 from .coordinator import RobEyeCoordinator
 from .entity import (
@@ -342,7 +343,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
 
     Bidirectional sync: toggling the switch writes strategy_mode to the robot
     immediately via modify_area ("deep" when ON, "normal" when OFF).  The
-    coordinator's 300 s areas poll reads the robot's stored strategy_mode back,
+    coordinator's 600 s areas poll reads the robot's stored strategy_mode back,
     so changes made in the native app are reflected in HA.
 
     Only "deep" is synced from the robot — when the robot reports "normal" the
@@ -412,7 +413,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         Both "deep" and "normal" are acted on — when the robot's stored
         strategy_mode changes, _is_on is updated to match.  This means native
         app changes (both enabling and disabling deep clean) are reflected in HA
-        within 300 s (the areas poll interval).
+        within 600 s (the areas poll interval).
 
         _last_robot_strategy prevents redundant state writes between polls.
 
@@ -438,7 +439,7 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         """Return the current raw cleaning_parameter_set for this room.
 
         Reads from the per-room fan-speed select's HA state (optimistic, up to date)
-        and falls back to coordinator.areas (may be stale by up to 300 s).
+        and falls back to coordinator.areas (may be stale by up to 600 s).
         Always including cleaning_parameter_set prevents the firmware from resetting
         it when only strategy_mode is supplied in a partial modify_area call.
         """
@@ -590,12 +591,12 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
             SCHEDULE_DAYS.get(d, str(d)) for d in sorted(t.get("days_of_week", []))
         )
         time_str = f"{t.get('hour', 0):02d}:{t.get('min', 0):02d}"
-        if int(task.get("cleaning_mode", CLEANING_MODE_ALL)) == CLEANING_MODE_ALL:
+        if safe_int(task.get("cleaning_mode", CLEANING_MODE_ALL), CLEANING_MODE_ALL) == CLEANING_MODE_ALL:
             rooms_str = "All rooms"
         else:
             area_ids = task.get("parameters", [])
             rooms_str = " + ".join(
-                self._area_name(int(a)) or str(a) for a in area_ids
+                self._area_name(safe_int(a)) or str(a) for a in area_ids
             ) or "Rooms"
         return f"{days_str} {time_str} — {rooms_str}"
 
@@ -615,7 +616,7 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
         if self._optimistic_enabled is not None:
             return self._optimistic_enabled
         entry = self._get_entry()
-        return bool(int(entry.get("enabled", 0))) if entry else False
+        return bool(safe_int(entry.get("enabled", 0))) if entry else False
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -623,7 +624,7 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
         # override so future coordinator updates drive the displayed state normally.
         if self._optimistic_enabled is not None:
             entry = self._get_entry()
-            if entry is not None and bool(int(entry.get("enabled", 0))) == self._optimistic_enabled:
+            if entry is not None and bool(safe_int(entry.get("enabled", 0))) == self._optimistic_enabled:
                 self._optimistic_enabled = None
         self.async_write_ha_state()
 
@@ -634,7 +635,7 @@ class RobEyeScheduleSwitch(RobEyeEntity, SwitchEntity):
             return {}
         t = entry.get("time", {})
         task = entry.get("task", {})
-        fan_raw = int(task.get("cleaning_parameter_set", 0))
+        fan_raw = safe_int(task.get("cleaning_parameter_set", 0))
         return {
             "task_id": self._task_id,
             "days": [SCHEDULE_DAYS.get(d, str(d)) for d in sorted(t.get("days_of_week", []))],

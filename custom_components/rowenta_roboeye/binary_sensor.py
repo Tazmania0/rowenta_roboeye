@@ -13,8 +13,8 @@ RowentaDustbinSensor         — no device class (uses translation states: Missi
     Off (Present) when dustbin is present.
 
 All three are EntityCategory.DIAGNOSTIC and read from
-coordinator.data["sensor_values_parsed"], which is populated every 300 s
-by the coordinator's sensor_values fetch.
+coordinator.data["sensor_values_parsed"], which is populated every coordinator
+tick (5 s while cleaning, 15 s idle) by the sensor_values fetch.
 """
 
 from __future__ import annotations

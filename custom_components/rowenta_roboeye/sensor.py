@@ -60,6 +60,7 @@ from .const import (
     SIGNAL_AREAS_UPDATED,
     SIGNAL_MAPS_UPDATED,
     room_selection_entity_id,
+    safe_int,
 )
 from .coordinator import RobEyeCoordinator
 from .entity import (
@@ -665,8 +666,8 @@ class RobEyeScheduleSensor(RobEyeEntity, SensorEntity):
             days_of_week  = t.get("days_of_week", [])
             hour          = t.get("hour", 0)
             minute        = t.get("min", 0)
-            cleaning_mode = int(task.get("cleaning_mode", CLEANING_MODE_ALL))
-            fan_raw       = int(task.get("cleaning_parameter_set", 0))
+            cleaning_mode = safe_int(task.get("cleaning_mode", CLEANING_MODE_ALL), CLEANING_MODE_ALL)
+            fan_raw       = safe_int(task.get("cleaning_parameter_set", 0))
             area_ids      = task.get("parameters", [])
             task_map_id   = str(task.get("map_id", "")).strip()
 
@@ -692,16 +693,17 @@ class RobEyeScheduleSensor(RobEyeEntity, SensorEntity):
             rooms: list[dict[str, Any]] = []
             if not is_all:
                 for aid in area_ids:
+                    aid_int = safe_int(aid)
                     rooms.append({
-                        "id":   int(aid),
-                        "name": _room_name_for_id(self.coordinator, int(aid)),
+                        "id":   aid_int,
+                        "name": _room_name_for_id(self.coordinator, aid_int),
                     })
 
             rooms_str = "All rooms" if is_all else " + ".join(r["name"] for r in rooms)
 
             result.append({
                 "task_id":   item.get("task_id"),
-                "enabled":   bool(int(item.get("enabled", 0))),
+                "enabled":   bool(safe_int(item.get("enabled", 0))),
                 "days":      [SCHEDULE_DAYS.get(d, str(d)) for d in days_of_week],
                 "days_full": [SCHEDULE_DAYS_FULL.get(d, str(d)) for d in days_of_week],
                 "time":      f"{hour:02d}:{minute:02d}",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from homeassistant.util import dt as dt_util
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -103,8 +104,8 @@ async def test_set_active_map_immediately_changes_active_map_id(coordinator):
 @pytest.mark.asyncio
 async def test_set_active_map_resets_session_state(coordinator):
     """async_set_active_map resets geometry/live-map/session state."""
-    coordinator._last_map_geometry = datetime.utcnow()
-    coordinator._last_live_map = datetime.utcnow()
+    coordinator._last_map_geometry = dt_util.utcnow()
+    coordinator._last_live_map = dt_util.utcnow()
     coordinator._robot_path = [(1.0, 2.0)]
     coordinator._session_complete = True
 
@@ -210,7 +211,7 @@ async def test_load_all_map_areas_skips_empty_areas(coordinator, mock_client):
 
 def test_invalidate_areas_cache_clears_background_fetch_timer(coordinator):
     """invalidate_areas_cache() clears _last_background_fetch so the next poll re-fetches."""
-    coordinator._last_background_fetch = datetime.utcnow()
+    coordinator._last_background_fetch = dt_util.utcnow()
 
     coordinator.invalidate_areas_cache()
 
@@ -219,7 +220,7 @@ def test_invalidate_areas_cache_clears_background_fetch_timer(coordinator):
 
 def test_invalidate_areas_cache_forces_next_refresh(coordinator):
     """After invalidate_areas_cache(), _last_background_fetch is None — the next poll triggers background refresh."""
-    coordinator._last_background_fetch = datetime.utcnow() - timedelta(seconds=10)
+    coordinator._last_background_fetch = dt_util.utcnow() - timedelta(seconds=10)
     coordinator.invalidate_areas_cache()
 
     assert coordinator._last_background_fetch is None
@@ -233,9 +234,9 @@ async def test_active_map_id_not_changed_by_poll(coordinator, mock_client):
     """active_map_id is never changed by coordinator polling; only async_set_active_map can change it."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS, DATA_AREAS: MOCK_AREAS}
     coordinator._last_background_fetch = None  # trigger background refresh
-    coordinator._last_statistics = datetime.utcnow()
-    coordinator._last_robot_info = datetime.utcnow()
-    coordinator._last_map_geometry = datetime.utcnow()
+    coordinator._last_statistics = dt_util.utcnow()
+    coordinator._last_robot_info = dt_util.utcnow()
+    coordinator._last_map_geometry = dt_util.utcnow()
 
     mock_client.get_map_status.return_value = {"active_map_id": 4, "operation_map_id": 4}
 
@@ -249,9 +250,9 @@ async def test_areas_populated_for_permanent_maps_after_poll(coordinator, mock_c
     """After a background refresh, _areas_snapshot is populated for permanent maps."""
     coordinator.data = {DATA_STATUS: MOCK_STATUS, DATA_STATISTICS: MOCK_STATISTICS}
     coordinator._last_background_fetch = None  # trigger background refresh
-    coordinator._last_statistics = datetime.utcnow()
-    coordinator._last_robot_info = datetime.utcnow()
-    coordinator._last_map_geometry = datetime.utcnow()
+    coordinator._last_statistics = dt_util.utcnow()
+    coordinator._last_robot_info = dt_util.utcnow()
+    coordinator._last_map_geometry = dt_util.utcnow()
 
     mock_client.get_areas.return_value = MOCK_AREAS
 

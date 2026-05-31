@@ -184,8 +184,14 @@ class RobEyeApiClient:
         """
         url = self._url(path)
         try:
-            connector = aiohttp.TCPConnector(force_close=True)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            # Build the connector inline so it is owned by the ClientSession's
+            # context manager.  Assigning it to a local first would leak the
+            # socket/connector if the ClientSession constructor itself raised
+            # (that error is also not an aiohttp.ClientError, so it would escape
+            # the handler below uncaught).
+            async with aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(force_close=True)
+            ) as session:
                 async with session.get(
                     url,
                     params=params,
@@ -200,7 +206,11 @@ class RobEyeApiClient:
                         )
                     resp.raise_for_status()
                     return await resp.json(content_type=None)
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+        # ValueError covers json.JSONDecodeError: this firmware returns plain-text
+        # bodies (e.g. "unknown_request") and occasionally empty/HTML responses,
+        # which would otherwise escape as a raw decode error the coordinator does
+        # not catch.  Surface them as CannotConnect like every other failure.
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as err:
             raise CannotConnect(
                 f"Error communicating with RobEye API at {url}: {err}"
             ) from err
@@ -255,7 +265,7 @@ class RobEyeApiClient:
         """GET /get/permanent_statistics — alternative / complementary lifetime stats."""
         return await self._get(API_GET_PERMANENT_STATISTICS)
 
-    # ── Area / map data (polled every 300 s) ─────────────────────────
+    # ── Area / map data (polled every 600 s) ─────────────────────────
 
     async def get_areas(self, map_id: str | None = None) -> dict[str, Any]:
         """GET /get/areas[?map_id=X] — room objects with statistics and area_meta_data."""
@@ -339,7 +349,7 @@ class RobEyeApiClient:
         """GET /get/protocol_version — firmware / API protocol version string."""
         return await self._get(API_GET_PROTOCOL_VERSION)
 
-    # ── Diagnostics (polled every 300 s alongside areas) ─────────────
+    # ── Diagnostics (polled every 600 s alongside areas) ─────────────
 
     async def get_robot_flags(self) -> dict[str, Any]:
         """GET /get/robot_flags — capability and feature-flag bitmask."""

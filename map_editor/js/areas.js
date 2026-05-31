@@ -415,9 +415,10 @@ export function _renderAreaStats(area) {
   const areaM2      = (stats.area_size / 1_000_000).toFixed(1);
   const avgMins     = stats.average_cleaning_time > 0
     ? (stats.average_cleaning_time / 60000).toFixed(1) + ' min' : '—';
-  const lastCleaned = stats.last_cleaned?.year === 2001 ? 'Never'
-    : `${stats.last_cleaned.year}-${String(stats.last_cleaned.month).padStart(2, '0')}-`
-    + String(stats.last_cleaned.day).padStart(2, '0');
+  const lc = stats.last_cleaned;
+  const lastCleaned = (!lc || lc.year === 2001 || lc.year == null) ? 'Never'
+    : `${lc.year}-${String(lc.month ?? 1).padStart(2, '0')}-`
+    + String(lc.day ?? 1).padStart(2, '0');
   el.style.display = '';
   el.innerHTML = `<div class="panel-title">Statistics</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:11px">

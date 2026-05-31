@@ -3,7 +3,8 @@
     "abort": {
       "already_configured": "Device is already configured.",
       "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address.",
-      "reauth_successful": "Re-authentication was successful."
+      "reauth_successful": "Re-authentication was successful.",
+      "no_hostname": "Discovery did not provide a usable hostname or address."
     },
     "error": {
       "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address.",

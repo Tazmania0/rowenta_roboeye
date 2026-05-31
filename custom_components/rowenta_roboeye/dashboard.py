@@ -582,13 +582,8 @@ class RobEyeDashboardManager:
         else:
             slug = device_id.replace("_", "-").replace(" ", "-").lower()
             self._url_path = f"rowenta-{slug}"
-        # Title uses the friendly name if provided, otherwise fall back to defaults.
-        if friendly_name:
-            self._title = friendly_name
-        elif device_id == _DEV or not device_id:
-            self._title = DASHBOARD_TITLE
-        else:
-            self._title = DASHBOARD_TITLE
+        # Title uses the friendly name if provided, otherwise the default.
+        self._title = friendly_name or DASHBOARD_TITLE
 
     def invalidate(self) -> None:
         """Force a save on the next async_update() call (e.g. after room change)."""
