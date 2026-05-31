@@ -135,6 +135,22 @@ async def test_storage_survives_reload():
 
 
 @pytest.mark.asyncio
+async def test_fresh_stores_do_not_share_last_reset():
+    """A reset on one store must not leak into another freshly-loaded store."""
+    store1 = MaintenanceStore(MagicMock(), "robot-1")
+    await store1.async_load()
+    await store1.async_reset("main_brush_replace", current_total_s=1000, current_total_mm2=0)
+    assert store1.last_reset_iso("main_brush_replace") is not None
+
+    # Different robot, no persisted data → must start with a clean last_reset.
+    store2 = MaintenanceStore(MagicMock(), "robot-2")
+    await store2.async_load()
+    assert store2.last_reset_iso("main_brush_replace") is None
+    # And the module default itself was never mutated.
+    assert DEFAULT_DATA["last_reset"] == {}
+
+
+@pytest.mark.asyncio
 async def test_load_seeds_missing_default_keys():
     """Older stores missing new keys get defaults backfilled on load."""
     from homeassistant.helpers.storage import Store
@@ -276,6 +292,26 @@ def test_builders_include_mop_when_wet_supported():
     assert any("mop_pad" in u for u in sensor_uids)
     assert any("mop_pad" in u for u in bin_uids)
     assert any("mop_pad" in u for u in btn_uids)
+
+
+def test_reset_button_unavailable_without_permanent_stats():
+    """Reset buttons stay unavailable until permanent statistics are present."""
+    from custom_components.rowenta_roboeye.button import build_maintenance_buttons
+
+    coordinator = SimpleNamespace(
+        has_wet_support=False,
+        device_id="ser120",
+        maintenance=object(),          # store loaded
+        permanent_statistics={},       # but no totals yet
+    )
+    buttons = build_maintenance_buttons(coordinator)
+    # The CoordinatorEntity stub reports super().available as True; the override
+    # must still gate on permanent_statistics being non-empty.
+    for btn in buttons:
+        assert btn.available is False
+
+    coordinator.permanent_statistics = {"total_cleaning_time": 100}
+    assert build_maintenance_buttons(coordinator)[0].available is True
 
 
 def test_serie_120_has_mop_pad_support():

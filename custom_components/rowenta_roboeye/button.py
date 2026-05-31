@@ -306,11 +306,22 @@ class RobEyeMaintenanceResetButton(RobEyeBaseButton):
 
     @property
     def available(self) -> bool:
-        return super().available and self.coordinator.maintenance is not None
+        # Require current permanent statistics: resetting while totals read 0
+        # would record a zero baseline and the component would immediately look
+        # "due" again once real totals arrive.
+        return (
+            super().available
+            and self.coordinator.maintenance is not None
+            and bool(self.coordinator.permanent_statistics)
+        )
 
     async def async_press(self) -> None:
-        if self.coordinator.maintenance is None:
-            LOGGER.warning("Maintenance store not ready; ignoring reset press")
+        if self.coordinator.maintenance is None or not self.coordinator.permanent_statistics:
+            LOGGER.warning(
+                "Maintenance store / permanent statistics not ready; "
+                "ignoring reset press for %s",
+                self._desc.key,
+            )
             return
         ts = self.coordinator.perm_total_cleaning_time
         mm2 = self.coordinator.perm_total_area_cleaned

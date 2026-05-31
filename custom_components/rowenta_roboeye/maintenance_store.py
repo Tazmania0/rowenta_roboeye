@@ -15,6 +15,7 @@ Baselines are stored in HA persistent storage keyed on the robot's stable
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
 
 from homeassistant.core import HomeAssistant
@@ -60,10 +61,13 @@ class MaintenanceStore:
 
     async def async_load(self) -> None:
         loaded = await self._store.async_load()
-        self._data = loaded if loaded else dict(DEFAULT_DATA)
+        # Deep copy so nested mutable defaults (e.g. ``last_reset``) are never
+        # shared with the module-level DEFAULT_DATA — async_reset() mutates them
+        # in place, which would otherwise leak across robots/stores.
+        self._data = loaded if loaded else copy.deepcopy(DEFAULT_DATA)
         # Ensure all default keys exist (migration safety for older stores).
         for k, v in DEFAULT_DATA.items():
-            self._data.setdefault(k, v)
+            self._data.setdefault(k, copy.deepcopy(v))
 
     async def async_save(self) -> None:
         await self._store.async_save(self._data)
