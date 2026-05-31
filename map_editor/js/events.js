@@ -14,6 +14,7 @@ import { clearAreaSelection } from './areas.js';
 import { executeNogo, executeSpot, handleSpotClick, handleBlockClick } from './nogo.js';
 import { startGoTo, executeGoTo } from './robot.js';
 import {
+  cancelAreaTransform,
   clearAreaTransformHandles,
   finishAreaDrag,
   finishAreaTransform,
@@ -50,6 +51,11 @@ export function initEvents(onAreaClick) {
   mapSvg.addEventListener('click', e => {
     if (state.suppressNextClick) {
       state.suppressNextClick = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (e.target instanceof Element && e.target.closest('[data-transform-handle]')) {
       e.preventDefault();
       e.stopPropagation();
       return;
@@ -278,7 +284,7 @@ export function initEvents(onAreaClick) {
       state.mergeFirstId = null;
       state.rectStart    = null;
       state.rectMode     = null;
-      state.areaTransform = null;
+      cancelAreaTransform();
       clearSplitOverlay();
       clearAreaTransformHandles();
       hideInstruction();
