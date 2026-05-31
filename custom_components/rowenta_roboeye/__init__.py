@@ -474,9 +474,12 @@ async def _async_update_listener(
     coordinator = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
     if coordinator is not None:
         new_password = (config_entry.data.get(CONF_HTTP_PASSWORD) or "").strip()
+        current_password = getattr(coordinator.client, "_http_password", "")
+        if not isinstance(current_password, str):
+            current_password = ""
         if (
             coordinator.client._host == config_entry.data.get(CONF_HOST)
-            and coordinator.client._http_password == new_password
+            and current_password == new_password
         ):
             LOGGER.debug(
                 "_async_update_listener: host + password unchanged — skipping reload for %s",
