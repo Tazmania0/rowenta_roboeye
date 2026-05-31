@@ -68,6 +68,17 @@ from .const import (
     FLAG_WATER_TANK_INSERTED,
     IMMEDIATE_COMMAND_NAMES,
     LOGGER,
+    MAIN_BRUSH_CLEAN_M2,
+    MAIN_BRUSH_REPLACE_HOURS,
+    MAINTENANCE_NOTIFICATION_PREFIX,
+    MAINTENANCE_WARN_PCT,
+    DROP_SENSOR_CLEAN_M2,
+    DUSTBIN_CLEAN_HOURS,
+    DUSTBIN_CLEAN_M2,
+    FILTER_CLEAN_M2,
+    MOP_PAD_REPLACE_HOURS,
+    SIDE_BRUSH_CLEAN_M2,
+    SIDE_BRUSH_REPLACE_HOURS,
     MAX_POLL_FAILURES,
     MODE_CLEANING,
     MODE_GO_HOME,
@@ -88,6 +99,7 @@ from .const import (
     SCAN_INTERVAL_MAP_GEOMETRY,
     SCAN_INTERVAL_ROBOT_INFO,
     SCAN_INTERVAL_STATISTICS,
+    safe_int,
     SIGNAL_ACTIVE_MAP_CHANGED,
     SIGNAL_AREAS_UPDATED,
     SIGNAL_MAPS_UPDATED,
@@ -235,6 +247,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.water_tank_attached: bool = False
         self.water_tank_empty: bool = False
         self.water_pump_fault: bool = False
+
+        # Maintenance counter store (delta tracking vs permanent_statistics).
+        # Created and loaded in async_init_maintenance() once device_id is
+        # stable; None until then so entities degrade gracefully at boot.
+        self.maintenance: "MaintenanceStore | None" = None
 
         # Active map id — single source of truth.
         # All per-room entities check self._map_id == coordinator.active_map_id.
@@ -964,6 +981,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "RobEye: cleaning ended — forcing background refresh"
                 )
                 self._last_background_fetch = None
+                # Force a fresh permanent_statistics fetch this tick so the
+                # maintenance counters reflect the just-finished session.
+                self._last_statistics = None
             self._was_cleaning = _is_cleaning_now
 
             _background_run = False
@@ -1042,6 +1062,10 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except CannotConnect:
                     LOGGER.debug("get_permanent_statistics unavailable, skipping")
                 self._last_statistics = now
+                if DATA_STATISTICS in data:
+                    await self._check_maintenance_notifications(
+                        data[DATA_STATISTICS]
+                    )
 
             # ── Every 60 s: schedule ─────────────────────────────────
             if self._last_schedule is None or (
@@ -1111,6 +1135,140 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def permanent_statistics(self) -> dict[str, Any]:
         return (self.data or {}).get(DATA_PERMANENT_STATISTICS, {})
+
+    @property
+    def perm_total_cleaning_time(self) -> int:
+        """Lifetime cleaning time (raw units) for maintenance delta tracking.
+
+        Sourced from /get/statistics — NOT /get/permanent_statistics, which on
+        Xplorer 120 firmware is partial (omits total_area_cleaned) and does not
+        reliably increment.  /get/statistics is the same cumulative source the
+        lifetime sensors use, so maintenance stays consistent with them.
+        """
+        return safe_int(self.statistics.get("total_cleaning_time", 0))
+
+    @property
+    def perm_total_area_cleaned(self) -> int:
+        """Lifetime area cleaned (raw units) for maintenance delta tracking.
+
+        Sourced from /get/statistics (see perm_total_cleaning_time).
+        """
+        return safe_int(self.statistics.get("total_area_cleaned", 0))
+
+    @property
+    def has_wet_support(self) -> bool:
+        """Whether the robot has a mop pad whose lifetime should be tracked.
+
+        The Xplorer Serie 120 ships with a passive wet mopping pad — the
+        firmware does not actively control it (no water pump / flow control),
+        but it is still a physical consumable that wears out, so its
+        replacement counter (60 h) is meaningful.  Mop-pad maintenance entities
+        (sensor / binary_sensor / reset button) are gated on this flag.
+        """
+        return getattr(self, "_has_wet_support", False)
+
+    @has_wet_support.setter
+    def has_wet_support(self, value: bool) -> None:
+        self._has_wet_support = bool(value)
+
+    # ── Maintenance tracking ────────────────────────────────────────────
+
+    async def async_init_maintenance(self) -> None:
+        """Create and load the persistent maintenance store.
+
+        Called once from async_setup_entry after the first refresh so that
+        ``device_id`` (the storage key) is stable.  Failures are non-fatal —
+        maintenance entities simply stay unavailable.
+        """
+        from .maintenance_store import MaintenanceStore
+
+        try:
+            store = MaintenanceStore(self.hass, self.device_id)
+            await store.async_load()
+            self.maintenance = store
+            LOGGER.debug("Maintenance store loaded for device %s", self.device_id)
+        except Exception:  # noqa: BLE001
+            LOGGER.warning("Failed to load maintenance store", exc_info=True)
+
+    async def _check_maintenance_notifications(
+        self, stats: dict[str, Any] | None = None
+    ) -> None:
+        """Fire persistent notifications when a maintenance threshold is crossed.
+
+        ``stats`` lets the caller pass freshly-fetched /get/statistics before
+        they have been committed to ``self.data``; falls back to the stored
+        ``statistics`` otherwise.
+
+        Notification ids are stable per component so repeated checks dedupe
+        rather than spamming.  Cleared automatically when the user resets the
+        corresponding counter (handled by the reset button).
+        """
+        m = self.maintenance
+        stats = stats if stats is not None else self.statistics
+        if m is None or not stats:
+            return
+
+        ts = safe_int(stats.get("total_cleaning_time", 0))
+        mm2 = safe_int(stats.get("total_area_cleaned", 0))
+
+        from homeassistant.components import persistent_notification
+
+        def _emit(component: str, message: str) -> None:
+            persistent_notification.async_create(
+                self.hass,
+                message,
+                title="Rowenta — Maintenance",
+                notification_id=f"{MAINTENANCE_NOTIFICATION_PREFIX}{component}",
+            )
+
+        # ── Replacement checks (runtime hours) ────────────────────────────
+        for comp, limit in (
+            ("main_brush", MAIN_BRUSH_REPLACE_HOURS),
+            ("side_brush", SIDE_BRUSH_REPLACE_HOURS),
+        ):
+            hours = m.runtime_since_replace_h(comp, ts)
+            label = comp.replace("_", " ").title()
+            if hours >= limit:
+                _emit(
+                    f"{comp}_replace",
+                    f"{label} replacement due ({hours:.0f} h / {limit} h)",
+                )
+            elif hours >= limit * MAINTENANCE_WARN_PCT / 100:
+                _emit(
+                    f"{comp}_replace",
+                    f"{label} replacement approaching ({hours:.0f} h / {limit} h)",
+                )
+
+        if self.has_wet_support:
+            hours = m.runtime_since_replace_h("mop_pad", ts)
+            if hours >= MOP_PAD_REPLACE_HOURS:
+                _emit(
+                    "mop_pad_replace",
+                    f"Mop pad replacement due ({hours:.0f} h / {MOP_PAD_REPLACE_HOURS} h)",
+                )
+
+        # ── Cleaning checks (area m²) ─────────────────────────────────────
+        for comp, limit_m2, label in (
+            ("main_brush", MAIN_BRUSH_CLEAN_M2, "Main brush cleaning"),
+            ("side_brush", SIDE_BRUSH_CLEAN_M2, "Side brush cleaning"),
+            ("filter", FILTER_CLEAN_M2, "Filter cleaning"),
+            ("drop_sensor", DROP_SENSOR_CLEAN_M2, "Drop sensor cleaning"),
+        ):
+            area = m.area_since_clean_m2(comp, mm2)
+            if area >= limit_m2:
+                _emit(
+                    f"{comp}_clean",
+                    f"{label} due ({area:.1f} m² / {limit_m2} m²)",
+                )
+
+        # ── Dustbin: area OR time ─────────────────────────────────────────
+        db_m2 = m.area_since_clean_m2("dustbin", mm2)
+        db_h = m.runtime_since_clean_h("dustbin", ts)
+        if db_m2 >= DUSTBIN_CLEAN_M2 or db_h >= DUSTBIN_CLEAN_HOURS:
+            _emit(
+                "dustbin_clean",
+                f"Dustbin emptying due ({db_m2:.1f} m² / {db_h:.1f} h)",
+            )
 
     @property
     def areas(self) -> list[dict[str, Any]]:

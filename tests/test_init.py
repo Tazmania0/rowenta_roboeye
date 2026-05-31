@@ -10,6 +10,7 @@ from custom_components.rowenta_roboeye import (
     _async_initial_dashboard,
     _async_update_listener,
     _schedule_for_map,
+    async_setup_entry,
     async_unload_entry,
 )
 from custom_components.rowenta_roboeye.const import DOMAIN, safe_int
@@ -151,6 +152,52 @@ def test_version_from_url_parses_query():
 def test_version_from_url_handles_missing_query():
     # Old naive split('?v=')[-1] returned the whole URL here — must be None now.
     assert _version_from_url("/rowenta_roboeye/x.js") is None
+
+
+@pytest.mark.asyncio
+async def test_setup_checks_maintenance_notifications_after_store_load():
+    """Setup re-checks maintenance due state after the persistent store loads."""
+    import custom_components.rowenta_roboeye as init_mod
+
+    hass = MagicMock()
+    hass.data = {}
+    hass.config_entries.async_forward_entry_setups = AsyncMock()
+    hass.config_entries.async_update_entry = MagicMock()
+
+    def _background_task(coro, **_kwargs):
+        coro.close()
+        task = MagicMock()
+        task.done.return_value = True
+        return task
+
+    hass.async_create_background_task = _background_task
+
+    entry = MagicMock()
+    entry.entry_id = "entry_1"
+    entry.data = {CONF_HOST: "192.168.1.100", "map_id": "3"}
+    entry.async_on_unload = MagicMock()
+    entry.add_update_listener = MagicMock(return_value=MagicMock())
+
+    coord = MagicMock()
+    coord.async_config_entry_first_refresh = AsyncMock()
+    coord.async_load_all_map_areas = AsyncMock()
+    coord.async_init_maintenance = AsyncMock()
+    coord._check_maintenance_notifications = AsyncMock()
+    coord.async_start_command_worker = MagicMock()
+    coord.async_add_listener = MagicMock(return_value=MagicMock())
+    coord.device_id = "ser120"
+    coord._stable_device_id = "ser120"
+    coord.areas = []
+    coord.robot_info = {}
+    coord.active_map_id = "3"
+    coord.available_maps = []
+    coord.schedule = {}
+
+    with patch.object(init_mod, "RobEyeCoordinator", return_value=coord):
+        assert await async_setup_entry(hass, entry) is True
+
+    coord.async_init_maintenance.assert_awaited_once()
+    coord._check_maintenance_notifications.assert_awaited_once_with()
 
 
 def _make_hass(unload_ok: bool):

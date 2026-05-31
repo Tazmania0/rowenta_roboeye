@@ -226,6 +226,31 @@ ha_helpers.restore_state = _make_module(
     "homeassistant.helpers.restore_state",
     RestoreEntity=_RestoreEntityStub,
 )
+# homeassistant.helpers.storage — in-memory Store stub for tests.
+# Persists data in a class-level dict keyed on the store key so that two Store
+# instances with the same key share state (mirrors real cross-reload behaviour).
+class _StoreStub:
+    _backing: dict[str, object] = {}
+
+    def __init__(self, hass, version, key):
+        self.hass = hass
+        self.version = version
+        self.key = key
+
+    async def async_load(self):
+        import copy
+        data = _StoreStub._backing.get(self.key)
+        return copy.deepcopy(data) if data is not None else None
+
+    async def async_save(self, data):
+        import copy
+        _StoreStub._backing[self.key] = copy.deepcopy(data)
+
+ha_helpers.storage = _make_module(
+    "homeassistant.helpers.storage",
+    Store=_StoreStub,
+)
+
 ha_helpers.service_info = _make_module("homeassistant.helpers.service_info")
 ha_helpers.service_info.zeroconf = _make_module(
     "homeassistant.helpers.service_info.zeroconf",
@@ -319,6 +344,7 @@ _modules = {
     "homeassistant.helpers.device_registry": ha_device_reg,
     "homeassistant.helpers.entity_platform": ha_ep,
     "homeassistant.helpers.restore_state": ha_helpers.restore_state,
+    "homeassistant.helpers.storage": ha_helpers.storage,
     "homeassistant.helpers.service_info": ha_helpers.service_info,
     "homeassistant.helpers.service_info.zeroconf": ha_helpers.service_info.zeroconf,
     "homeassistant.helpers.config_validation": ha_helpers.config_validation,

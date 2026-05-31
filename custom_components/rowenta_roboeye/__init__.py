@@ -101,6 +101,14 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     # created at setup time.  Errors on individual maps are non-fatal.
     await coordinator.async_load_all_map_areas()
 
+    # Load the persistent maintenance counter store now that device_id (its
+    # storage key) is stable.  Non-fatal on failure.
+    await coordinator.async_init_maintenance()
+    # The first coordinator refresh happens before the maintenance store is
+    # loaded, so the notification check there has no store to read from. Check
+    # once immediately after loading so already-due counters surface in HA.
+    await coordinator._check_maintenance_notifications()
+
     # Persist the resolved device_id to config entry data so that:
     #  - async_remove_entry can reconstruct the correct dashboard URL path.
     #  - CONF_SERIAL is available on the next HA restart, giving every entity

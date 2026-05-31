@@ -118,6 +118,30 @@
       },
       "water_pump_fault": {
         "name": "Water Pump Fault"
+      },
+      "main_brush_due": {
+        "name": "Main Brush Due"
+      },
+      "side_brush_due": {
+        "name": "Side Brush Due"
+      },
+      "mop_pad_due": {
+        "name": "Mop Pad Due"
+      },
+      "main_brush_clean_due": {
+        "name": "Main Brush Clean Due"
+      },
+      "side_brush_clean_due": {
+        "name": "Side Brush Clean Due"
+      },
+      "dustbin_empty_due": {
+        "name": "Dustbin Empty Due"
+      },
+      "filter_clean_due": {
+        "name": "Filter Clean Due"
+      },
+      "drop_sensor_clean_due": {
+        "name": "Drop Sensor Clean Due"
       }
     },
     "sensor": {
@@ -186,6 +210,30 @@
       },
       "active_map": {
         "name": "Active map"
+      },
+      "main_brush_runtime": {
+        "name": "Main Brush Runtime"
+      },
+      "side_brush_runtime": {
+        "name": "Side Brush Runtime"
+      },
+      "mop_pad_runtime": {
+        "name": "Mop Pad Runtime"
+      },
+      "main_brush_area_since_clean": {
+        "name": "Main Brush — Area Since Clean"
+      },
+      "side_brush_area_since_clean": {
+        "name": "Side Brush — Area Since Clean"
+      },
+      "dustbin_area_since_empty": {
+        "name": "Dustbin — Area Since Empty"
+      },
+      "filter_area_since_clean": {
+        "name": "Filter — Area Since Clean"
+      },
+      "drop_sensor_area_since_clean": {
+        "name": "Drop Sensors — Area Since Clean"
       }
     },
     "select": {
@@ -243,6 +291,30 @@
       },
       "clean_all": {
         "name": "Clean entire home"
+      },
+      "reset_main_brush_replaced": {
+        "name": "Reset Main Brush (Replaced)"
+      },
+      "reset_side_brush_replaced": {
+        "name": "Reset Side Brush (Replaced)"
+      },
+      "reset_mop_pad_replaced": {
+        "name": "Reset Mop Pad (Replaced)"
+      },
+      "reset_main_brush_cleaned": {
+        "name": "Reset Main Brush (Cleaned)"
+      },
+      "reset_side_brush_cleaned": {
+        "name": "Reset Side Brush (Cleaned)"
+      },
+      "reset_dustbin_emptied": {
+        "name": "Reset Dustbin (Emptied)"
+      },
+      "reset_filter_cleaned": {
+        "name": "Reset Filter (Cleaned)"
+      },
+      "reset_drop_sensors_cleaned": {
+        "name": "Reset Drop Sensors (Cleaned)"
       }
     }
   },

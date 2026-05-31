@@ -363,6 +363,51 @@ IMMEDIATE_COMMAND_NAMES: frozenset = frozenset({
     "set_wet_clean",
 })
 
+# ── Maintenance tracking ──────────────────────────────────────────────
+# Maintenance counters derive from /get/statistics — NOT /get/permanent_statistics,
+# which on Xplorer 120 firmware is partial (omits total_area_cleaned) and does
+# not reliably increment.  Conversions therefore match the divisors used by the
+# lifetime sensors in sensor.py, so maintenance values stay consistent with what
+# those sensors display:
+#   total_cleaning_time / MAINT_TIME_UNITS_PER_HOUR  → hours  (sensor.py uses /60)
+#   total_area_cleaned  / MAINT_AREA_UNITS_PER_M2    → m²     (sensor.py uses /100)
+# If a real robot shows alerts firing too early/late, recalibrate these two.
+MAINT_TIME_UNITS_PER_HOUR = 60
+MAINT_AREA_UNITS_PER_M2 = 100
+
+# Replacement intervals (runtime hours)
+MAIN_BRUSH_REPLACE_HOURS = 140
+SIDE_BRUSH_REPLACE_HOURS = 60
+MOP_PAD_REPLACE_HOURS = 60          # AICU wet models only
+
+# Cleaning intervals (area m²)
+MAIN_BRUSH_CLEAN_M2 = 10.0
+SIDE_BRUSH_CLEAN_M2 = 10.0
+DUSTBIN_CLEAN_M2 = 15.0
+DUSTBIN_CLEAN_HOURS = 2.0           # whichever comes first
+FILTER_CLEAN_M2 = 30.0
+DROP_SENSOR_CLEAN_M2 = 50.0
+
+# Warn when a replacement counter reaches N % of its limit.
+MAINTENANCE_WARN_PCT = 80
+
+# Maintenance component keys (shared by sensor/binary_sensor/button platforms).
+# (key, limit_unit) — limit/threshold lives with the platform that needs it.
+MAINTENANCE_REPLACE_KEYS: tuple[str, ...] = (
+    "main_brush_replace",
+    "side_brush_replace",
+)
+MAINTENANCE_CLEAN_KEYS: tuple[str, ...] = (
+    "main_brush_clean",
+    "side_brush_clean",
+    "dustbin_clean",
+    "filter_clean",
+    "drop_sensor_clean",
+)
+# Persistent-notification id prefix for maintenance alerts.
+MAINTENANCE_NOTIFICATION_PREFIX = f"{DOMAIN}_maintenance_"
+
+
 # ── Resilience ────────────────────────────────────────────────────────
 MAX_POLL_FAILURES = 3
 
