@@ -284,19 +284,16 @@ IMMEDIATE_COMMAND_NAMES: frozenset = frozenset({
 })
 
 # ── Maintenance tracking ──────────────────────────────────────────────
-# Raw-unit conversions for /get/permanent_statistics fields.
-# Per the RobEye SDK semantics (and the existing total_area_cleaned sensor's
-# own "0.01 cm² units" comment, i.e. mm²):
-#   total_cleaning_time → seconds   → hours via / SECONDS_PER_HOUR
-#   total_area_cleaned  → mm²       → m²    via / MM2_PER_M2
-#   total_distance_driven → mm      → m     via / MM_PER_M
-# NOTE: these differ from the divisors used by the legacy lifetime sensors in
-# sensor.py (/60, /100).  Maintenance thresholds below are expressed in real
-# hours / m²; if a real robot shows alerts firing too early/late, recalibrate
-# these three constants — every maintenance calculation derives from them.
-SECONDS_PER_HOUR = 3600
-MM2_PER_M2 = 1_000_000
-MM_PER_M = 1000
+# Maintenance counters derive from /get/statistics — NOT /get/permanent_statistics,
+# which on Xplorer 120 firmware is partial (omits total_area_cleaned) and does
+# not reliably increment.  Conversions therefore match the divisors used by the
+# lifetime sensors in sensor.py, so maintenance values stay consistent with what
+# those sensors display:
+#   total_cleaning_time / MAINT_TIME_UNITS_PER_HOUR  → hours  (sensor.py uses /60)
+#   total_area_cleaned  / MAINT_AREA_UNITS_PER_M2    → m²     (sensor.py uses /100)
+# If a real robot shows alerts firing too early/late, recalibrate these two.
+MAINT_TIME_UNITS_PER_HOUR = 60
+MAINT_AREA_UNITS_PER_M2 = 100
 
 # Replacement intervals (runtime hours)
 MAIN_BRUSH_REPLACE_HOURS = 140

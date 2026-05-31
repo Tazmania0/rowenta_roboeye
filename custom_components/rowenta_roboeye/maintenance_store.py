@@ -3,10 +3,14 @@
 The Robart firmware exposes no consumable counters (no brush hours, no filter
 lifetime, no reset endpoint).  Maintenance tracking is therefore implemented
 entirely in HA using delta tracking against the monotonically-increasing
-``/get/permanent_statistics`` totals::
+``/get/statistics`` lifetime totals::
 
-    runtime_since_reset = permanent_stats.total_cleaning_time - baseline_at_reset
-    area_since_reset    = permanent_stats.total_area_cleaned  - baseline_at_reset
+    runtime_since_reset = stats.total_cleaning_time - baseline_at_reset
+    area_since_reset    = stats.total_area_cleaned  - baseline_at_reset
+
+(``/get/permanent_statistics`` was the original source but is partial — it omits
+``total_area_cleaned`` — and does not reliably increment on Xplorer 120 firmware,
+so ``/get/statistics`` is used instead, matching the lifetime sensors.)
 
 Baselines are stored in HA persistent storage keyed on the robot's stable
 ``device_id`` so they survive an integration remove + re-add (as long as the
@@ -23,8 +27,8 @@ from homeassistant.helpers.storage import Store
 
 from .const import (
     LOGGER,
-    MM2_PER_M2,
-    SECONDS_PER_HOUR,
+    MAINT_AREA_UNITS_PER_M2,
+    MAINT_TIME_UNITS_PER_HOUR,
 )
 
 STORAGE_VERSION = 1
@@ -109,17 +113,17 @@ class MaintenanceStore:
     def runtime_since_replace_h(self, component: str, current_total_s: int) -> float:
         """Hours of runtime since the last replacement of ``component``."""
         baseline = self._data.get(f"{component}_replace_baseline_s", 0)
-        return max(0.0, (current_total_s - baseline) / SECONDS_PER_HOUR)
+        return max(0.0, (current_total_s - baseline) / MAINT_TIME_UNITS_PER_HOUR)
 
     def area_since_clean_m2(self, component: str, current_total_mm2: int) -> float:
         """m² cleaned since the last cleaning action on ``component``."""
         baseline = self._data.get(f"{component}_clean_baseline_mm2", 0)
-        return max(0.0, (current_total_mm2 - baseline) / MM2_PER_M2)
+        return max(0.0, (current_total_mm2 - baseline) / MAINT_AREA_UNITS_PER_M2)
 
     def runtime_since_clean_h(self, component: str, current_total_s: int) -> float:
         """Hours of runtime since the last cleaning action (dustbin only)."""
         baseline = self._data.get(f"{component}_clean_baseline_s", 0)
-        return max(0.0, (current_total_s - baseline) / SECONDS_PER_HOUR)
+        return max(0.0, (current_total_s - baseline) / MAINT_TIME_UNITS_PER_HOUR)
 
     def last_reset_iso(self, component: str) -> str | None:
         return self._data.get("last_reset", {}).get(component)

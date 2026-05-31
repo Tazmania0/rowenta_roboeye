@@ -893,9 +893,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except CannotConnect:
                     LOGGER.debug("get_permanent_statistics unavailable, skipping")
                 self._last_statistics = now
-                if DATA_PERMANENT_STATISTICS in data:
+                if DATA_STATISTICS in data:
                     await self._check_maintenance_notifications(
-                        data[DATA_PERMANENT_STATISTICS]
+                        data[DATA_STATISTICS]
                     )
 
             # ── Every 60 s: schedule ─────────────────────────────────
@@ -994,13 +994,22 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def perm_total_cleaning_time(self) -> int:
-        """Lifetime cleaning time (seconds) for maintenance delta tracking."""
-        return safe_int(self.permanent_statistics.get("total_cleaning_time", 0))
+        """Lifetime cleaning time (raw units) for maintenance delta tracking.
+
+        Sourced from /get/statistics — NOT /get/permanent_statistics, which on
+        Xplorer 120 firmware is partial (omits total_area_cleaned) and does not
+        reliably increment.  /get/statistics is the same cumulative source the
+        lifetime sensors use, so maintenance stays consistent with them.
+        """
+        return safe_int(self.statistics.get("total_cleaning_time", 0))
 
     @property
     def perm_total_area_cleaned(self) -> int:
-        """Lifetime area cleaned (mm²) for maintenance delta tracking."""
-        return safe_int(self.permanent_statistics.get("total_area_cleaned", 0))
+        """Lifetime area cleaned (raw units) for maintenance delta tracking.
+
+        Sourced from /get/statistics (see perm_total_cleaning_time).
+        """
+        return safe_int(self.statistics.get("total_area_cleaned", 0))
 
     @property
     def has_wet_support(self) -> bool:
@@ -1034,20 +1043,20 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             LOGGER.warning("Failed to load maintenance store", exc_info=True)
 
     async def _check_maintenance_notifications(
-        self, perm_stats: dict[str, Any] | None = None
+        self, stats: dict[str, Any] | None = None
     ) -> None:
         """Fire persistent notifications when a maintenance threshold is crossed.
 
-        ``perm_stats`` lets the caller pass freshly-fetched statistics before
+        ``stats`` lets the caller pass freshly-fetched /get/statistics before
         they have been committed to ``self.data``; falls back to the stored
-        ``permanent_statistics`` otherwise.
+        ``statistics`` otherwise.
 
         Notification ids are stable per component so repeated checks dedupe
         rather than spamming.  Cleared automatically when the user resets the
         corresponding counter (handled by the reset button).
         """
         m = self.maintenance
-        stats = perm_stats if perm_stats is not None else self.permanent_statistics
+        stats = stats if stats is not None else self.statistics
         if m is None or not stats:
             return
 
