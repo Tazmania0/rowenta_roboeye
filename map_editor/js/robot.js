@@ -27,6 +27,7 @@ export function startStatusPolling() {
     inFlight = true;
     try {
       const res = await api('/get/status');
+      const previousMode = state.robotMode;
       state.robotMode         = res.mode;
       state.robotCharging     = res.charging;
       state.robotBatteryLevel = _extractBatteryLevel(res);
@@ -37,6 +38,10 @@ export function startStatusPolling() {
       state.robotAreaCleanedCm2  = typeof res.current_area_cleaned === 'number'
                                   ? res.current_area_cleaned : null;
       state.robotAreaIds         = _extractAreaIds(res);
+      if (previousMode === 'cleaning' && state.robotMode !== 'cleaning') {
+        state.editorCleanAreaIds = [];
+        state.editorCleanStartedAt = null;
+      }
       await _updateCleaningGrid();
       _updateRobotStatusUI();
     } catch {}

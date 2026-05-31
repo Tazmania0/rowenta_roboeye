@@ -408,10 +408,12 @@ export async function executeCleanArea() {
                + `&cleaning_parameter_set=${fan}&cleaning_strategy_mode=1`;
     await api(path);
     state.editorCleanAreaIds = areaIdList;
+    state.editorCleanStartedAt = Date.now();
     updateEtaChip();
     showToast(`Cleaning ${label}...`, 'success');
   } catch (e) {
     state.editorCleanAreaIds = [];
+    state.editorCleanStartedAt = null;
     updateEtaChip();
     showToast('Clean failed: ' + e.message.substring(0, 80), 'error');
   }

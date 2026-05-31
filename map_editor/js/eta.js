@@ -37,6 +37,14 @@ function formatDuration(totalSeconds) {
   return mins ? `${hours}h ${mins}m` : `${hours}h`;
 }
 
+function currentElapsedSeconds() {
+  if (state.robotCleaningTimeSec !== null) return state.robotCleaningTimeSec;
+  if (state.editorCleanStartedAt) {
+    return Math.max(0, Math.floor((Date.now() - state.editorCleanStartedAt) / 1000));
+  }
+  return null;
+}
+
 export function updateEtaChip() {
   const chip = document.getElementById('eta-chip');
   const text = document.getElementById('eta-text');
@@ -60,8 +68,9 @@ export function updateEtaChip() {
     return;
   }
 
-  if (isCleaning && state.robotCleaningTimeSec !== null) {
-    totalMs = Math.max(0, totalMs - state.robotCleaningTimeSec * 1000);
+  const elapsedSeconds = isCleaning ? currentElapsedSeconds() : null;
+  if (elapsedSeconds !== null) {
+    totalMs = Math.max(0, totalMs - elapsedSeconds * 1000);
   }
 
   const suffix = isCleaning ? 'left' : (selected.length ? 'selected' : 'map');
