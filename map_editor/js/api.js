@@ -39,11 +39,17 @@ export async function apiText(path) {
   try { return JSON.parse(body); } catch { return body; }
 }
 
+const CMD_POLL_INTERVAL_MS = 5000;
+
 export async function pollCmd(cmdId, timeoutMs = 15000, onTick = null) {
   const deadline = Date.now() + timeoutMs;
   const startMs  = Date.now();
+  let first = true;
   while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 5000));
+    // Poll immediately, then sleep between polls, so a command that finishes
+    // quickly is detected without waiting a full interval first.
+    if (!first) await new Promise(r => setTimeout(r, CMD_POLL_INTERVAL_MS));
+    first = false;
     const res  = await api('/get/command_result');
     const cmds = res.commands || [];
     const cmd  = cmds.find(c => String(c.cmd_id) === String(cmdId));

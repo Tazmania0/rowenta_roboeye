@@ -79,6 +79,17 @@ def _make_module(name: str, **attrs) -> types.ModuleType:
 # homeassistant
 ha_root = _make_module("homeassistant")
 
+# homeassistant.util.dt — tz-aware utcnow(), matching HA's real helper.
+from datetime import datetime as _datetime, timezone as _timezone
+
+
+def _utcnow() -> _datetime:
+    return _datetime.now(_timezone.utc)
+
+
+ha_util = _make_module("homeassistant.util")
+ha_util.dt = _make_module("homeassistant.util.dt", utcnow=_utcnow, UTC=_timezone.utc)
+
 # homeassistant.core
 ha_core = _make_module(
     "homeassistant.core",
@@ -272,6 +283,7 @@ sys.modules["homeassistant.components.http"] = ha_http
 ha_persistent = _make_module(
     "homeassistant.components.persistent_notification",
     async_create=MagicMock(),
+    async_dismiss=MagicMock(),
     dismiss=MagicMock(),
 )
 ha_components.persistent_notification = ha_persistent
@@ -299,6 +311,8 @@ _modules = {
     "homeassistant.components": ha_components,
     "homeassistant.components.http": ha_http,
     "homeassistant.components.persistent_notification": ha_persistent,
+    "homeassistant.util": ha_util,
+    "homeassistant.util.dt": ha_util.dt,
 }
 
 for _name, _mod in _modules.items():

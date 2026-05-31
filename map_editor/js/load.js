@@ -10,6 +10,12 @@ import { fitToScreen } from './mode.js';
 
 const emptyState = document.getElementById('empty-state');
 
+// Reduce-based min/max — Math.min(...arr) spreads every element as an argument
+// and throws RangeError ("Maximum call stack size exceeded") on very large
+// coordinate arrays (dense outlines). reduce avoids the spread entirely.
+function arrMin(arr) { return arr.reduce((m, v) => (v < m ? v : m), Infinity); }
+function arrMax(arr) { return arr.reduce((m, v) => (v > m ? v : m), -Infinity); }
+
 async function _discardExploreMap(exploreMapId) {
   try {
     await showModal({
@@ -135,17 +141,17 @@ export async function loadMap(mapId) {
       const xs = outline.map(p => p.x);
       const ys = outline.map(p => p.y);
       state.bbox = {
-        minX: Math.min(...xs), maxX: Math.max(...xs),
-        minY: Math.min(...ys), maxY: Math.max(...ys),
+        minX: arrMin(xs), maxX: arrMax(xs),
+        minY: arrMin(ys), maxY: arrMax(ys),
       };
     } else if (state.areas.length > 0) {
       // Fallback: compute from area points
       const allPts = state.areas.flatMap(a => a.points || []);
       state.bbox = {
-        minX: Math.min(...allPts.map(p=>p.x)),
-        maxX: Math.max(...allPts.map(p=>p.x)),
-        minY: Math.min(...allPts.map(p=>p.y)),
-        maxY: Math.max(...allPts.map(p=>p.y)),
+        minX: arrMin(allPts.map(p=>p.x)),
+        maxX: arrMax(allPts.map(p=>p.x)),
+        minY: arrMin(allPts.map(p=>p.y)),
+        maxY: arrMax(allPts.map(p=>p.y)),
       };
     } else {
       state.bbox = { minX:0, maxX:1000, minY:0, maxY:1000 };

@@ -10,8 +10,11 @@
 // v2.7.4: detect legacy room-shaped spot payloads by name/state.
 // v2.7.5: draw no-go zones with cross-hatch.
 // v2.7.6: make spot hatch visible in Opera with a fallback fill.
+// v2.8.0: skip redundant re-renders (only rebuild when inputs change);
+//         escape interpolated title/entity/error text; disable control bar
+//         with a hint when the vacuum entity can't be resolved.
 
-const VERSION = "2.7.6";
+const VERSION = "2.8.0";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -99,6 +102,26 @@ class RowentaMapCard extends HTMLElement {
     this._hass          = null;
     this._config        = {};
     this._selectedRooms = new Set();
+    // Signature of the last render's inputs; lets set hass (which fires every
+    // coordinator tick) skip the full innerHTML rebuild when nothing relevant
+    // changed.  Set to null to force the next _render.
+    this._lastSig       = null;
+  }
+
+  /** Mark the next _render() as unconditional (config / selection changed). */
+  _invalidate() { this._lastSig = null; }
+
+  /** Inputs that actually affect the rendered output. */
+  _renderSignature() {
+    const st = this._hass?.states[this._config.entity];
+    const vac = this._hass?.states[this._vacuumEntityId];
+    return JSON.stringify({
+      // last_updated changes whenever state or any attribute changes.
+      s: st ? `${st.state}@${st.last_updated}` : null,
+      v: vac ? vac.state : null,
+      sel: Array.from(this._selectedRooms).sort(),
+      cfg: this._config,
+    });
   }
 
   setConfig(config) {
@@ -120,6 +143,7 @@ class RowentaMapCard extends HTMLElement {
     if (config.entity !== prevEntity) {
       this._selectedRooms = new Set();
     }
+    this._invalidate();          // config changed — force a rebuild
     if (this._hass) this._render();
   }
 
@@ -129,7 +153,7 @@ class RowentaMapCard extends HTMLElement {
     catch (err) {
       console.error("rowenta-map-card:", err);
       this.shadowRoot.innerHTML = `<ha-card><div style="padding:16px;color:var(--error-color)">
-        <b>rowenta-map-card error:</b> ${err.message}</div></ha-card>`;
+        <b>rowenta-map-card error:</b> ${this._esc(err && err.message)}</div></ha-card>`;
     }
   }
 
@@ -138,11 +162,18 @@ class RowentaMapCard extends HTMLElement {
     const state = this._hass.states[this._config.entity];
     if (!state) {
       this.shadowRoot.innerHTML = `<ha-card><div style="padding:16px;color:var(--warning-color)">
-        Entity <b>${this._config.entity}</b> not found —
+        Entity <b>${this._esc(this._config.entity)}</b> not found —
         enable <b>sensor.rowenta_xplorer_120_live_map</b> in the entity registry.
       </div></ha-card>`;
       return;
     }
+    // H6: set hass fires on every coordinator tick.  Skip the full innerHTML
+    // rebuild (and listener re-attach) when none of the inputs that affect the
+    // output changed — this stops continuous flicker and wasted work.
+    const sig = this._renderSignature();
+    if (sig === this._lastSig) return;
+    this._lastSig = sig;
+
     const attrs = state.attributes || {};
     this._renderFull(state.state || "idle", attrs);
   }
@@ -181,7 +212,12 @@ class RowentaMapCard extends HTMLElement {
                      : mapState === "error"            ? "#F44336"
                      : "var(--secondary-text-color)";
 
-    const vacState         = this._hass?.states[this._vacuumEntityId]?.state;
+    const vacuumEntityId   = this._vacuumEntityId;
+    // The control buttons act on this vacuum entity; if it can't be resolved
+    // (custom entity_id naming, missing vacuum_entity config) firing services
+    // at it does nothing silently — disable the bar and explain instead.
+    const vacuumExists     = !!(vacuumEntityId && this._hass?.states[vacuumEntityId]);
+    const vacState         = this._hass?.states[vacuumEntityId]?.state;
     const isVacuumCleaning = vacState === "cleaning";
     const selCount         = this._selectedRooms.size;
 
@@ -249,7 +285,7 @@ class RowentaMapCard extends HTMLElement {
       </style>
       <ha-card>
         <div class="hdr">
-          <span class="title">${cfg.title}</span>
+          <span class="title">${this._esc(cfg.title)}</span>
           <span class="badge">${({
             cleaning: "CLEANING", exploring: "EXPLORING", returning: "RETURNING",
             mapping: "MAPPING", session_complete: "LAST SESSION",
@@ -262,6 +298,7 @@ class RowentaMapCard extends HTMLElement {
             ? `${selCount} room${selCount > 1 ? "s" : ""} selected — tap to deselect`
             : "Tap rooms to select for targeted cleaning"}
         </div>
+        ${vacuumExists ? `
         <div class="ctrl-bar">
           <button class="ctrl-btn primary" id="btn-start">
             ${isVacuumCleaning ? "⏸ Pause" : "▶ Start"}
@@ -273,10 +310,37 @@ class RowentaMapCard extends HTMLElement {
               ? `🧹 Clean ${selCount} Room${selCount > 1 ? "s" : ""}`
               : "🧹 Clean All"}
           </button>
-        </div>
+        </div>` : `
+        <div class="sel-hint">
+          Vacuum entity <b>${this._esc(vacuumEntityId || "?")}</b> not found —
+          set <b>vacuum_entity</b> in the card config to enable controls.
+        </div>`}
       </ha-card>`;
 
-    const entityId = this._vacuumEntityId;
+    // Room selection works regardless of vacuum availability — wire it first.
+    this.shadowRoot.querySelector(".svg-wrap svg")?.addEventListener("click", (e) => {
+      let el = e.target;
+      while (el && el !== e.currentTarget) {
+        if (el.classList?.contains("room-hit")) {
+          const areaId = el.dataset.areaId;
+          if (areaId) {
+            if (this._selectedRooms.has(areaId)) {
+              this._selectedRooms.delete(areaId);
+            } else {
+              this._selectedRooms.add(areaId);
+            }
+            this._render();
+          }
+          return;
+        }
+        el = el.parentElement;
+      }
+    });
+
+    // No control-bar listeners to wire when the vacuum entity is unavailable.
+    if (!vacuumExists) return;
+
+    const entityId = vacuumEntityId;
 
     this.shadowRoot.getElementById("btn-start")?.addEventListener("click", () => {
       const state = this._hass?.states[entityId]?.state;
@@ -307,25 +371,6 @@ class RowentaMapCard extends HTMLElement {
         });
         this._selectedRooms.clear();
         this._render();
-      }
-    });
-
-    this.shadowRoot.querySelector(".svg-wrap svg")?.addEventListener("click", (e) => {
-      let el = e.target;
-      while (el && el !== e.currentTarget) {
-        if (el.classList?.contains("room-hit")) {
-          const areaId = el.dataset.areaId;
-          if (areaId) {
-            if (this._selectedRooms.has(areaId)) {
-              this._selectedRooms.delete(areaId);
-            } else {
-              this._selectedRooms.add(areaId);
-            }
-            this._render();
-          }
-          return;
-        }
-        el = el.parentElement;
       }
     });
   }

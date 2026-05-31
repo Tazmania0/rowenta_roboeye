@@ -18,7 +18,12 @@ const mapGroup = document.getElementById('map-group');
 // ─── Status polling ───────────────────────────────────────────────────────────
 export function startStatusPolling() {
   if (state.statusTimer) clearInterval(state.statusTimer);
+  let inFlight = false;
   const pollStatus = async () => {
+    // Skip this tick if the previous request hasn't resolved — prevents
+    // requests stacking against a slow robot / single-threaded proxy.
+    if (inFlight) return;
+    inFlight = true;
     try {
       const res = await api('/get/status');
       state.robotMode         = res.mode;
@@ -33,6 +38,7 @@ export function startStatusPolling() {
       await _updateCleaningGrid();
       _updateRobotStatusUI();
     } catch {}
+    finally { inFlight = false; }
   };
   pollStatus();
   state.statusTimer = setInterval(pollStatus, 5000);
@@ -155,13 +161,18 @@ export function updateRobotDot(pose) {
 
 export function startRobPosePolling() {
   if (state.robPoseTimer) clearInterval(state.robPoseTimer);
+  let inFlight = false;
   state.robPoseTimer = setInterval(async () => {
     if (document.visibilityState !== 'visible') return;
+    // Skip if the previous rob_pose request is still pending.
+    if (inFlight) return;
+    inFlight = true;
     try {
       const res = await api('/get/rob_pose');
       state.robPose = res;
       updateRobotDot(res);
     } catch {}
+    finally { inFlight = false; }
   }, 2000);
 }
 

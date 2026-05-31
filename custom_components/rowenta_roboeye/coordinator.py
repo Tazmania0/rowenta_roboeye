@@ -22,6 +22,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import CannotConnect, RobEyeApiClient
 from .const import (
@@ -508,8 +509,8 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         is now part of the regular tick; this method exists only so the
         existing __init__.py call site still works.
         """
-        await self._async_background_refresh(datetime.utcnow())
-        self._last_background_fetch = datetime.utcnow()
+        await self._async_background_refresh(dt_util.utcnow())
+        self._last_background_fetch = dt_util.utcnow()
 
     # ── Entity state helpers ───────────────────────────────────────────
 
@@ -530,7 +531,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ── Core update ───────────────────────────────────────────────────
 
     async def _async_update_data(self) -> dict[str, Any]:
-        now = datetime.utcnow()
+        now = dt_util.utcnow()
         data: dict[str, Any] = dict(self.data or {})
 
         try:
@@ -592,7 +593,9 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # ── Session lifecycle tracking ────────────────────────────
             was_cleaning = self._last_mode == MODE_CLEANING
-            now_docked   = not is_active and mode not in (MODE_CLEANING, MODE_GO_HOME)
+            # is_active already means mode is cleaning/go_home, so "not is_active"
+            # fully captures the docked/idle case.
+            now_docked   = not is_active
 
             if mode == MODE_CLEANING and self._last_mode != MODE_CLEANING:
                 self._robot_path = []
@@ -1187,16 +1190,28 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         while True:
             # ── Fix B: detect recharge-and-continue ──────────────────
             if self.is_recharging_mid_clean:
+                # A user-issued stop/go_home (priority 0) must be able to abort an
+                # otherwise multi-hour recharge wait.  The generic immediate-command
+                # check below is unreachable while this branch loops, so check it
+                # here first and bail so the worker can dispatch the urgent command.
+                if self._has_immediate_command_pending():
+                    LOGGER.debug(
+                        "RobEye: immediate command pending during recharge — "
+                        "aborting command-result poll"
+                    )
+                    return
                 LOGGER.info(
                     "RobEye: recharge-and-continue active "
                     "(mode=cleaning+charging=charging) — extending wait to %ds",
                     int(MODE_RECHARGE_CONTINUE_WAIT_S),
                 )
-                # Reset deadline; poll slowly to avoid hammering robot while charging
+                # Reset deadline; poll slowly to avoid hammering robot while charging.
+                # Use the interruptible sleep so an immediate command wakes us within
+                # the poll window instead of waiting the full interval.
                 deadline = (
                     asyncio.get_event_loop().time() + MODE_RECHARGE_CONTINUE_WAIT_S
                 )
-                await asyncio.sleep(MODE_RECHARGE_CONTINUE_POLL_S)
+                await self._interruptible_sleep(MODE_RECHARGE_CONTINUE_POLL_S)
                 continue
 
             if asyncio.get_event_loop().time() > deadline:
@@ -1552,6 +1567,28 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if hasattr(self, "async_update_listeners"):
             self.async_update_listeners()
+
+    @property
+    def has_paused_jobs(self) -> bool:
+        """True when at least one job was drained into _paused_jobs by a stop."""
+        return bool(self._paused_jobs)
+
+    async def async_stop_and_advance_or_home(self) -> None:
+        """Stop the current job, then advance to the next queued job or dock.
+
+        Single entry point for the vacuum entity / Stop button so they don't
+        reach into private queue state.  Because the stop command drains
+        pending work into _paused_jobs synchronously inside async_send_command,
+        the has_paused_jobs check below observes the post-drain state — the
+        advance/home decision is made atomically here in the coordinator.
+        """
+        await self.async_send_command(self.client.stop, label="stop(advance)")
+        if self.has_paused_jobs:
+            LOGGER.debug("stop+advance: pending jobs found — advancing to next")
+            await self.async_advance_to_next_job()
+        else:
+            LOGGER.debug("stop+advance: no pending jobs — going home")
+            await self.async_send_command(self.client.go_home, label="go_home")
 
     async def async_advance_to_next_job(self) -> None:
         """Re-enqueue saved jobs for execution, discarding the job that was stopped.
@@ -2066,10 +2103,15 @@ def _parse_map_entry(
     stats_raw = raw.get("statistics", {}) or {}
     lc = stats_raw.get("last_cleaned", {}) or {}
     never = lc.get("year", 2001) <= 2001
-    last_cleaned_str = (
-        None if never
-        else f"{lc['year']}-{lc['month']:02d}-{lc['day']:02d}"
-    )
+    # month/day may be absent even when year is set on some firmware payloads —
+    # use .get with safe defaults so a partial date never raises.
+    try:
+        last_cleaned_str = (
+            None if never
+            else f"{int(lc['year'])}-{int(lc.get('month', 1)):02d}-{int(lc.get('day', 1)):02d}"
+        )
+    except (TypeError, ValueError):
+        last_cleaned_str = None
 
     return {
         "map_id":       map_id,
@@ -2237,10 +2279,20 @@ def _extract_rob_pose(rob_pose: dict) -> dict | None:
     if not rob_pose.get("valid", False):
         return None
 
+    # A "valid" pose can still be missing coordinate fields on some firmware
+    # responses; guard against KeyError so a malformed payload degrades to "no
+    # fix" instead of crashing the whole update cycle (which only catches
+    # CannotConnect).
+    x = rob_pose.get("x1")
+    y = rob_pose.get("y1")
+    heading = rob_pose.get("heading")
+    if x is None or y is None or heading is None:
+        return None
+
     return {
-        "x":           rob_pose["x1"],
-        "y":           rob_pose["y1"],
-        "heading_deg": rob_pose["heading"],       # already degrees, no conversion
+        "x":           x,
+        "y":           y,
+        "heading_deg": heading,                   # already degrees, no conversion
         "is_tentative": rob_pose.get("is_tentative", False),
         "timestamp":   rob_pose.get("timestamp"), # monotonic counter for staleness
         "map_id":      rob_pose.get("map_id"),
