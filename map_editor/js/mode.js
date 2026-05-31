@@ -8,6 +8,10 @@ import { hideInstruction } from './modal.js';
 const mapSvg    = document.getElementById('map-svg');
 const statusMode = document.getElementById('status-mode');
 
+function clearAreaTransformHandles() {
+  mapSvg.querySelector('#area-transform-handles')?.remove();
+}
+
 export function setMode(mode) {
   state.mode = mode;
   mapSvg.setAttribute('class', `mode-${mode}`);
@@ -20,6 +24,8 @@ export function setMode(mode) {
 
   const modeNames = { select: 'Select', pan: 'Pan', split: 'Split', merge: 'Merge', block: 'No-Go Draw', spot: 'Spot Draw', goto: 'Go To' };
   statusMode.textContent = `Mode: ${modeNames[mode] || mode}`;
+
+  if (mode !== 'select') clearAreaTransformHandles();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ import { showToast, showSpinner, showInstruction, showModal } from './modal.js';
 import { highlightArea, highlightAreaSplit, renderAreaList, renderMap, getAreaName } from './render.js';
 import { loadMap } from './load.js';
 import { _updateSaveButton } from './mapops.js';
+import { clearAreaTransformHandles, renderAreaTransformHandles } from './area_move.js';
 
 const areaDetailEl = document.getElementById('area-detail');
 const mergeHintEl  = document.getElementById('merge-hint');
@@ -71,6 +72,7 @@ export function clearAreaSelection() {
   state.selectedAreaId = null;
   state.selectedAreaIds = new Set();
   highlightArea(null);
+  clearAreaTransformHandles();
   areaDetailEl.classList.remove('visible');
   updateSplitListUI(null);
   updateCleanSelectionButton();
@@ -99,6 +101,7 @@ export function onAreaClick(areaId, event = null) {
   // Normal select mode
   _setAreaSelection(areaId, event);
   highlightArea(state.selectedAreaId);
+  renderAreaTransformHandles(state.selectedAreaId);
   updateSplitListUI(state.selectedAreaId);
   updateCleanSelectionButton();
 

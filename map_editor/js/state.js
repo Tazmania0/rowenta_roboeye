@@ -14,6 +14,7 @@ export const state = {
   rectStart:   null,   // {x,y} SVG coords of first rect corner (drag-to-draw)
   rectMode:    null,   // 'block' | 'spot' | null
   areaDrag:    null,   // active no-go / spot reposition drag
+  areaTransform: null,  // active no-go / spot resize/rotate drag
   suppressNextClick: false,
   connected: false,
   exploreMapId:   null,   // map_id of current temporary/explore map
