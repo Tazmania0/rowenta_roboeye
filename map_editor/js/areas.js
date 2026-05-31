@@ -423,7 +423,7 @@ export function _renderAreaStats(area) {
   el.innerHTML = `<div class="panel-title">Statistics</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:11px">
       <span style="color:var(--muted)">Area</span><span>${areaM2} m2</span>
-      <span style="color:var(--muted)">Cleanings</span><span>${stats.cleaning_counter}</span>
+      <span style="color:var(--muted)">Cleanings</span><span>${Number(stats.cleaning_counter) || 0}</span>
       <span style="color:var(--muted)">Avg time</span><span>${avgMins}</span>
       <span style="color:var(--muted)">Last cleaned</span><span>${lastCleaned}</span>
     </div>`;

@@ -117,6 +117,30 @@ async def test_user_step_no_dedupe_when_serial_unknown():
 
 
 @pytest.mark.asyncio
+async def test_user_step_dedupes_serial_less_zeroconf_entry_by_host():
+    """A serial-less robot already added via zeroconf (unique_id = hostname) is
+    deduped when re-added manually by IP, matching on the stored host so no
+    duplicate entry is created."""
+    flow = _make_flow()
+    existing = MagicMock()
+    existing.unique_id = "robeye-abc.local"   # zeroconf hostname-based id
+    existing.data = {"host": "192.168.1.50", "hostname": "robeye-abc.local"}
+    flow._async_current_entries = MagicMock(return_value=[existing])
+    flow.hass.config_entries.async_update_entry = MagicMock()
+
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="")):
+        result = await flow.async_step_user({"host": "192.168.1.50"})
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "already_configured"
+    # Matched by stored host; no brand-new entry, IP refreshed on the match.
+    flow.async_set_unique_id.assert_not_called()
+    kwargs = flow.hass.config_entries.async_update_entry.call_args.kwargs
+    assert kwargs["data"]["host"] == "192.168.1.50"
+
+
+@pytest.mark.asyncio
 async def test_user_step_cannot_connect():
     flow = _make_flow()
 

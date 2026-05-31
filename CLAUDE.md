@@ -11,6 +11,7 @@ This file provides guidance for AI assistants working on this codebase.
 - **Install mechanism**: HACS (Home Assistant Community Store)
 - **Entity platforms**: Vacuum, Sensor, Binary Sensor, Button, Select, Switch
 - **Discovery**: mDNS/Zeroconf (`_robeye._tcp.local.`) with manual IP fallback
+- **Companion tool**: `map_editor/` — a standalone, browser-based map editor (vanilla-JS frontend + stdlib Python proxy server) for splitting/merging rooms, drawing no-go zones, and exploring new maps. Independent of Home Assistant; see "Map Editor" below.
 
 ---
 
@@ -26,15 +27,15 @@ rowenta_roboeye/
 │   ├── coordinator.py       # DataUpdateCoordinator — multi-endpoint polling hub
 │   ├── dashboard.py         # Auto-generates Lovelace dashboard; RobEyeDashboardManager
 │   ├── entity.py            # Shared base entity + entity-registry housekeeping helpers
-│   ├── vacuum.py            # StateVacuumEntity — main control entity
-│   ├── sensor.py            # Static + dynamic per-room sensor entities + live_map sensor
-│   ├── binary_sensor.py     # side_brush_left_stuck, side_brush_right_stuck, dustbin flags
-│   ├── button.py            # Clean All, Stop, Return Home, per-room clean buttons
+│   ├── vacuum.py            # StateVacuumEntity — main control entity; registers clean_room + remove_queue_entry services
+│   ├── sensor.py            # Static + per-room sensors + live_map, schedule, command-queue, selected-room-count sensors
+│   ├── binary_sensor.py     # side_brush_left_stuck, side_brush_right_stuck, dustbin present
+│   ├── button.py            # Clean All, Stop, Return Home, Clean Selected, per-room clean buttons
 │   ├── select.py            # Global + per-room fan speed, strategy, active-map selectors
-│   ├── switch.py            # Global/per-room deep clean, per-room selection, schedule switches
+│   ├── switch.py            # Global/per-room deep clean, per-room selection, per-task schedule switches
 │   ├── manifest.json        # Integration metadata, HA version floor, dependencies
 │   ├── strings.json         # UI label definitions
-│   ├── services.yaml        # Service schema for clean_room
+│   ├── services.yaml        # Service schemas: clean_room, remove_queue_entry (both registered in vacuum.py)
 │   ├── icons.json           # Entity icon mappings
 │   ├── translations/en.json # English UI translations
 │   ├── brand/               # HACS brand assets (icon.png, icon@2x.png, icon_dark.png,
@@ -52,11 +53,24 @@ rowenta_roboeye/
 │   ├── test_config_flow.py  # Config/options flow tests
 │   ├── test_coordinator.py  # Coordinator data-merge and polling tests
 │   ├── test_dashboard_entity_guard.py  # Dashboard entity-readiness guard tests
+│   ├── test_editor_server.py           # Map-editor proxy server IP-validation tests
+│   ├── test_init.py                    # async_setup/unload + init wiring helper tests
+│   ├── test_map_switch_atomic.py       # Snapshot-model map-switch + areas-cache tests
+│   ├── test_notifications_and_events.py# Event-log processing + brush/dustbin notification tests
 │   ├── test_select.py       # Select entity tests
 │   ├── test_sensor.py       # Sensor entity tests
+│   ├── test_sensor_values_and_path.py  # sensor_values GPIO parsing + live-map path accumulation tests
 │   ├── test_stale_entity_removal.py    # Stale/orphaned entity removal tests
 │   ├── test_switch.py       # Switch entity tests
 │   └── test_vacuum.py       # Vacuum entity tests
+├── map_editor/              # Standalone browser map editor (see "Map Editor" section)
+│   ├── rowenta-editor-server.py     # Stdlib HTTP proxy: serves editor + proxies /get,/set to robot:8080
+│   ├── launch-rowenta-editor.py     # Tkinter (or CLI) launcher that spawns the proxy server
+│   ├── rowenta-map-editor.html      # Editor single-page app shell
+│   ├── rowenta-map-editor.css       # Editor styles
+│   ├── map_editor.md                # (currently empty)
+│   ├── js/                          # ES-module frontend (api, state, render, split, merge, nogo, explore, …)
+│   └── android/                     # Android WebView wrapper (OUT OF SCOPE — not documented here)
 ├── conftest.py              # Root-level pytest stub for homeassistant package
 ├── pytest.ini               # asyncio_default_fixture_loop_scope = function
 ├── requirements-test.txt    # Test dependencies: aiohttp, pytest, pytest-asyncio
@@ -138,7 +152,9 @@ Robot Vacuum (LAN:8080)
 
 18. **Room selection toggles**: Per-room `RobEyeRoomSelectSwitch` entities (in switch.py) allow the user to select/deselect rooms for the "Clean Selected Rooms" command. Each entity ID follows the pattern `switch.{device_id}_map{map_id}_room_{area_id}_selected` (generated by `room_selection_entity_id()` in const.py). `SIGNAL_ROOM_SELECTION_CHANGED` is fired on every toggle so `RobEyeCleanSelectedButton` can update its availability immediately.
 
-19. **Cleaning strategy**: Global `RobEyeStrategySelect` (4 modes: Default/Normal/Walls & Corners/Deep). Per-room `RobEyeRoomStrategySelect` stores desired strategy per room (no Deep option — use per-room deep-clean switch). Global `RobEyeDeepCleanSwitch` is kept for backwards compatibility. `coordinator.cleaning_strategy` and `coordinator.last_non_deep_strategy` track state. The firmware only accepts `"normal"` or `"deep"` for `strategy_mode`; Default/Walls & Corners map to `"normal"` in API calls.
+19. **Cleaning strategy**: Global `RobEyeStrategySelect` (4 modes: Default/Normal/Walls & Corners/Deep). Per-room `RobEyeRoomStrategySelect` stores desired strategy per room (no Deep option — use per-room deep-clean switch). Global `RobEyeDeepCleanSwitch` is kept for backwards compatibility. `coordinator.cleaning_strategy` and `coordinator.last_non_deep_strategy` track state. **Two distinct firmware parameters exist** — do not conflate them:
+    - **Clean commands** (`/set/clean_all`, `/set/clean_map`) take a `cleaning_strategy_mode` query param carrying the **numeric** `STRATEGY_*` value (`"1"`–`"4"`). `clean_all()`/`clean_map()` in `api.py` map their `strategy_mode` argument onto this param.
+    - **`/set/modify_area`** (per-room settings write) takes a `strategy_mode` param that accepts **only `"normal"` or `"deep"`**; Default/Normal/Walls & Corners must all be sent as `"normal"`.
 
 20. **Incremental event log**: `/get/event_log` is polled every 30 s with a cursor (`_last_event_log_id`). The first fetch seeds the cursor without surfacing historical entries. Subsequent fetches deliver only new events; `_process_new_events` maps them to HA logbook entries and persistent notifications using the `EVENT_TYPE_*` constants in `const.py`.
 
@@ -234,8 +250,8 @@ All intervals are managed internally by timestamps in `_async_update_data`. The 
 
 - All user-facing strings must reference keys from `strings.json` — never hardcode UI text.
 - Validate connection via `api.test_connection()` (calls `get_status()`) before accepting the config entry.
-- Options flow must allow updating `host` and `map_id` without full re-setup.
-- Config entry stores `CONF_HOST` (IP string), `CONF_HOSTNAME` (mDNS hostname or same IP as fallback), `CONF_MAP_ID`, and `CONF_SERIAL` (fetched from robot at setup time; used to build stable `device_id`). `CONF_NAME` stores the user-provided friendly name.
+- Options flow allows updating `host` (IP) and `name` without full re-setup; stable IDs (`CONF_SERIAL`, internal `_device_id`, `CONF_MAP_ID`, `CONF_LAST_ACTIVE_MAP`) are preserved across the update.
+- Config entry stores `CONF_HOST` (IP string), `CONF_HOSTNAME` (mDNS hostname or same IP as fallback), `CONF_MAP_ID`, `CONF_LAST_ACTIVE_MAP` (last map chosen via the active-map select; persisted silently so the prior map is restored on restart), and `CONF_SERIAL` (fetched from robot at setup time; used to build stable `device_id`). `CONF_NAME` stores the user-provided friendly name. `CONF_HOST` is imported from `homeassistant.const`; the others live in `const.py`.
 
 ---
 
@@ -303,12 +319,15 @@ FAN_SPEED_LABELS       # {0: "default", 1: "normal", ...}  — 0 = per-room defa
 ```python
 AREA_STATE_CLEAN    = "clean"
 AREA_STATE_INACTIVE = "inactive"
-AREA_STATE_BLOCKING = "blocking"   # disabled for cleaning in RobEye app — skip entity creation
+AREA_STATE_BLOCKING = "blocking"   # no-go / avoidance zone — not a cleanable room
 AREA_TYPE_ROOM      = "room"
 AREA_TYPE_AVOIDANCE = "to_be_cleaned"
+
+# States for which NO HA entities are created (avoidance + inactive segments):
+AREA_STATES_SKIP    = frozenset({AREA_STATE_BLOCKING, AREA_STATE_INACTIVE})
 ```
 
-Skip entity creation for areas where `area.get("area_state") == AREA_STATE_BLOCKING`.
+Skip entity creation for areas whose `area_state` is in `AREA_STATES_SKIP` (i.e. `blocking` **or** `inactive`).
 
 ### Event Types
 
@@ -341,6 +360,21 @@ IMMEDIATE_COMMAND_NAMES = frozenset({"modify_area", "set_fan_speed"})
 ```
 
 Commands in this set are dispatched immediately without waiting in the serial queue.
+
+### Services
+
+Both services are **entity services** registered on the vacuum entity in `vacuum.py`
+via `platform.async_register_entity_service()` — they are not registered in `__init__.py`.
+
+```python
+SERVICE_CLEAN_ROOM         = "clean_room"          # handler: RobEyeVacuumEntity._async_clean_room
+SERVICE_REMOVE_QUEUE_ENTRY = "remove_queue_entry"  # handler: RobEyeVacuumEntity._async_remove_queue_entry
+```
+
+- `clean_room` — clean one or more rooms by area ID. Fields: `room_ids` (required list),
+  `fan_speed` (optional), `deep_clean` (optional bool). Documented in `services.yaml`.
+- `remove_queue_entry` — drop a pending command from the HA-side command queue.
+  Field: `pending_index` (default 0). Documented in `services.yaml`.
 
 ---
 
@@ -473,6 +507,82 @@ Do not manually create tags or releases — let CI handle it.
 - Enable debug logging: add `custom_components.rowenta_roboeye: debug` to HA logger config.
 - Check `coordinator.data` in HA Developer Tools > Template to inspect raw merged state.
 - The vacuum's web UI is at `http://<robot-ip>:8080` for direct API inspection.
+
+---
+
+## Map Editor (`map_editor/`)
+
+A **standalone, browser-based floor-map editor** for the same robots. It is fully
+independent of the Home Assistant integration — it shares no Python code with
+`custom_components/` and can run with HA stopped. It talks to the robot's RobEye
+API (port 8080) directly, through its own Python proxy. Use it to split/merge
+rooms, draw no-go ("blocking") and spot areas, reposition zones, rename rooms,
+explore/build new maps, and save maps back to the device.
+
+> **Scope note:** `map_editor/android/` (an Android WebView wrapper) is intentionally
+> **not documented here** and should be treated as out of scope for routine work.
+
+### Components
+
+| Path | Role |
+|------|------|
+| `rowenta-editor-server.py` | Stdlib-only HTTP server (`ThreadingHTTPServer`). Serves the editor HTML/CSS/JS and **proxies** `/get/*` and `/set/*` to `{robot_ip}:8080`. Hardened: private-LAN-only robot IP, DNS-rebinding + cross-origin guards when bound locally, no-redirect opener (SSRF hardening), `Cache-Control: no-store`. |
+| `launch-rowenta-editor.py` | Clickable Tkinter launcher (falls back to CLI when Tk is unavailable). Spawns the server as a subprocess, streams its logs, opens the browser. |
+| `rowenta-map-editor.html` / `.css` | Single-page-app shell and styles. |
+| `js/*.js` | ES-module frontend (no build step, no npm). See module map below. |
+| `map_editor.md` | Documentation stub — currently empty. |
+
+### Server (`rowenta-editor-server.py`)
+
+- **Dependencies**: Python 3.6+ standard library only (`http.server`, `urllib`,
+  `json`, `ipaddress`, `threading`, `webbrowser`, `mimetypes`, `pathlib`). No third-party packages.
+- **Ports**: editor/proxy on `DEFAULT_PORT = 8765`; robot on `ROBOT_PORT = 8080`.
+- **Modes**: `PROXY_MODE` (default — binds loopback, `_enforce_local = True`) and
+  `INGRESS_MODE` (Home Assistant add-on — binds `0.0.0.0` behind trusted HA ingress and
+  strips the ingress path prefix). The add-on `run.sh` packaging is **not in this repo**.
+- **Routes**: `GET /` → editor HTML; `GET|POST /config` → read/update the target robot IP
+  (`{robot_ip, proxy_mode}`); `GET /get/*` and `GET /set/*` → proxied to the robot;
+  static `*.css`/`*.js` from `STATIC_DIR` (with path-traversal guard); `OPTIONS` → 204.
+- **`_validate_robot_ip()`** accepts only private unicast LAN addresses; rejects public,
+  loopback, link-local (e.g. `169.254.169.254`), the unspecified address (`0.0.0.0`),
+  multicast, and reserved ranges. This is the function covered by `tests/test_editor_server.py`.
+
+### Frontend (`js/`)
+
+Single shared mutable `state` object (`state.js`); no framework. Edits mutate `state.*`
+and call explicit `renderMap()` / `renderAreaList()` re-renders.
+
+| Module | Role |
+|--------|------|
+| `main.js` | Entry point: wires the toolbar, runs connect/init, hosts the `?test=1` self-tests. |
+| `api.js` | HTTP helpers (`api()`, `apiText()`), `setProxyRobotIP()` (POST `/config`), `pollCmd()`. |
+| `state.js` | Shared runtime state (maps, areas, selection, mode, robot pose, transforms). |
+| `config.js` | Runtime mode detection (DIRECT/PROXY/INGRESS) + room/floor/fan/strategy enums. |
+| `load.js` | `loadMaps()` / `loadMap()` / `loadLastSessionGrid()` — fetch + populate. |
+| `render.js` | SVG rendering of walls, dock, area polygons; sidebar + map-chip rendering. |
+| `normalize.js` | Normalizes area field names across firmware variants. |
+| `coords.js` | Coordinate transforms (robot↔SVG, Y-flip) and split-line geometry. |
+| `areas.js` | Area selection, detail-panel edits, `saveArea()` (POST `/set/modify_area`), block toggle. |
+| `split.js` / `merge.js` | Room split / merge flows (+ locating the resulting area). |
+| `nogo.js` | Draw no-go (`blocking`) and spot (`clean`) areas via `/set/add_area`. |
+| `area_move.js` | Drag-to-reposition no-go/spot areas (`/set/modify_area` with new points). |
+| `explore.js` | New-map exploration flow with phase bar (running→drawing→naming→saving). |
+| `mapops.js` | Save / rename map, go-home, reset-stats operations. |
+| `robot.js` | Live status + rob-pose polling, click-to-navigate ("go to"), proposed no-go. |
+| `mode.js` / `events.js` / `modal.js` / `overlay.js` | Mode switching, input handlers/shortcuts, modal/toast UI, SVG preview overlays. |
+
+### Run / test
+
+```bash
+# Launcher (GUI or CLI):
+python3 map_editor/launch-rowenta-editor.py [robot-ip] [--port 8765] [--no-browser]
+# Server directly:
+python3 map_editor/rowenta-editor-server.py 192.168.1.50 --port 8765
+```
+
+- Python tests: `tests/test_editor_server.py` (IP-validation; loads the hyphenated server
+  module by path). Run with the rest of the suite via `pytest tests/`.
+- Frontend self-tests: open the editor with `?test=1` to run in-browser assertions.
 
 ---
 

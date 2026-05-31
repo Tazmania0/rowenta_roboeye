@@ -45,6 +45,7 @@ export async function pollCmd(cmdId, timeoutMs = 15000, onTick = null) {
   const deadline = Date.now() + timeoutMs;
   const startMs  = Date.now();
   let first = true;
+  let seen  = false;
   while (Date.now() < deadline) {
     // Poll immediately, then sleep between polls, so a command that finishes
     // quickly is detected without waiting a full interval first.
@@ -56,7 +57,14 @@ export async function pollCmd(cmdId, timeoutMs = 15000, onTick = null) {
 
     if (onTick) onTick(Math.floor((Date.now() - startMs) / 1000));
 
-    if (!cmd) continue;
+    if (!cmd) {
+      // Once we've seen the command, its later absence means the robot finished
+      // it and dropped it from the result ring buffer — treat as done rather
+      // than polling until a spurious "Command timeout".
+      if (seen) return true;
+      continue;
+    }
+    seen = true;
     const st = cmd.state ?? cmd.status;
     if (['done', 'success', 'completed', 'complete', 'finished'].includes(st)) return true;
     if (cmd.error_code && cmd.error_code !== 0) throw new Error(`Command ${cmdId} error ${cmd.error_code}`);

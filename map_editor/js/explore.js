@@ -150,9 +150,12 @@ export async function executeSaveMap(mapName) {
     _showPhaseBar(null);
     _hideSaveMapButton();
     await loadMaps();
-    const savedMap = state.maps.find(m =>
-      (m.map_meta_data || '').trim() === mapName.trim()
-    ) ?? state.maps[state.maps.length - 1];
+    // Prefer the map_id we just saved (unambiguous); fall back to a name match,
+    // then to the most recent map, so a duplicate/blank name can't select the
+    // wrong floor.
+    const savedMap = state.maps.find(m => String(m.map_id) === String(mapId))
+      ?? state.maps.find(m => mapName && (m.map_meta_data || '').trim() === mapName.trim())
+      ?? state.maps[state.maps.length - 1];
     if (savedMap) await loadMap(savedMap.map_id);
     showToast(`Map "${mapName || 'unnamed'}" saved permanently`, 'success');
 

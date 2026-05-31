@@ -55,7 +55,9 @@ export async function loadMaps() {
   setStatus(`Connected — ${state.maps.length} map(s)`, 'ok');
   state.connected = true;
   _updateDeleteBtn();
-  if (state.maps.length > 0) loadMap(state.maps[0].map_id);
+  // Await so callers (and the status line) reflect the map actually being
+  // loaded rather than resolving while loadMap is still in flight.
+  if (state.maps.length > 0) await loadMap(state.maps[0].map_id);
 }
 
 export async function reloadMapChips() {

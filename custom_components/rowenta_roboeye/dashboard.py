@@ -42,7 +42,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .const import AREA_STATES_SKIP, CLEANING_MODE_ALL, DOMAIN, SCHEDULE_DAYS, room_selection_entity_id
+from .const import AREA_STATES_SKIP, CLEANING_MODE_ALL, DOMAIN, SCHEDULE_DAYS, room_selection_entity_id, safe_int
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -150,8 +150,11 @@ def _schedule_label(entry: dict[str, Any], rooms: list[dict[str, Any]]) -> str:
         SCHEDULE_DAYS.get(d, str(d)) for d in sorted(t.get("days_of_week", []))
     )
     time_str = f"{t.get('hour', 0):02d}:{t.get('min', 0):02d}"
-    if int(task.get("cleaning_mode", CLEANING_MODE_ALL)) != CLEANING_MODE_ALL:
-        area_ids = [int(a) for a in task.get("parameters", [])]
+    # Firmware schedule fields are not guaranteed numeric; coerce defensively so
+    # a malformed entry can't raise and put the dashboard into a perpetual
+    # rebuild-retry loop.
+    if safe_int(task.get("cleaning_mode", CLEANING_MODE_ALL), CLEANING_MODE_ALL) != CLEANING_MODE_ALL:
+        area_ids = [safe_int(a) for a in task.get("parameters", [])]
         room_map = {r["id"]: r["name"] for r in rooms}
         rooms_str = " + ".join(room_map.get(a, str(a)) for a in area_ids) or "Rooms"
     else:

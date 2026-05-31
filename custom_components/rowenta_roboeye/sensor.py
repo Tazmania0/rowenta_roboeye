@@ -413,7 +413,7 @@ async def async_setup_entry(
         )
 
     # Build sensors for ALL known maps (active + inactive).
-    for map_id in list(coordinator._areas_snapshot.keys()):
+    for map_id in coordinator.known_map_ids:
         areas_list = coordinator.areas_for(map_id)
         if not areas_list:
             continue
@@ -747,7 +747,7 @@ class RobEyeQueueStatusSensor(RobEyeEntity, SensorEntity):
         events = self.coordinator._recent_events[-10:]
         recent = [
             {
-                "type": EVENT_TYPE_LABELS.get(e["type_id"], e.get("type", "")),
+                "type": EVENT_TYPE_LABELS.get(e.get("type_id"), e.get("type", "")),
                 "time": (
                     f"{e['timestamp']['hour']:02d}:{e['timestamp']['min']:02d}"
                     if "timestamp" in e else ""

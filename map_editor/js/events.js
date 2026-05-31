@@ -177,6 +177,7 @@ export function initEvents(onAreaClick) {
       const pt = eventToSVGPoint(e);
       const rs = state.rectStart;
       state.rectStart = null;
+      // (suppression of the trailing click is set in the execute branches below)
 
       const dx = Math.abs(pt.x - rs.x);
       const dy = Math.abs(pt.y - rs.y);
@@ -186,6 +187,10 @@ export function initEvents(onAreaClick) {
         return;
       }
 
+      // A real drag just completed; suppress the trailing click so it does not
+      // also fire handleBlockClick/handleSpotClick and push a stray point into
+      // state.splitPoints (which would corrupt the next draw).
+      state.suppressNextClick = true;
       if (state.rectMode === 'block') {
         state.rectMode = null;
         executeNogo(rs.x, rs.y, pt.x, pt.y);
@@ -194,6 +199,16 @@ export function initEvents(onAreaClick) {
         executeSpot(rs.x, rs.y, pt.x, pt.y);
       }
     }
+  });
+
+  // ── Abort an in-progress area drag if the pointer is released outside the
+  // window or focus is lost.  Without this, state.areaDrag stays set and every
+  // subsequent mousemove keeps dragging the polygon with no button held.
+  window.addEventListener('blur', () => {
+    if (state.areaDrag) finishAreaDrag();
+  });
+  document.addEventListener('pointercancel', () => {
+    if (state.areaDrag) finishAreaDrag();
   });
 
   // ── Scroll zoom

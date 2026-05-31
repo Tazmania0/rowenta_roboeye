@@ -59,12 +59,24 @@ export function computeSplitPoints(area, lineA, lineB) {
   const pts = area.points.map(p => robotToSVG(p.x, p.y));
   const hits = [];
   const n = pts.length;
-  for (let i = 0; i < n && hits.length < 2; i++) {
+  for (let i = 0; i < n; i++) {
     const p1 = pts[i], p2 = pts[(i+1)%n];
     const pt = lineIntersect(lineA, lineB, p1, p2);
     if (pt) hits.push(pt);
   }
   if (hits.length < 2) return null;
+  // A split line through a concave (e.g. L-shaped) room can cross more than two
+  // edges; the first two in vertex order are not necessarily the intended
+  // entry/exit pair. Pick the two intersections farthest apart so the split
+  // spans the whole room.
+  let a = hits[0], b = hits[1], best = -1;
+  for (let i = 0; i < hits.length; i++) {
+    for (let j = i + 1; j < hits.length; j++) {
+      const dx = hits[i].x - hits[j].x, dy = hits[i].y - hits[j].y;
+      const d = dx * dx + dy * dy;
+      if (d > best) { best = d; a = hits[i]; b = hits[j]; }
+    }
+  }
   // Convert back to robot integer coords
-  return hits.map(p => svgToRobot(p.x, p.y));
+  return [a, b].map(p => svgToRobot(p.x, p.y));
 }
