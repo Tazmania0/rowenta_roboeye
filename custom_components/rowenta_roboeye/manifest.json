@@ -11,7 +11,8 @@
   "config_flow": true,
   "dependencies": [
     "zeroconf",
-    "http"
+    "http",
+    "persistent_notification"
   ],
   "documentation": "https://github.com/Tazmania0/rowenta_roboeye",
   "integration_type": "device",
