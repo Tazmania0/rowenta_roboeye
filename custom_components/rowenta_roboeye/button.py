@@ -6,15 +6,18 @@ Dynamic room clean buttons are added without reload via SIGNAL_AREAS_UPDATED.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     AREA_STATES_SKIP,
+    MAINTENANCE_NOTIFICATION_PREFIX,
     DOMAIN,
     FAN_SPEED_MAP,
     FAN_SPEED_REVERSE_MAP,
@@ -52,6 +55,7 @@ async def async_setup_entry(
         RobEyeCleanAllButton(coordinator),
         RobEyeCleanSelectedButton(coordinator),
     ]
+    entities.extend(build_maintenance_buttons(coordinator))
 
     # Per-map entity tracking: map_id -> {area_id -> entity}
     known_entities_by_map: dict[str, dict] = {}
@@ -231,6 +235,106 @@ def _build_room_button_entities(
 class RobEyeBaseButton(RobEyeEntity, ButtonEntity):
     def __init__(self, coordinator: RobEyeCoordinator) -> None:
         super().__init__(coordinator)
+
+
+# ── Maintenance reset buttons ──────────────────────────────────────────
+
+
+@dataclass(frozen=True, kw_only=True)
+class RobEyeMaintenanceResetDescription:
+    """Description for a maintenance counter reset button."""
+
+    key: str               # MaintenanceStore component key
+    translation_key: str
+    entity_suffix: str
+    icon: str
+    wet_only: bool = False
+
+
+MAINTENANCE_RESET_BUTTONS: tuple[RobEyeMaintenanceResetDescription, ...] = (
+    RobEyeMaintenanceResetDescription(
+        key="main_brush_replace", translation_key="reset_main_brush_replaced",
+        entity_suffix="reset_main_brush_replaced", icon="mdi:brush",
+    ),
+    RobEyeMaintenanceResetDescription(
+        key="side_brush_replace", translation_key="reset_side_brush_replaced",
+        entity_suffix="reset_side_brush_replaced", icon="mdi:rotate-right",
+    ),
+    RobEyeMaintenanceResetDescription(
+        key="mop_pad_replace", translation_key="reset_mop_pad_replaced",
+        entity_suffix="reset_mop_pad_replaced", icon="mdi:mop", wet_only=True,
+    ),
+    RobEyeMaintenanceResetDescription(
+        key="main_brush_clean", translation_key="reset_main_brush_cleaned",
+        entity_suffix="reset_main_brush_cleaned", icon="mdi:brush",
+    ),
+    RobEyeMaintenanceResetDescription(
+        key="side_brush_clean", translation_key="reset_side_brush_cleaned",
+        entity_suffix="reset_side_brush_cleaned", icon="mdi:rotate-right",
+    ),
+    RobEyeMaintenanceResetDescription(
+        key="dustbin_clean", translation_key="reset_dustbin_emptied",
+        entity_suffix="reset_dustbin_emptied", icon="mdi:delete-empty",
+    ),
+    RobEyeMaintenanceResetDescription(
+        key="filter_clean", translation_key="reset_filter_cleaned",
+        entity_suffix="reset_filter_cleaned", icon="mdi:air-filter",
+    ),
+    RobEyeMaintenanceResetDescription(
+        key="drop_sensor_clean", translation_key="reset_drop_sensors_cleaned",
+        entity_suffix="reset_drop_sensors_cleaned", icon="mdi:leak",
+    ),
+)
+
+
+class RobEyeMaintenanceResetButton(RobEyeBaseButton):
+    """Records a maintenance action — stores current totals as the new baseline."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        coordinator: RobEyeCoordinator,
+        description: RobEyeMaintenanceResetDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self._desc = description
+        self._attr_translation_key = description.translation_key
+        self._attr_icon = description.icon
+        self._attr_unique_id = f"{description.entity_suffix}_{coordinator.device_id}"
+        self.entity_id = f"button.{coordinator.device_id}_{description.entity_suffix}"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.maintenance is not None
+
+    async def async_press(self) -> None:
+        if self.coordinator.maintenance is None:
+            LOGGER.warning("Maintenance store not ready; ignoring reset press")
+            return
+        ts = self.coordinator.perm_total_cleaning_time
+        mm2 = self.coordinator.perm_total_area_cleaned
+        await self.coordinator.maintenance.async_reset(self._desc.key, ts, mm2)
+        # Dismiss any matching maintenance notification.
+        from homeassistant.components import persistent_notification
+
+        persistent_notification.async_dismiss(
+            self.hass,
+            f"{MAINTENANCE_NOTIFICATION_PREFIX}{self._desc.key}",
+        )
+        self.coordinator.async_update_listeners()
+        LOGGER.info("Maintenance reset pressed: %s", self._desc.key)
+
+
+def build_maintenance_buttons(
+    coordinator: RobEyeCoordinator,
+) -> list[ButtonEntity]:
+    """Build all maintenance reset buttons for the device."""
+    return [
+        RobEyeMaintenanceResetButton(coordinator, desc)
+        for desc in MAINTENANCE_RESET_BUTTONS
+        if not desc.wet_only or coordinator.has_wet_support
+    ]
 
 
 class RobEyeGoHomeButton(RobEyeBaseButton):

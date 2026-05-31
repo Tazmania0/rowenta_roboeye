@@ -527,6 +527,58 @@ def _build_config(
         "cards": stats_cards,
     }
 
+    # ── View: Maintenance ─────────────────────────────────────────────
+    # Standard `entities` cards (no external custom card dependency).
+    view_maintenance: dict[str, Any] = {
+        "title": "Maintenance",
+        "path": "maintenance",
+        "icon": "mdi:tools",
+        "cards": [
+            {
+                "type": "entities",
+                "title": "🔄 Replacement (runtime)",
+                "entities": [
+                    {"entity": f"sensor.{_d}_main_brush_runtime", "name": "Main Brush Runtime"},
+                    {"entity": f"button.{_d}_reset_main_brush_replaced", "name": "Mark Main Brush Replaced"},
+                    {"entity": f"sensor.{_d}_side_brush_runtime", "name": "Side Brush Runtime"},
+                    {"entity": f"button.{_d}_reset_side_brush_replaced", "name": "Mark Side Brush Replaced"},
+                    {"entity": f"sensor.{_d}_mop_pad_runtime", "name": "Mop Pad Runtime"},
+                    {"entity": f"button.{_d}_reset_mop_pad_replaced", "name": "Mark Mop Pad Replaced"},
+                ],
+            },
+            {
+                "type": "entities",
+                "title": "🧹 Cleaning (area since last)",
+                "entities": [
+                    {"entity": f"sensor.{_d}_main_brush_area_since_clean", "name": "Main Brush"},
+                    {"entity": f"button.{_d}_reset_main_brush_cleaned", "name": "Mark Main Brush Cleaned"},
+                    {"entity": f"sensor.{_d}_side_brush_area_since_clean", "name": "Side Brush"},
+                    {"entity": f"button.{_d}_reset_side_brush_cleaned", "name": "Mark Side Brush Cleaned"},
+                    {"entity": f"sensor.{_d}_dustbin_area_since_empty", "name": "Dustbin"},
+                    {"entity": f"button.{_d}_reset_dustbin_emptied", "name": "Mark Dustbin Emptied"},
+                    {"entity": f"sensor.{_d}_filter_area_since_clean", "name": "Filter"},
+                    {"entity": f"button.{_d}_reset_filter_cleaned", "name": "Mark Filter Cleaned"},
+                    {"entity": f"sensor.{_d}_drop_sensor_area_since_clean", "name": "Drop Sensors"},
+                    {"entity": f"button.{_d}_reset_drop_sensors_cleaned", "name": "Mark Drop Sensors Cleaned"},
+                ],
+            },
+            {
+                "type": "entities",
+                "title": "⚠️ Alerts",
+                "entities": [
+                    {"entity": f"binary_sensor.{_d}_main_brush_due", "name": "Main Brush Replacement Due"},
+                    {"entity": f"binary_sensor.{_d}_side_brush_due", "name": "Side Brush Replacement Due"},
+                    {"entity": f"binary_sensor.{_d}_mop_pad_due", "name": "Mop Pad Replacement Due"},
+                    {"entity": f"binary_sensor.{_d}_main_brush_clean_due", "name": "Main Brush Cleaning Due"},
+                    {"entity": f"binary_sensor.{_d}_side_brush_clean_due", "name": "Side Brush Cleaning Due"},
+                    {"entity": f"binary_sensor.{_d}_dustbin_empty_due", "name": "Dustbin Emptying Due"},
+                    {"entity": f"binary_sensor.{_d}_filter_clean_due", "name": "Filter Cleaning Due"},
+                    {"entity": f"binary_sensor.{_d}_drop_sensor_clean_due", "name": "Drop Sensor Cleaning Due"},
+                ],
+            },
+        ],
+    }
+
     # ── View 4: Map ───────────────────────────────────────────────────
     if not has_maps:
         view_map: dict[str, Any] = {
@@ -547,7 +599,7 @@ def _build_config(
                 }
             ],
         }
-    views = [view_control, view_rooms, view_stats, view_map]
+    views = [view_control, view_rooms, view_stats, view_maintenance, view_map]
 
     return {
         "title": title,
