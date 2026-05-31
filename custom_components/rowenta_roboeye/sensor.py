@@ -747,7 +747,7 @@ class RobEyeQueueStatusSensor(RobEyeEntity, SensorEntity):
         events = self.coordinator._recent_events[-10:]
         recent = [
             {
-                "type": EVENT_TYPE_LABELS.get(e["type_id"], e.get("type", "")),
+                "type": EVENT_TYPE_LABELS.get(e.get("type_id"), e.get("type", "")),
                 "time": (
                     f"{e['timestamp']['hour']:02d}:{e['timestamp']['min']:02d}"
                     if "timestamp" in e else ""

@@ -191,9 +191,15 @@ export async function executeGoTo(svgX, svgY) {
   ];
   for (const path of candidates) {
     const url  = USE_PROXY ? path : `http://${config.robotIP}:${ROBOT_PORT}${path}`;
-    const resp = await fetch(url); const body = await resp.text();
-    console.log(`[goto] ${path.split('?')[1].substring(0, 40)} → ${resp.status} ${body}`);
-    if (resp.ok) { showToast(`Going to (${p.x}, ${p.y})`, 'success'); setMode('select'); return; }
+    try {
+      const resp = await fetch(url); const body = await resp.text();
+      console.log(`[goto] ${path.split('?')[1].substring(0, 40)} → ${resp.status} ${body}`);
+      if (resp.ok) { showToast(`Going to (${p.x}, ${p.y})`, 'success'); setMode('select'); return; }
+    } catch (err) {
+      // Network error on this format — try the next candidate rather than
+      // aborting the whole fallback loop with an unhandled rejection.
+      console.log(`[goto] ${path.split('?')[1].substring(0, 40)} → threw ${err}`);
+    }
   }
   showToast('GoTo: all formats failed — check console', 'error'); setMode('select');
 }

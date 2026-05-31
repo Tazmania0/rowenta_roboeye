@@ -120,11 +120,16 @@ async def async_setup_entry(
         for item in coordinator.schedule.get("schedule", []):
             if not isinstance(item, dict):
                 continue
-            task_id = item.get("task_id")
-            if task_id is None or int(task_id) in already_known:
+            raw_task_id = item.get("task_id")
+            if raw_task_id is None:
                 continue
-            new_entities.append(RobEyeScheduleSwitch(coordinator, int(task_id)))
-            new_ids.add(int(task_id))
+            # Firmware fields are not guaranteed numeric; degrade gracefully
+            # instead of raising and aborting the whole platform setup.
+            task_id = safe_int(raw_task_id, -1)
+            if task_id < 0 or task_id in already_known:
+                continue
+            new_entities.append(RobEyeScheduleSwitch(coordinator, task_id))
+            new_ids.add(task_id)
         return new_entities, new_ids
 
     # Migration: re-enable entities disabled by the old disable/enable model.

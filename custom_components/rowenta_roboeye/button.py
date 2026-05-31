@@ -24,8 +24,10 @@ from .const import (
     SIGNAL_MAPS_UPDATED,
     SIGNAL_ROOM_SELECTION_CHANGED,
     STRATEGY_DEEP,
+    STRATEGY_NORMAL,
     STRATEGY_REVERSE_MAP,
     STRATEGY_DEFAULT,
+    STRATEGY_WALLS_CORNERS,
     room_selection_entity_id,
 )
 from .coordinator import RobEyeCoordinator
@@ -301,16 +303,22 @@ class RobEyeCleanAllButton(RobEyeBaseButton):
                     strategy = STRATEGY_DEEP
                     break  # one deep-clean room → deep for the whole run
 
-            # If no room forced deep-clean, check per-room strategy selects.
+            # If no room forced deep-clean, check per-room strategy selects and
+            # escalate to the most intensive strategy requested by any room.
+            # Intensity order (low→high): Default (auto) < Normal < Walls & Corners.
             if strategy != STRATEGY_DEEP:
+                _strategy_order = {
+                    STRATEGY_DEFAULT: 0,
+                    STRATEGY_NORMAL: 1,
+                    STRATEGY_WALLS_CORNERS: 2,
+                }
                 for area in areas:
                     area_id = str(area.get("id"))
                     sel_id = f"select.{dev}_map{map_id}_room_{area_id}_strategy"
                     sel_state = hass.states.get(sel_id)
                     if sel_state is not None and sel_state.state in STRATEGY_REVERSE_MAP:
                         room_strategy = STRATEGY_REVERSE_MAP[sel_state.state]
-                        # Escalate to the most intensive strategy found.
-                        if room_strategy != STRATEGY_DEFAULT and strategy == STRATEGY_DEFAULT:
+                        if _strategy_order.get(room_strategy, 0) > _strategy_order.get(strategy, 0):
                             strategy = room_strategy
 
             # Per-room fan speed: use the most intensive speed found across rooms.
