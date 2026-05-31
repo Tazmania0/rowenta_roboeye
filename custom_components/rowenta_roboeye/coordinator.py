@@ -1800,12 +1800,17 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
 
         items = []
+        active_command_name = ""
         if self._active_command is not None:
+            active_command_name = getattr(self._active_command[2], "__name__", "")
             items.append(self._active_command)
         # Also include the inflight clean command when the active slot holds a
         # control command (stop/go_home/resume) so the paused room still contributes
         # to the total estimate.
-        if self._inflight_clean_command is not None:
+        if (
+            self._inflight_clean_command is not None
+            and active_command_name not in ("clean_map", "clean_all")
+        ):
             _ic_coro, _ic_kwargs, _ = self._inflight_clean_command
             items.append((1, 0, _ic_coro, (), _ic_kwargs))
         if self._paused_clean_command is not None:

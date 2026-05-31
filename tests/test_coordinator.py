@@ -1682,6 +1682,28 @@ async def test_queue_eta_sums_all_queued_jobs(coordinator):
 
 
 @pytest.mark.asyncio
+async def test_queue_eta_does_not_double_count_active_single_room(coordinator):
+    """Active clean_map is also kept as inflight metadata, but ETA counts it once."""
+    import json as _json
+
+    coordinator.data = {DATA_STATUS: {"mode": "cleaning", "charging": "not_charging"}}
+    coordinator._areas_snapshot["3"] = AreaSnapshot.from_blob({"areas": [
+        {"id": 31, "area_meta_data": _json.dumps({"name": "office"}),
+         "statistics": {"average_cleaning_time": 600000}},   # 600 s
+    ]})
+
+    async def fake_clean_map(**kwargs):
+        return {"cmd_id": 1}
+
+    fake_clean_map.__name__ = "clean_map"
+    kwargs = {"map_id": "3", "area_ids": "31"}
+    coordinator._active_command = (1, 1, fake_clean_map, (), kwargs)
+    coordinator._inflight_clean_command = (fake_clean_map, kwargs, 123)
+
+    assert coordinator.queue_eta_seconds == 600
+
+
+@pytest.mark.asyncio
 async def test_queue_eta_none_during_recharge(coordinator):
     """ETA returns None during recharge-and-continue — time is indeterminate."""
     coordinator.data = {DATA_STATUS: {
