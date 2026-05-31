@@ -8,6 +8,7 @@ import { highlightArea, highlightAreaSplit, renderAreaList, renderMap, getAreaNa
 import { loadMap } from './load.js';
 import { _updateSaveButton } from './mapops.js';
 import { clearAreaTransformHandles, renderAreaTransformHandles } from './area_move.js';
+import { updateEtaChip } from './eta.js';
 
 const areaDetailEl = document.getElementById('area-detail');
 const mergeHintEl  = document.getElementById('merge-hint');
@@ -76,6 +77,7 @@ export function clearAreaSelection() {
   areaDetailEl.classList.remove('visible');
   updateSplitListUI(null);
   updateCleanSelectionButton();
+  updateEtaChip();
 }
 
 export function onAreaClick(areaId, event = null) {
@@ -104,6 +106,7 @@ export function onAreaClick(areaId, event = null) {
   renderAreaTransformHandles(state.selectedAreaId);
   updateSplitListUI(state.selectedAreaId);
   updateCleanSelectionButton();
+  updateEtaChip();
 
   const area = state.areas.find(a => a.area_id === state.selectedAreaId);
   if (!area) {
@@ -117,6 +120,7 @@ export function onAreaClick(areaId, event = null) {
     state.selectedAreaId = area.area_id;
     state.selectedAreaIds = new Set([area.area_id]);
     updateCleanSelectionButton();
+    updateEtaChip();
     return;
   }
 

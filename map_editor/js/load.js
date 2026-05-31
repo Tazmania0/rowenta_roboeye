@@ -7,6 +7,7 @@ import { extractAreas } from './normalize.js';
 import { renderMap, renderAreaList, renderMapChips } from './render.js';
 import { showToast, showSpinner, setStatus, showModal, hideInstruction } from './modal.js';
 import { fitToScreen } from './mode.js';
+import { updateEtaChip } from './eta.js';
 
 const emptyState = document.getElementById('empty-state');
 
@@ -170,6 +171,7 @@ export async function loadMap(mapId) {
     state.mapHasUnsavedEdits = false;
     renderMap(walls, dock);
     renderAreaList();
+    updateEtaChip();
     const btnCleanArea = document.getElementById('btn-clean-area');
     if (btnCleanArea) {
       btnCleanArea.disabled = true;

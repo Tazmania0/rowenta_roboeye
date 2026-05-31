@@ -31,6 +31,7 @@ export const state = {
   robotErrorCode:       null,   // number | null
   robotCleaningTimeSec: null,   // number | null (seconds)
   robotAreaCleanedCm2:  null,   // number | null
+  robotAreaIds:         [],     // current cleaning area ids from /get/status
   cleaningGrid:         null,
   lastSessionGrid:      null,
   lastSessionGridMapId: null,
