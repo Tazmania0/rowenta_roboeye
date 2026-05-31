@@ -386,14 +386,28 @@ export async function finishAreaTransform() {
   if (!drag) return;
 
   const area = state.areas.find(a => String(a.area_id) === String(drag.areaId));
-  mapSvg.querySelector(`polygon[data-area-id="${drag.areaId}"]`)?.classList.remove('area-dragging');
+  const poly = mapSvg.querySelector(`polygon[data-area-id="${drag.areaId}"]`);
+  poly?.classList.remove('area-dragging');
   if (!area || !drag.moved) {
+    if (poly) poly.setAttribute('points', pointsToSvgAttr(drag.originalPoints));
     if (area) renderAreaTransformHandles(area.area_id);
     return;
   }
 
   updateAreaLocalPoints(area, drag.currentPoints);
   await commitAreaGeometry(area, drag.originalPoints, drag.type === 'rotate' ? 'Area rotated' : 'Area resized');
+}
+
+export function cancelAreaTransform() {
+  const drag = state.areaTransform;
+  state.areaTransform = null;
+  if (!drag) return;
+
+  const area = state.areas.find(a => String(a.area_id) === String(drag.areaId));
+  const poly = mapSvg.querySelector(`polygon[data-area-id="${drag.areaId}"]`);
+  poly?.classList.remove('area-dragging');
+  if (poly) poly.setAttribute('points', pointsToSvgAttr(drag.originalPoints));
+  if (area && state.mode === 'select') renderAreaTransformHandles(area.area_id);
 }
 
 export function startAreaDrag(areaId, startSvg) {
