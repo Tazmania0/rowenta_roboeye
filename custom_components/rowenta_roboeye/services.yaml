@@ -42,3 +42,28 @@ clean_room:
       example: true
       selector:
         boolean:
+
+remove_queue_entry:
+  name: Remove queued command
+  description: >
+    Drop a pending command from the integration's serial command queue before
+    it is dispatched to the robot.  Useful for cancelling a queued room clean
+    that has not started yet.  Does not affect the command currently executing.
+  target:
+    entity:
+      integration: rowenta_roboeye
+      domain: vacuum
+  fields:
+    pending_index:
+      name: Pending index
+      description: >
+        Zero-based position of the pending command to remove (0 = the next
+        command that would run).  Defaults to 0.
+      required: false
+      default: 0
+      example: 0
+      selector:
+        number:
+          min: 0
+          mode: box
+

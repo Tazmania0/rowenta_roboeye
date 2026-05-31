@@ -303,6 +303,8 @@ Toggled via `GET /set/modify_scheduled_task?task_id=N&enabled=0\|1`. Schedule sw
 
 ## Services
 
+Both services target the main vacuum entity.
+
 ### `rowenta_roboeye.clean_room`
 
 Clean specific rooms by area ID — useful in automations.
@@ -312,10 +314,26 @@ service: rowenta_roboeye.clean_room
 target:
   entity_id: vacuum.ser120_abc123
 data:
-  room_ids: [3, 11]      # list of RobEye area IDs
+  room_ids: [3, 11]      # list of RobEye area IDs (required)
   fan_speed: high        # optional — eco / normal / high / silent
   deep_clean: false      # optional — forces deep strategy for this run only
 ```
+
+### `rowenta_roboeye.remove_queue_entry`
+
+Drop a pending command from the integration's serial command queue before it is
+dispatched. Handy for cancelling a queued room clean that hasn't started yet.
+The command currently executing is unaffected.
+
+```yaml
+service: rowenta_roboeye.remove_queue_entry
+target:
+  entity_id: vacuum.ser120_abc123
+data:
+  pending_index: 0       # optional — 0-based queue position (default 0 = next to run)
+```
+
+> The pending queue is visible via `sensor.{device_id}_cleaning_queue`.
 
 ---
 

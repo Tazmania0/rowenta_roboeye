@@ -35,7 +35,7 @@ rowenta_roboeye/
 │   ├── switch.py            # Global/per-room deep clean, per-room selection, per-task schedule switches
 │   ├── manifest.json        # Integration metadata, HA version floor, dependencies
 │   ├── strings.json         # UI label definitions
-│   ├── services.yaml        # Service schema (clean_room; remove_queue_entry is registered in vacuum.py but not listed here)
+│   ├── services.yaml        # Service schemas: clean_room, remove_queue_entry (both registered in vacuum.py)
 │   ├── icons.json           # Entity icon mappings
 │   ├── translations/en.json # English UI translations
 │   ├── brand/               # HACS brand assets (icon.png, icon@2x.png, icon_dark.png,
@@ -374,8 +374,7 @@ SERVICE_REMOVE_QUEUE_ENTRY = "remove_queue_entry"  # handler: RobEyeVacuumEntity
 - `clean_room` — clean one or more rooms by area ID. Fields: `room_ids` (required list),
   `fan_speed` (optional), `deep_clean` (optional bool). Documented in `services.yaml`.
 - `remove_queue_entry` — drop a pending command from the HA-side command queue.
-  Field: `pending_index` (default 0). **Not currently described in `services.yaml`** — add
-  a schema entry there if you touch this.
+  Field: `pending_index` (default 0). Documented in `services.yaml`.
 
 ---
 
