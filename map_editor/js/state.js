@@ -31,6 +31,9 @@ export const state = {
   robotErrorCode:       null,   // number | null
   robotCleaningTimeSec: null,   // number | null (seconds)
   robotAreaCleanedCm2:  null,   // number | null
+  robotAreaIds:         [],     // current cleaning area ids from /get/status
+  editorCleanAreaIds:   [],     // area ids from the last editor-started clean_map
+  editorCleanStartedAt: null,   // Date.now() timestamp for editor-started cleaning
   cleaningGrid:         null,
   lastSessionGrid:      null,
   lastSessionGridMapId: null,

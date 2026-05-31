@@ -17,6 +17,7 @@ import { executeExplore, executeDeleteMap, _promptSaveMap } from './explore.js';
 import { initEvents } from './events.js';
 import { executeSaveExistingMap, executeRenameMap, executeGoHome, executeResetStats, _updateMapOpsButtons } from './mapops.js';
 import { startGoTo, executeProposedNoGo } from './robot.js';
+import { updateEtaChip } from './eta.js';
 
 const ipInput = document.getElementById('ip-input');
 
@@ -52,6 +53,9 @@ function startCleanAll() {
   const speed = document.getElementById('field-fan')?.value || '2';
   const strategyValue = document.getElementById('field-strategy')?.value || 'normal';
   const strategy = strategyValue === 'deep' ? '3' : strategyValue === 'normal' ? '1' : '4';
+  state.editorCleanAreaIds = [];
+  state.editorCleanStartedAt = Date.now();
+  updateEtaChip();
   sendRobotCommand(
     `/set/clean_all?cleaning_parameter_set=${encodeURIComponent(speed === '0' ? '2' : speed)}&cleaning_strategy_mode=${encodeURIComponent(strategy)}`,
     'Clean all'
