@@ -8,6 +8,7 @@ import { highlightArea, highlightAreaSplit, renderAreaList, renderMap, getAreaNa
 import { loadMap } from './load.js';
 import { _updateSaveButton } from './mapops.js';
 import { clearAreaTransformHandles, renderAreaTransformHandles } from './area_move.js';
+import { updateEtaChip } from './eta.js';
 
 const areaDetailEl = document.getElementById('area-detail');
 const mergeHintEl  = document.getElementById('merge-hint');
@@ -76,6 +77,7 @@ export function clearAreaSelection() {
   areaDetailEl.classList.remove('visible');
   updateSplitListUI(null);
   updateCleanSelectionButton();
+  updateEtaChip();
 }
 
 export function onAreaClick(areaId, event = null) {
@@ -104,6 +106,7 @@ export function onAreaClick(areaId, event = null) {
   renderAreaTransformHandles(state.selectedAreaId);
   updateSplitListUI(state.selectedAreaId);
   updateCleanSelectionButton();
+  updateEtaChip();
 
   const area = state.areas.find(a => a.area_id === state.selectedAreaId);
   if (!area) {
@@ -117,6 +120,7 @@ export function onAreaClick(areaId, event = null) {
     state.selectedAreaId = area.area_id;
     state.selectedAreaIds = new Set([area.area_id]);
     updateCleanSelectionButton();
+    updateEtaChip();
     return;
   }
 
@@ -397,13 +401,20 @@ export async function executeCleanArea() {
   showSpinner(true);
   try {
     const { api } = await import('./api.js');
-    const areaIds = areas.map(area => area.area_id).join(',');
+    const areaIdList = areas.map(area => Number(area.area_id)).filter(Number.isFinite);
+    const areaIds = areaIdList.join(',');
     const fan = Math.max(...areas.map(area => Number(area.cleaning_parameter_set ?? 0)));
     const path = `/set/clean_map?map_id=${state.activeMapId}&area_ids=${areaIds}`
                + `&cleaning_parameter_set=${fan}&cleaning_strategy_mode=1`;
     await api(path);
+    state.editorCleanAreaIds = areaIdList;
+    updateEtaChip();
     showToast(`Cleaning ${label}...`, 'success');
-  } catch (e) { showToast('Clean failed: ' + e.message.substring(0, 80), 'error'); }
+  } catch (e) {
+    state.editorCleanAreaIds = [];
+    updateEtaChip();
+    showToast('Clean failed: ' + e.message.substring(0, 80), 'error');
+  }
   finally { showSpinner(false); }
 }
 

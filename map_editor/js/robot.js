@@ -9,6 +9,7 @@ import { svgToRobot, robotToSVG } from './coords.js';
 import { highlightArea, renderMap } from './render.js';
 import { updateCleanSelectionButton } from './areas.js';
 import { loadLastSessionGrid, loadMap } from './load.js';
+import { updateEtaChip } from './eta.js';
 import { USE_PROXY, ROBOT_PORT } from './config.js';
 import * as config from './config.js';
 
@@ -35,6 +36,7 @@ export function startStatusPolling() {
                                   ? Math.round(res.current_cleaning_time / 1000) : null;
       state.robotAreaCleanedCm2  = typeof res.current_area_cleaned === 'number'
                                   ? res.current_area_cleaned : null;
+      state.robotAreaIds         = _extractAreaIds(res);
       await _updateCleaningGrid();
       _updateRobotStatusUI();
     } catch {}
@@ -48,6 +50,14 @@ function _extractBatteryLevel(status) {
   const raw = status?.battery_level ?? status?.battery ?? status?.batteryLevel ?? status?.charge_level;
   const value = Number(raw);
   return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : null;
+}
+
+function _extractAreaIds(status) {
+  const raw = status?.area_ids ?? status?.areaIds ?? status?.current_area_ids ?? status?.currentAreaIds ?? [];
+  const values = Array.isArray(raw) ? raw : String(raw || '').split(',');
+  return values
+    .map(v => Number.parseInt(String(v).trim(), 10))
+    .filter(Number.isFinite);
 }
 
 async function _updateCleaningGrid() {
@@ -215,6 +225,7 @@ function _updateStatusChips() {
     statusChip.style.display = 'none';
     cleanChip.style.display  = 'none';
     errorChip.style.display  = 'none';
+    updateEtaChip();
     return;
   }
 
@@ -264,6 +275,7 @@ function _updateStatusChips() {
   } else {
     errorChip.style.display = 'none';
   }
+  updateEtaChip();
 }
 
 // ─── Auto no-go zones ─────────────────────────────────────────────────────────
