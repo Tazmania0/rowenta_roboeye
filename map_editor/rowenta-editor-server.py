@@ -67,6 +67,10 @@ def _validate_robot_ip(raw):
     (0.0.0.0 — connecting to it targets the local host, a local-SSRF path),
     and multicast/reserved addresses.  This closes the vector where an attacker
     repoints the proxy at an arbitrary or local endpoint.
+
+    IPv4-mapped IPv6 (e.g. ::ffff:192.168.1.50 / ::ffff:169.254.169.254) is
+    normalised to its embedded IPv4 form before validation, so a mapped address
+    cannot smuggle a loopback/link-local target past the checks below.
     """
     if not raw:
         return None
@@ -74,6 +78,9 @@ def _validate_robot_ip(raw):
         addr = ipaddress.ip_address(str(raw).strip())
     except ValueError:
         return None
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        addr = mapped
     if (
         not addr.is_private
         or addr.is_loopback
@@ -186,7 +193,17 @@ class Handler(BaseHTTPRequestHandler):
 
         # Allow updating robot IP dynamically from the UI
         if path == '/config':
-            length = int(self.headers.get('Content-Length', 0))
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+            except (TypeError, ValueError):
+                length = 0
+            # The /config payload is a tiny JSON object; reject anything large or
+            # malformed instead of allocating an unbounded (or negative→EOF) read.
+            if length < 0 or length > 64 * 1024:
+                self._respond(400, 'application/json', json.dumps(
+                    {"error": "Invalid Content-Length."}
+                ).encode())
+                return
             body   = self.rfile.read(length)
             try:
                 data = json.loads(body)
@@ -245,7 +262,9 @@ class Handler(BaseHTTPRequestHandler):
                           json.dumps({"error": "Robot IP not set or not a valid private LAN address. Enter it in the editor UI or pass it as a command-line argument."}).encode())
             return
 
-        url = f"http://{ip}:{ROBOT_PORT}{path}"
+        # Bracket IPv6 literals so the URL is well-formed (http://[fd00::1]:8080/…).
+        host = f"[{ip}]" if ":" in ip else ip
+        url = f"http://{host}:{ROBOT_PORT}{path}"
         if query:
             url += '?' + query
 

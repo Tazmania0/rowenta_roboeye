@@ -69,11 +69,21 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors["base"] = "unknown"
                 else:
                     serial = await self._fetch_serial(host, http_password)
-                    # Dedupe against existing entries created before serial-based IDs.
+                    # Dedupe against an existing entry that predates serial-based
+                    # unique_ids (its unique_id is still the IP or hostname).
                     if (legacy := self._legacy_entry_abort(serial, [host], CONF_HOST, host)):
                         return legacy
-                    # Prefer the serial so manual and zeroconf setup for the same
-                    # robot collapse into one config entry.
+                    # Serial-less robot: its unique_id will be the IP, which never
+                    # matches a zeroconf entry's hostname-based id, so dedupe on the
+                    # stored host instead to avoid a duplicate entry. The IP itself
+                    # is left to _abort_if_unique_id_configured below.
+                    if not serial and (
+                        dup := self._abort_if_host_configured(host, skip_uids={host})
+                    ):
+                        return dup
+                    # Prefer the device serial as unique_id so the same robot can't
+                    # be added twice (and dedupes against a zeroconf-discovered
+                    # entry). Fall back to the IP only when the serial is unknown.
                     await self.async_set_unique_id(serial or host)
                     self._abort_if_unique_id_configured(
                         updates={CONF_HOST: host, CONF_HTTP_PASSWORD: http_password}
@@ -153,6 +163,14 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                 return legacy
             await self.async_set_unique_id(self._serial)
             self._abort_if_unique_id_configured(updates={CONF_HOST: self._host})
+        elif not self._serial:
+            # Serial-less robot: the hostname-based provisional id (already
+            # checked above) won't match a manually-added entry keyed by IP, so
+            # dedupe on the stored host too.
+            if (dup := self._abort_if_host_configured(
+                self._host, self._hostname, skip_uids={provisional_uid}
+            )):
+                return dup
 
         self.context.update(
             {
@@ -294,6 +312,40 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                     entry,
                     unique_id=serial,
                     data={**entry.data, host_key: host},
+                )
+                return self.async_abort(reason="already_configured")
+        return None
+
+    @callback
+    def _abort_if_host_configured(self, host, hostname="", skip_uids=None):
+        """Abort if an existing entry already targets this host/hostname.
+
+        Fallback dedupe for serial-less robots, whose unique_id is the IP
+        (manual) or mDNS hostname (zeroconf): those two ids never match each
+        other, so without this a robot discovered both ways would be added
+        twice.  Matches on stored CONF_HOST / CONF_HOSTNAME instead of
+        unique_id and refreshes the stored IP on the matched entry.
+
+        ``skip_uids`` lists the unique_ids the standard
+        ``_abort_if_unique_id_configured`` path already handles (the IP for the
+        manual flow, the hostname for zeroconf); entries with those ids are
+        skipped here so this only catches the cross-mechanism case.
+        """
+        candidates = {str(h).strip().lower() for h in (host, hostname) if h}
+        if not candidates:
+            return None
+        skip = {str(u).strip().lower() for u in (skip_uids or set()) if u}
+        for entry in self._async_current_entries():
+            existing_uid = (entry.unique_id or "").strip().lower()
+            if existing_uid and existing_uid in skip:
+                continue
+            stored = {
+                str(entry.data.get(CONF_HOST, "")).strip().lower(),
+                str(entry.data.get(CONF_HOSTNAME, "")).strip().lower(),
+            } - {""}
+            if candidates & stored:
+                self.hass.config_entries.async_update_entry(
+                    entry, data={**entry.data, CONF_HOST: host}
                 )
                 return self.async_abort(reason="already_configured")
         return None

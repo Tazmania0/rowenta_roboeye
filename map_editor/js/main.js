@@ -25,7 +25,7 @@ setAreaClickCallback(onAreaClick);
 setHandleMergeClick(handleMergeClick);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ROBOT COMMANDS (Clean All, Stop, Return Home)
+// ROBOT COMMANDS (Clean All, Stop, Resume, Return Home)
 // ─────────────────────────────────────────────────────────────────────────────
 async function sendRobotCommand(path, label) {
   const { apiText, pollCmd } = await import('./api.js');
@@ -58,6 +58,15 @@ function startCleanAll() {
   );
 }
 
+function resumeClean() {
+  const speed = document.getElementById('field-fan')?.value || '2';
+  const resumeSpeed = speed === '0' ? '2' : speed;
+  sendRobotCommand(
+    `/set/clean_start_or_continue?cleaning_parameter_set=${encodeURIComponent(resumeSpeed)}`,
+    'Resume clean'
+  );
+}
+
 function startSpotClean() {
   startSpot();
 }
@@ -75,6 +84,7 @@ document.getElementById('tool-fit').addEventListener('click', fitToScreen);
 
 document.getElementById('btn-clean-all').addEventListener('click', startCleanAll);
 document.getElementById('btn-stop').addEventListener('click', () => sendRobotCommand('/set/stop', 'Stop'));
+document.getElementById('btn-resume')?.addEventListener('click', resumeClean);
 document.getElementById('btn-home').addEventListener('click', () => sendRobotCommand('/set/go_home', 'Return home'));
 document.getElementById('btn-spot-clean')?.addEventListener('click', startSpot);
 
@@ -365,10 +375,12 @@ if (new URLSearchParams(window.location.search).get('test') === '1') {
     const API_ENDPOINTS = [
       '/set/explore', '/set/split_area', '/set/merge_areas',
       '/set/modify_area', '/set/save_map', '/set/delete_map',
-      '/set/modify_map', '/set/add_area',
+      '/set/modify_map', '/set/add_area', '/set/clean_start_or_continue',
     ];
     const hasUndo = API_ENDPOINTS.includes('/set/undo');
+    const hasDeprecatedResume = API_ENDPOINTS.includes('/set/clean_continue');
     _assert('no /set/undo endpoint exists in API', hasUndo === false);
+    _assert('deprecated /set/clean_continue is not used', hasDeprecatedResume === false);
   })();
 
   (function testRoomTypeCompleteness() {

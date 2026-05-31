@@ -13,7 +13,16 @@ import { startMerge } from './merge.js';
 import { clearAreaSelection } from './areas.js';
 import { executeNogo, executeSpot, handleSpotClick, handleBlockClick } from './nogo.js';
 import { startGoTo, executeGoTo } from './robot.js';
-import { finishAreaDrag, startAreaDrag, updateAreaDrag } from './area_move.js';
+import {
+  clearAreaTransformHandles,
+  finishAreaDrag,
+  finishAreaTransform,
+  renderAreaTransformHandles,
+  startAreaDrag,
+  startAreaTransform,
+  updateAreaDrag,
+  updateAreaTransform,
+} from './area_move.js';
 
 const mapSvg       = document.getElementById('map-svg');
 const areaDetailEl = document.getElementById('area-detail');
@@ -95,6 +104,11 @@ export function initEvents(onAreaClick) {
       statusCoords.textContent = `x:${robotPt.x}  y:${robotPt.y}  (${(robotPt.x*0.002).toFixed(2)}m, ${(robotPt.y*0.002).toFixed(2)}m)`;
     }
 
+    if (state.areaTransform) {
+      updateAreaTransform(pt);
+      return;
+    }
+
     if (state.areaDrag) {
       updateAreaDrag(pt);
       return;
@@ -132,6 +146,12 @@ export function initEvents(onAreaClick) {
   // ── SVG mousedown
   mapSvg.addEventListener('mousedown', e => {
     if (state.mode === 'select' && e.button === 0) {
+      if (startAreaTransform(e.target, eventToSVGPoint(e))) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
       const poly = e.target instanceof Element ? e.target.closest('polygon[data-area-id]') : null;
       if (poly && startAreaDrag(poly.dataset.areaId, eventToSVGPoint(e))) {
         e.preventDefault();
@@ -162,6 +182,14 @@ export function initEvents(onAreaClick) {
 
   // ── Window mouseup
   window.addEventListener('mouseup', e => {
+    if (state.areaTransform) {
+      const moved = state.areaTransform.moved;
+      if (moved) state.suppressNextClick = true;
+      finishAreaTransform();
+      e.preventDefault();
+      return;
+    }
+
     if (state.areaDrag) {
       const moved = state.areaDrag.moved;
       if (moved) state.suppressNextClick = true;
@@ -177,6 +205,7 @@ export function initEvents(onAreaClick) {
       const pt = eventToSVGPoint(e);
       const rs = state.rectStart;
       state.rectStart = null;
+      // (suppression of the trailing click is set in the execute branches below)
 
       const dx = Math.abs(pt.x - rs.x);
       const dy = Math.abs(pt.y - rs.y);
@@ -186,6 +215,10 @@ export function initEvents(onAreaClick) {
         return;
       }
 
+      // A real drag just completed; suppress the trailing click so it does not
+      // also fire handleBlockClick/handleSpotClick and push a stray point into
+      // state.splitPoints (which would corrupt the next draw).
+      state.suppressNextClick = true;
       if (state.rectMode === 'block') {
         state.rectMode = null;
         executeNogo(rs.x, rs.y, pt.x, pt.y);
@@ -194,6 +227,18 @@ export function initEvents(onAreaClick) {
         executeSpot(rs.x, rs.y, pt.x, pt.y);
       }
     }
+  });
+
+  // ── Abort an in-progress area drag if the pointer is released outside the
+  // window or focus is lost.  Without this, state.areaDrag stays set and every
+  // subsequent mousemove keeps dragging the polygon with no button held.
+  window.addEventListener('blur', () => {
+    if (state.areaTransform) finishAreaTransform();
+    if (state.areaDrag) finishAreaDrag();
+  });
+  document.addEventListener('pointercancel', () => {
+    if (state.areaTransform) finishAreaTransform();
+    if (state.areaDrag) finishAreaDrag();
   });
 
   // ── Scroll zoom
@@ -233,13 +278,19 @@ export function initEvents(onAreaClick) {
       state.mergeFirstId = null;
       state.rectStart    = null;
       state.rectMode     = null;
+      state.areaTransform = null;
       clearSplitOverlay();
+      clearAreaTransformHandles();
       hideInstruction();
       mergeHintEl.classList.remove('visible');
       if (state.mode === 'goto') setMode('select');
       setMode('select');
-      if (state.selectedAreaId !== null) highlightArea(state.selectedAreaId);
-      else highlightArea(null);
+      if (state.selectedAreaId !== null) {
+        highlightArea(state.selectedAreaId);
+        renderAreaTransformHandles(state.selectedAreaId);
+      } else {
+        highlightArea(null);
+      }
       // In draw phase: return to split mode (it is the default for that phase)
       if (state.explorePhase === 'drawing') {
         setMode('split');

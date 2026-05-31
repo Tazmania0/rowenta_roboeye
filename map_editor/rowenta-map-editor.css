@@ -219,6 +219,38 @@
   polygon.area-dragging {
     filter: drop-shadow(0 0 16px rgba(16,185,129,0.45));
   }
+  .area-transform-frame {
+    fill: none;
+    stroke: rgba(16,185,129,0.9);
+    stroke-width: 5;
+    stroke-dasharray: 16 10;
+    pointer-events: none;
+    filter: drop-shadow(0 0 8px rgba(16,185,129,0.5));
+  }
+  .area-transform-link {
+    stroke: rgba(16,185,129,0.75);
+    stroke-width: 4;
+    pointer-events: none;
+  }
+  .area-transform-handle {
+    fill: #0d0f14;
+    stroke: #10b981;
+    stroke-width: 5;
+    cursor: nwse-resize;
+    pointer-events: auto;
+    filter: drop-shadow(0 0 8px rgba(16,185,129,0.7));
+  }
+  .area-transform-handle.resize-edge {
+    fill: #10b981;
+    stroke: #0d0f14;
+  }
+  .area-transform-handle.resize-edge[data-axis="x"] { cursor: ew-resize; }
+  .area-transform-handle.resize-edge[data-axis="y"] { cursor: ns-resize; }
+  .area-transform-handle.rotate {
+    fill: #10b981;
+    cursor: grab;
+  }
+  .area-transform-handle.rotate:active { cursor: grabbing; }
 
   /* ── Side panel (right) ── */
   #side-panel {

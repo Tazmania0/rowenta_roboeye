@@ -125,11 +125,16 @@ async def async_setup_entry(
         for item in coordinator.schedule.get("schedule", []):
             if not isinstance(item, dict):
                 continue
-            task_id = item.get("task_id")
-            if task_id is None or int(task_id) in already_known:
+            raw_task_id = item.get("task_id")
+            if raw_task_id is None:
                 continue
-            new_entities.append(RobEyeScheduleSwitch(coordinator, int(task_id)))
-            new_ids.add(int(task_id))
+            # Firmware fields are not guaranteed numeric; degrade gracefully
+            # instead of raising and aborting the whole platform setup.
+            task_id = safe_int(raw_task_id, -1)
+            if task_id < 0 or task_id in already_known:
+                continue
+            new_entities.append(RobEyeScheduleSwitch(coordinator, task_id))
+            new_ids.add(task_id)
         return new_entities, new_ids
 
     # Migration: re-enable entities disabled by the old disable/enable model.
@@ -148,7 +153,7 @@ async def async_setup_entry(
         )
 
     # Build entities for ALL known maps (active + inactive).
-    for map_id in list(coordinator._areas_snapshot.keys()):
+    for map_id in coordinator.known_map_ids:
         areas_list = coordinator.areas_for(map_id)
         if not areas_list:
             continue
@@ -421,18 +426,18 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         for inactive maps stay stable.
         """
         for area in self.coordinator.areas_for(self._map_id):
-                if str(area.get("id", "")) == self._area_id:
-                    robot_val = str(area.get("strategy_mode", "") or "").lower()
-                    if robot_val != self._last_robot_strategy:
-                        self._last_robot_strategy = robot_val
-                        new_is_on = robot_val == "deep"
-                        if new_is_on != self._is_on:
-                            self._is_on = new_is_on
-                            LOGGER.debug(
-                                "Room %s deep clean synced %s from robot",
-                                self._area_id, "ON" if new_is_on else "OFF",
-                            )
-                    break
+            if str(area.get("id", "")) == self._area_id:
+                robot_val = str(area.get("strategy_mode", "") or "").lower()
+                if robot_val != self._last_robot_strategy:
+                    self._last_robot_strategy = robot_val
+                    new_is_on = robot_val == "deep"
+                    if new_is_on != self._is_on:
+                        self._is_on = new_is_on
+                        LOGGER.debug(
+                            "Room %s deep clean synced %s from robot",
+                            self._area_id, "ON" if new_is_on else "OFF",
+                        )
+                break
         self.async_write_ha_state()
 
     def _current_room_fan_speed_raw(self) -> str:

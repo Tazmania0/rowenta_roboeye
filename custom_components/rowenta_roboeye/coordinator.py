@@ -393,6 +393,15 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ── Active map switching ──────────────────────────────────────────
 
+    @property
+    def known_map_ids(self) -> list[str]:
+        """Map IDs that currently have an area snapshot.
+
+        Public accessor so entity platforms can iterate all known maps at setup
+        without reaching into the private ``_areas_snapshot`` dict.
+        """
+        return list(self._areas_snapshot.keys())
+
     def areas_for(self, map_id: str) -> list[dict]:
         """Areas for any known map. Returns [] if no snapshot."""
         snap = self._areas_snapshot.get(str(map_id))

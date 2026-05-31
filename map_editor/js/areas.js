@@ -7,6 +7,7 @@ import { showToast, showSpinner, showInstruction, showModal } from './modal.js';
 import { highlightArea, highlightAreaSplit, renderAreaList, renderMap, getAreaName } from './render.js';
 import { loadMap } from './load.js';
 import { _updateSaveButton } from './mapops.js';
+import { clearAreaTransformHandles, renderAreaTransformHandles } from './area_move.js';
 
 const areaDetailEl = document.getElementById('area-detail');
 const mergeHintEl  = document.getElementById('merge-hint');
@@ -71,6 +72,7 @@ export function clearAreaSelection() {
   state.selectedAreaId = null;
   state.selectedAreaIds = new Set();
   highlightArea(null);
+  clearAreaTransformHandles();
   areaDetailEl.classList.remove('visible');
   updateSplitListUI(null);
   updateCleanSelectionButton();
@@ -99,6 +101,7 @@ export function onAreaClick(areaId, event = null) {
   // Normal select mode
   _setAreaSelection(areaId, event);
   highlightArea(state.selectedAreaId);
+  renderAreaTransformHandles(state.selectedAreaId);
   updateSplitListUI(state.selectedAreaId);
   updateCleanSelectionButton();
 
@@ -423,7 +426,7 @@ export function _renderAreaStats(area) {
   el.innerHTML = `<div class="panel-title">Statistics</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:11px">
       <span style="color:var(--muted)">Area</span><span>${areaM2} m2</span>
-      <span style="color:var(--muted)">Cleanings</span><span>${stats.cleaning_counter}</span>
+      <span style="color:var(--muted)">Cleanings</span><span>${Number(stats.cleaning_counter) || 0}</span>
       <span style="color:var(--muted)">Avg time</span><span>${avgMins}</span>
       <span style="color:var(--muted)">Last cleaned</span><span>${lastCleaned}</span>
     </div>`;

@@ -46,6 +46,19 @@ def test_validate_accepts_private_lan(server, ip):
     "not-an-ip",
     "",
     None,
+    "::1",                          # IPv6 loopback
+    "::ffff:127.0.0.1",             # IPv4-mapped loopback
+    "::ffff:169.254.169.254",       # IPv4-mapped link-local (cloud metadata)
+    "::ffff:8.8.8.8",               # IPv4-mapped public
+    "2001:4860:4860::8888",         # public IPv6
 ])
 def test_validate_rejects_unusable(server, ip):
     assert server._validate_robot_ip(ip) is None
+
+
+@pytest.mark.parametrize("ip,expected", [
+    ("::ffff:192.168.1.50", "192.168.1.50"),   # mapped private → normalised to IPv4
+    ("fd00::1", "fd00::1"),                      # native private (ULA) IPv6
+])
+def test_validate_accepts_ipv6_private(server, ip, expected):
+    assert server._validate_robot_ip(ip) == expected
