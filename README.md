@@ -400,12 +400,17 @@ When the robot runs low mid-clean it docks, charges (~100 min), then resumes aut
 
 | Data | Interval | Endpoint(s) |
 |------|----------|-------------|
-| Status + robot position | 5 s (cleaning) / 15 s (idle) | `/get/status`, `/get/rob_pose` |
+| Status | Every tick (5 s cleaning / 15 s idle) | `/get/status` |
+| Sensor values (brush / dustbin) | Every tick | `/get/sensor_values` |
+| Robot position | Every tick when live map enabled | `/get/rob_pose` |
+| Live map (during cleaning) | 5 s cleaning / 60 s idle | `/get/seen_polygon`, `/get/cleaning_grid_map` |
 | Event log | 30 s | `/get/event_log?last_id=N` |
-| Map geometry + areas | 600 s | `/get/n_n_polygons`, `/get/seen_polygon`, `/get/areas` |
-| Statistics | 600 s | `/get/statistics` |
-| Maps list (background refresh) | 600 s | `/get/maps` |
-| Device info | 3600 s | `/get/robot_id`, `/get/wifi_status`, `/get/sensor_status` |
+| Schedule | 60 s | `/get/schedule` |
+| Maps + areas (background refresh) | 600 s (paused while cleaning) | `/get/maps`, `/get/areas` |
+| Map geometry | 600 s | `/get/feature_map`, `/get/tile_map`, `/get/areas`, `/get/seen_polygon`, `/get/cleaning_grid_map` |
+| Diagnostics | 600 s | `/get/sensor_status`, `/get/robot_flags`, `/get/map_status` |
+| Statistics | 600 s | `/get/statistics`, `/get/permanent_statistics` |
+| Device info | 3600 s | `/get/robot_id`, `/get/wifi_status`, `/get/protocol_version` |
 | Command result polling | 5 s (per queued command) | `/get/command_result` |
 
 ---
@@ -431,19 +436,21 @@ When the robot runs low mid-clean it docks, charges (~100 min), then resumes aut
 | `GET /get/sensor_status` | Cliff / bump / wheel-drop sensor health |
 | `GET /get/maps` | All saved floor maps with names and IDs |
 | `GET /get/areas?map_id=N` | Room list — boundaries, `area_state`, `area_type`, `cleaning_parameter_set`, `strategy_mode` |
-| `GET /get/seen_polygon` | Cleaned-area polygon (current or last run) |
-| `GET /get/n_n_polygons` | Room boundary polygons for map rendering |
-| `GET /get/feature_map` | Docking station pose (`docking_pose.valid` may be string `"false"` before relocation) |
+| `GET /get/seen_polygon` | Cleaned-area / explored-boundary polygon (current or last run) |
+| `GET /get/feature_map` | Wall lines + docking-station pose (`docking_pose.valid` may be string `"false"` before relocation) |
+| `GET /get/tile_map` | Area IDs, wall lines, outline polygon, docking pose |
 | `GET /get/cleaning_grid_map` | Binary occupancy grid (map background) |
 | `GET /get/statistics` | Per-room and lifetime stats |
+| `GET /get/permanent_statistics` | Non-resettable lifetime counters |
 | `GET /get/schedule` | All saved schedules (enabled + disabled) |
+| `GET /get/cleaning_parameter_set` | Active fan-speed profile (seeds the HA-preferred fan speed) |
+| `GET /get/robot_flags` | Capability / feature-flag bitmask |
+| `GET /get/map_status` | Active-map metadata (stored; not used to pick the active map) |
 | `GET /get/wifi_status` | SSID, RSSI |
 | `GET /get/robot_id` | Serial number (`unique_id` / `serial_number` fields) |
+| `GET /get/protocol_version` | Robart SDK / firmware version string |
 | `GET /get/event_log?last_id=N` | Incremental hardware event log — returns events with `id > N` |
-| `GET /get/ui_cmd_log` | User command history |
 | `GET /get/command_result` | Poll command status by `cmd_id` — returns `{"commands":[...]}` array |
-| `GET /debug/exploration` | SLAM exploration state |
-| `GET /debug/relocalization` | SLAM relocalization state |
 | `SET /set/clean_map` | Clean specific rooms or switch active map |
 | `SET /set/clean_all` | Clean all rooms |
 | `SET /set/clean_start_or_continue` | Resume after user-initiated pause |
@@ -458,7 +465,7 @@ When the robot runs low mid-clean it docks, charges (~100 min), then resumes aut
 |----------|-------|
 | `SET /set/clean_continue` | Returns error 106 `command_deprecated` — use `/set/clean_start_or_continue` |
 | `GET /get/live_parameters` | Removed from all polling — unreliable |
-| `GET /debug/localization` | Superseded by `/get/rob_pose` |
+| `GET /debug/localization`, `/debug/relocalization`, `/debug/exploration` | Client methods exist but unused for runtime — superseded by `/get/rob_pose` |
 | `GET /get/configurable_parameters` | Returns HTTP 400 on this firmware |
 
 ---
@@ -469,17 +476,12 @@ Confirmed present on the robot (via ApolloLogs / APK analysis) but not yet used.
 
 | Endpoint | Notes |
 |----------|-------|
-| `GET /get/map_status` | Map build / load state |
-| `GET /get/robot_flags` | Low-level capability flags |
-| `GET /get/protocol_version` | Robart SDK version string |
-| `GET /get/cleaning_parameter_set` | Global cleaning parameter set definitions |
-| `GET /get/permanent_statistics` | Non-resettable lifetime counters |
+| `GET /get/n_n_polygons` | Node-to-node navigation polygons — client method exists, not yet used |
 | `GET /get/sensor_commands` | Brush / sensor raw commands; stuck-brush detection |
 | `GET /get/topo_map` | Topological map data |
-| `GET /get/tile_map` | Tile-based map; also contains docking position |
 | `GET /get/task_history` | Per-task cleaning history |
 | `GET /get/points_of_interest` | POI list (returns `[{}]` on current firmware) |
-| `GET /get/product_feature_set` | Feature capability flags per model — useful for S220/S240 auto-detection |
+| `GET /get/product_feature_set` | Feature capability flags per model — used by the map editor; not yet by the integration |
 | `GET /get/safety_mcu_firmware_version` | Safety MCU firmware string |
 | `GET /get/bug_report` | Internal diagnostic log |
 | `GET /get/critical_logs` | Critical error log |
