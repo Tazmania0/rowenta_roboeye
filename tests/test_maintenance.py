@@ -7,10 +7,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from custom_components.rowenta_roboeye.const import (
-    DROP_SENSOR_CLEAN_M2,
     DUSTBIN_CLEAN_HOURS,
     DUSTBIN_CLEAN_M2,
     MAIN_BRUSH_REPLACE_HOURS,
+    MAINT_AREA_UNITS_PER_M2,
+    MAINT_TIME_UNITS_PER_HOUR,
     MAINTENANCE_NOTIFICATION_PREFIX,
     MAINTENANCE_WARN_PCT,
 )
@@ -19,6 +20,11 @@ from custom_components.rowenta_roboeye.maintenance_store import (
     DEFAULT_DATA,
     MaintenanceStore,
 )
+
+# Raw firmware units derived from human values, so the tests stay correct even
+# if the conversion constants are recalibrated.
+H = MAINT_TIME_UNITS_PER_HOUR   # raw total_cleaning_time units per hour
+A = MAINT_AREA_UNITS_PER_M2     # raw total_area_cleaned units per m²
 
 
 @pytest.fixture(autouse=True)
@@ -43,41 +49,41 @@ def _store(**data) -> MaintenanceStore:
 
 def test_runtime_calculation():
     """Delta correctly computes hours used since last reset."""
-    store = _store(main_brush_replace_baseline_s=36000)
-    # current = 108000s (30h), baseline = 36000s (10h) → 20h since replacement
-    assert store.runtime_since_replace_h("main_brush", 108000) == pytest.approx(20.0)
+    store = _store(main_brush_replace_baseline_s=10 * H)
+    # current = 30h of raw units, baseline = 10h → 20h since replacement
+    assert store.runtime_since_replace_h("main_brush", 30 * H) == pytest.approx(20.0)
 
 
 def test_area_calculation():
-    """Area delta correctly computed in m² (mm² raw / 1e6)."""
-    store = _store(dustbin_clean_baseline_mm2=50_000_000)
+    """Area delta correctly computed in m²."""
+    store = _store(dustbin_clean_baseline_mm2=50 * A)
     # 65 m² total, 50 m² baseline → 15 m² since last empty
-    assert store.area_since_clean_m2("dustbin", 65_000_000) == pytest.approx(15.0)
+    assert store.area_since_clean_m2("dustbin", 65 * A) == pytest.approx(15.0)
 
 
 def test_negative_delta_clamped_to_zero():
     """A baseline higher than the current total never yields a negative value."""
-    store = _store(main_brush_replace_baseline_s=100000)
+    store = _store(main_brush_replace_baseline_s=100 * H)
     assert store.runtime_since_replace_h("main_brush", 0) == 0.0
 
 
 def test_dustbin_triggers_on_area():
     """Dustbin alert fires when the area threshold is reached."""
     store = _store(dustbin_clean_baseline_mm2=0, dustbin_clean_baseline_s=0)
-    assert store.area_since_clean_m2("dustbin", 16_000_000) >= DUSTBIN_CLEAN_M2
+    assert store.area_since_clean_m2("dustbin", 16 * A) >= DUSTBIN_CLEAN_M2
 
 
 def test_dustbin_triggers_on_time():
     """Dustbin alert fires on time even when area is below threshold."""
     store = _store(dustbin_clean_baseline_mm2=0, dustbin_clean_baseline_s=0)
-    assert store.runtime_since_clean_h("dustbin", 9000) >= DUSTBIN_CLEAN_HOURS  # 2.5h
-    assert store.area_since_clean_m2("dustbin", 5_000_000) < DUSTBIN_CLEAN_M2
+    assert store.runtime_since_clean_h("dustbin", int(2.5 * H)) >= DUSTBIN_CLEAN_HOURS
+    assert store.area_since_clean_m2("dustbin", 5 * A) < DUSTBIN_CLEAN_M2
 
 
 def test_replacement_warns_at_80pct():
     """Warning threshold is reached at 80% of the replacement limit."""
     store = _store(main_brush_replace_baseline_s=0)
-    hours = store.runtime_since_replace_h("main_brush", 116 * 3600)  # 116h ≈ 82.8%
+    hours = store.runtime_since_replace_h("main_brush", 116 * H)  # 116h ≈ 82.8%
     assert hours >= MAIN_BRUSH_REPLACE_HOURS * MAINTENANCE_WARN_PCT / 100
     assert hours < MAIN_BRUSH_REPLACE_HOURS
 
@@ -85,9 +91,9 @@ def test_replacement_warns_at_80pct():
 def test_reset_clears_due_state():
     """Resetting a counter clears the 'due' state (delta back to zero)."""
     store = _store(main_brush_replace_baseline_s=0)
-    assert store.runtime_since_replace_h("main_brush", 145 * 3600) > MAIN_BRUSH_REPLACE_HOURS
-    store._data["main_brush_replace_baseline_s"] = 145 * 3600
-    assert store.runtime_since_replace_h("main_brush", 145 * 3600) == 0.0
+    assert store.runtime_since_replace_h("main_brush", 145 * H) > MAIN_BRUSH_REPLACE_HOURS
+    store._data["main_brush_replace_baseline_s"] = 145 * H
+    assert store.runtime_since_replace_h("main_brush", 145 * H) == 0.0
 
 
 # ── async_reset behaviour ──────────────────────────────────────────────
@@ -106,17 +112,17 @@ async def test_async_reset_replace_sets_time_baseline():
 async def test_async_reset_dustbin_sets_both_baselines():
     store = MaintenanceStore(MagicMock(), "SER-1")
     await store.async_load()
-    await store.async_reset("dustbin_clean", current_total_s=7000, current_total_mm2=4_000_000)
+    await store.async_reset("dustbin_clean", current_total_s=7000, current_total_mm2=4000)
     assert store.get("dustbin_clean_baseline_s") == 7000
-    assert store.get("dustbin_clean_baseline_mm2") == 4_000_000
+    assert store.get("dustbin_clean_baseline_mm2") == 4000
 
 
 @pytest.mark.asyncio
 async def test_async_reset_clean_sets_area_baseline():
     store = MaintenanceStore(MagicMock(), "SER-1")
     await store.async_load()
-    await store.async_reset("filter_clean", current_total_s=0, current_total_mm2=12_000_000)
-    assert store.get("filter_clean_baseline_mm2") == 12_000_000
+    await store.async_reset("filter_clean", current_total_s=0, current_total_mm2=12000)
+    assert store.get("filter_clean_baseline_mm2") == 12000
 
 
 # ── Storage persistence ────────────────────────────────────────────────
@@ -173,12 +179,12 @@ def test_storage_key_is_stable():
 # ── Coordinator notification check ─────────────────────────────────────
 
 
-def _fake_coordinator(store, perm_stats, has_wet=False):
+def _fake_coordinator(store, stats, has_wet=False):
     return SimpleNamespace(
         maintenance=store,
         hass=MagicMock(),
         has_wet_support=has_wet,
-        permanent_statistics=perm_stats,
+        statistics=stats if stats is not None else {},
     )
 
 
@@ -193,10 +199,10 @@ async def test_check_notifications_fires_on_due(monkeypatch):
         lambda hass, message, **kw: created.append((message, kw.get("notification_id"))),
     )
     store = _store(main_brush_replace_baseline_s=0)
-    perm = {"total_cleaning_time": 200 * 3600, "total_area_cleaned": 0}
-    fake = _fake_coordinator(store, perm)
+    stats = {"total_cleaning_time": 200 * H, "total_area_cleaned": 0}
+    fake = _fake_coordinator(store, stats)
 
-    await RobEyeCoordinator._check_maintenance_notifications(fake, perm)
+    await RobEyeCoordinator._check_maintenance_notifications(fake, stats)
 
     ids = [nid for _msg, nid in created]
     assert f"{MAINTENANCE_NOTIFICATION_PREFIX}main_brush_replace" in ids
@@ -218,6 +224,23 @@ async def test_check_notifications_noop_without_store(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_check_notifications_falls_back_to_stored_statistics(monkeypatch):
+    """When no stats are passed, the check reads coordinator.statistics."""
+    from homeassistant.components import persistent_notification
+
+    created = []
+    monkeypatch.setattr(
+        persistent_notification, "async_create",
+        lambda hass, message, **kw: created.append(kw.get("notification_id")),
+    )
+    store = _store(main_brush_replace_baseline_s=0)
+    stats = {"total_cleaning_time": 200 * H, "total_area_cleaned": 0}
+    fake = _fake_coordinator(store, stats)
+    await RobEyeCoordinator._check_maintenance_notifications(fake, None)
+    assert f"{MAINTENANCE_NOTIFICATION_PREFIX}main_brush_replace" in created
+
+
+@pytest.mark.asyncio
 async def test_check_notifications_mop_only_when_wet(monkeypatch):
     """Mop pad notification only fires for wet-capable robots."""
     from homeassistant.components import persistent_notification
@@ -228,18 +251,32 @@ async def test_check_notifications_mop_only_when_wet(monkeypatch):
         lambda hass, message, **kw: created.append(kw.get("notification_id")),
     )
     store = _store(mop_pad_replace_baseline_s=0)
-    perm = {"total_cleaning_time": 200 * 3600, "total_area_cleaned": 0}
+    stats = {"total_cleaning_time": 200 * H, "total_area_cleaned": 0}
 
     await RobEyeCoordinator._check_maintenance_notifications(
-        _fake_coordinator(store, perm, has_wet=False), perm
+        _fake_coordinator(store, stats, has_wet=False), stats
     )
     assert f"{MAINTENANCE_NOTIFICATION_PREFIX}mop_pad_replace" not in created
 
     created.clear()
     await RobEyeCoordinator._check_maintenance_notifications(
-        _fake_coordinator(store, perm, has_wet=True), perm
+        _fake_coordinator(store, stats, has_wet=True), stats
     )
     assert f"{MAINTENANCE_NOTIFICATION_PREFIX}mop_pad_replace" in created
+
+
+# ── Coordinator property data source ───────────────────────────────────
+
+
+def test_maintenance_reads_from_statistics_not_permanent():
+    """Maintenance totals come from /get/statistics, not permanent_statistics."""
+    coord = RobEyeCoordinator.__new__(RobEyeCoordinator)
+    coord.data = {
+        "statistics": {"total_cleaning_time": 1234, "total_area_cleaned": 5678},
+        "permanent_statistics": {"total_cleaning_time": 0},  # partial / stale
+    }
+    assert coord.perm_total_cleaning_time == 1234
+    assert coord.perm_total_area_cleaned == 5678
 
 
 # ── Entity builders ────────────────────────────────────────────────────
@@ -250,7 +287,7 @@ def _builder_coordinator(has_wet=False):
         has_wet_support=has_wet,
         device_id="ser120",
         maintenance=None,
-        permanent_statistics={},
+        statistics={},
     )
 
 
@@ -294,23 +331,23 @@ def test_builders_include_mop_when_wet_supported():
     assert any("mop_pad" in u for u in btn_uids)
 
 
-def test_reset_button_unavailable_without_permanent_stats():
-    """Reset buttons stay unavailable until permanent statistics are present."""
+def test_reset_button_unavailable_without_statistics():
+    """Reset buttons stay unavailable until lifetime statistics are present."""
     from custom_components.rowenta_roboeye.button import build_maintenance_buttons
 
     coordinator = SimpleNamespace(
         has_wet_support=False,
         device_id="ser120",
-        maintenance=object(),          # store loaded
-        permanent_statistics={},       # but no totals yet
+        maintenance=object(),   # store loaded
+        statistics={},          # but no totals yet
     )
     buttons = build_maintenance_buttons(coordinator)
     # The CoordinatorEntity stub reports super().available as True; the override
-    # must still gate on permanent_statistics being non-empty.
+    # must still gate on statistics being non-empty.
     for btn in buttons:
         assert btn.available is False
 
-    coordinator.permanent_statistics = {"total_cleaning_time": 100}
+    coordinator.statistics = {"total_cleaning_time": 100}
     assert build_maintenance_buttons(coordinator)[0].available is True
 
 

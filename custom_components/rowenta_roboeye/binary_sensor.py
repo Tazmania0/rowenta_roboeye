@@ -246,7 +246,7 @@ class RobEyeMaintenanceDueSensor(RobEyeEntity, BinarySensorEntity):
         return (
             super().available
             and self.coordinator.maintenance is not None
-            and bool(self.coordinator.permanent_statistics)
+            and bool(self.coordinator.statistics)
         )
 
     @property
