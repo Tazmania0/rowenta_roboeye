@@ -85,7 +85,7 @@ async def async_setup_entry(
         )
 
     # Build entities for ALL known maps (not just the active one).
-    for map_id in list(coordinator._areas_snapshot.keys()):
+    for map_id in coordinator.known_map_ids:
         areas_list = coordinator.areas_for(map_id)
         initial_selects, initial_by_area = _build_room_select_entities(
             coordinator, config_entry, map_id, areas_list, set()

@@ -62,7 +62,7 @@ async def async_setup_entry(
     async_enable_all_room_entities(hass, config_entry, "button")
 
     # Build entities for every map we have areas for (active + all inactive).
-    for map_id in list(coordinator._areas_snapshot.keys()):
+    for map_id in coordinator.known_map_ids:
         areas_list = coordinator.areas_for(map_id)
         if not areas_list:
             continue

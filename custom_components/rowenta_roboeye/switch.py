@@ -148,7 +148,7 @@ async def async_setup_entry(
         )
 
     # Build entities for ALL known maps (active + inactive).
-    for map_id in list(coordinator._areas_snapshot.keys()):
+    for map_id in coordinator.known_map_ids:
         areas_list = coordinator.areas_for(map_id)
         if not areas_list:
             continue
@@ -387,18 +387,18 @@ class RobEyeRoomDeepCleanSwitch(RobEyeEntity, SwitchEntity, RestoreEntity):
         for inactive maps stay stable.
         """
         for area in self.coordinator.areas_for(self._map_id):
-                if str(area.get("id", "")) == self._area_id:
-                    robot_val = str(area.get("strategy_mode", "") or "").lower()
-                    if robot_val != self._last_robot_strategy:
-                        self._last_robot_strategy = robot_val
-                        new_is_on = robot_val == "deep"
-                        if new_is_on != self._is_on:
-                            self._is_on = new_is_on
-                            LOGGER.debug(
-                                "Room %s deep clean synced %s from robot",
-                                self._area_id, "ON" if new_is_on else "OFF",
-                            )
-                    break
+            if str(area.get("id", "")) == self._area_id:
+                robot_val = str(area.get("strategy_mode", "") or "").lower()
+                if robot_val != self._last_robot_strategy:
+                    self._last_robot_strategy = robot_val
+                    new_is_on = robot_val == "deep"
+                    if new_is_on != self._is_on:
+                        self._is_on = new_is_on
+                        LOGGER.debug(
+                            "Room %s deep clean synced %s from robot",
+                            self._area_id, "ON" if new_is_on else "OFF",
+                        )
+                break
         self.async_write_ha_state()
 
     def _current_room_fan_speed_raw(self) -> str:

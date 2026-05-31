@@ -413,7 +413,7 @@ async def async_setup_entry(
         )
 
     # Build sensors for ALL known maps (active + inactive).
-    for map_id in list(coordinator._areas_snapshot.keys()):
+    for map_id in coordinator.known_map_ids:
         areas_list = coordinator.areas_for(map_id)
         if not areas_list:
             continue
