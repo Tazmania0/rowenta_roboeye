@@ -539,10 +539,13 @@ def _build_config(
                 "title": "🔄 Replacement (runtime)",
                 "entities": [
                     {"entity": f"sensor.{_d}_main_brush_runtime", "name": "Main Brush Runtime"},
+                    {"type": "attribute", "entity": f"sensor.{_d}_main_brush_runtime", "attribute": "limit", "name": "Expected Life", "suffix": " h", "icon": "mdi:timer-outline"},
                     {"entity": f"button.{_d}_reset_main_brush_replaced", "name": "Mark Main Brush Replaced"},
                     {"entity": f"sensor.{_d}_side_brush_runtime", "name": "Side Brush Runtime"},
+                    {"type": "attribute", "entity": f"sensor.{_d}_side_brush_runtime", "attribute": "limit", "name": "Expected Life", "suffix": " h", "icon": "mdi:timer-outline"},
                     {"entity": f"button.{_d}_reset_side_brush_replaced", "name": "Mark Side Brush Replaced"},
                     {"entity": f"sensor.{_d}_mop_pad_runtime", "name": "Mop Pad Runtime"},
+                    {"type": "attribute", "entity": f"sensor.{_d}_mop_pad_runtime", "attribute": "limit", "name": "Expected Life", "suffix": " h", "icon": "mdi:timer-outline"},
                     {"entity": f"button.{_d}_reset_mop_pad_replaced", "name": "Mark Mop Pad Replaced"},
                 ],
             },
@@ -551,14 +554,19 @@ def _build_config(
                 "title": "🧹 Cleaning (area since last)",
                 "entities": [
                     {"entity": f"sensor.{_d}_main_brush_area_since_clean", "name": "Main Brush"},
+                    {"type": "attribute", "entity": f"sensor.{_d}_main_brush_area_since_clean", "attribute": "limit", "name": "Due at", "suffix": " m²", "icon": "mdi:alert-circle-outline"},
                     {"entity": f"button.{_d}_reset_main_brush_cleaned", "name": "Mark Main Brush Cleaned"},
                     {"entity": f"sensor.{_d}_side_brush_area_since_clean", "name": "Side Brush"},
+                    {"type": "attribute", "entity": f"sensor.{_d}_side_brush_area_since_clean", "attribute": "limit", "name": "Due at", "suffix": " m²", "icon": "mdi:alert-circle-outline"},
                     {"entity": f"button.{_d}_reset_side_brush_cleaned", "name": "Mark Side Brush Cleaned"},
                     {"entity": f"sensor.{_d}_dustbin_area_since_empty", "name": "Dustbin"},
+                    {"type": "attribute", "entity": f"sensor.{_d}_dustbin_area_since_empty", "attribute": "limit", "name": "Due at", "suffix": " m²", "icon": "mdi:alert-circle-outline"},
                     {"entity": f"button.{_d}_reset_dustbin_emptied", "name": "Mark Dustbin Emptied"},
                     {"entity": f"sensor.{_d}_filter_area_since_clean", "name": "Filter"},
+                    {"type": "attribute", "entity": f"sensor.{_d}_filter_area_since_clean", "attribute": "limit", "name": "Due at", "suffix": " m²", "icon": "mdi:alert-circle-outline"},
                     {"entity": f"button.{_d}_reset_filter_cleaned", "name": "Mark Filter Cleaned"},
                     {"entity": f"sensor.{_d}_drop_sensor_area_since_clean", "name": "Drop Sensors"},
+                    {"type": "attribute", "entity": f"sensor.{_d}_drop_sensor_area_since_clean", "attribute": "limit", "name": "Due at", "suffix": " m²", "icon": "mdi:alert-circle-outline"},
                     {"entity": f"button.{_d}_reset_drop_sensors_cleaned", "name": "Mark Drop Sensors Cleaned"},
                 ],
             },
@@ -599,7 +607,7 @@ def _build_config(
                 }
             ],
         }
-    views = [view_control, view_rooms, view_stats, view_maintenance, view_map]
+    views = [view_control, view_rooms, view_map, view_maintenance, view_stats]
 
     return {
         "title": title,

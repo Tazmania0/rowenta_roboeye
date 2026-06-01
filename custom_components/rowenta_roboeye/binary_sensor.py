@@ -36,10 +36,13 @@ from .const import (
     DROP_SENSOR_CLEAN_M2,
     DUSTBIN_CLEAN_HOURS,
     DUSTBIN_CLEAN_M2,
+    FILTER_CLEAN_HOURS,
     FILTER_CLEAN_M2,
+    MAIN_BRUSH_CLEAN_HOURS,
     MAIN_BRUSH_CLEAN_M2,
     MAIN_BRUSH_REPLACE_HOURS,
     MOP_PAD_REPLACE_HOURS,
+    SIDE_BRUSH_CLEAN_HOURS,
     SIDE_BRUSH_CLEAN_M2,
     SIDE_BRUSH_REPLACE_HOURS,
 )
@@ -155,6 +158,13 @@ def _due_clean(component: str, limit: float):
     ) >= limit
 
 
+def _due_clean_or_time(component: str, area_limit: float, hour_limit: float):
+    return lambda c: (
+        c.maintenance.area_since_clean_m2(component, c.perm_total_area_cleaned) >= area_limit
+        or c.maintenance.runtime_since_clean_h(component, c.perm_total_cleaning_time) >= hour_limit
+    )
+
+
 def _due_dustbin(c: RobEyeCoordinator) -> bool:
     return (
         c.maintenance.area_since_clean_m2("dustbin", c.perm_total_area_cleaned)
@@ -189,19 +199,19 @@ MAINTENANCE_DUE_SENSORS: tuple[RobEyeMaintenanceDueDescription, ...] = (
     ),
     RobEyeMaintenanceDueDescription(
         key="mop_pad_replace", translation_key="mop_pad_due",
-        entity_suffix="mop_pad_due", icon="mdi:mop",
+        entity_suffix="mop_pad_due", icon="mdi:water",
         is_due_fn=_due_replace("mop_pad", MOP_PAD_REPLACE_HOURS),
         wet_only=True,
     ),
     RobEyeMaintenanceDueDescription(
         key="main_brush_clean", translation_key="main_brush_clean_due",
         entity_suffix="main_brush_clean_due", icon="mdi:brush",
-        is_due_fn=_due_clean("main_brush", MAIN_BRUSH_CLEAN_M2),
+        is_due_fn=_due_clean_or_time("main_brush", MAIN_BRUSH_CLEAN_M2, MAIN_BRUSH_CLEAN_HOURS),
     ),
     RobEyeMaintenanceDueDescription(
         key="side_brush_clean", translation_key="side_brush_clean_due",
         entity_suffix="side_brush_clean_due", icon="mdi:rotate-right",
-        is_due_fn=_due_clean("side_brush", SIDE_BRUSH_CLEAN_M2),
+        is_due_fn=_due_clean_or_time("side_brush", SIDE_BRUSH_CLEAN_M2, SIDE_BRUSH_CLEAN_HOURS),
     ),
     RobEyeMaintenanceDueDescription(
         key="dustbin_clean", translation_key="dustbin_empty_due",
@@ -211,7 +221,7 @@ MAINTENANCE_DUE_SENSORS: tuple[RobEyeMaintenanceDueDescription, ...] = (
     RobEyeMaintenanceDueDescription(
         key="filter_clean", translation_key="filter_clean_due",
         entity_suffix="filter_clean_due", icon="mdi:air-filter",
-        is_due_fn=_due_clean("filter", FILTER_CLEAN_M2),
+        is_due_fn=_due_clean_or_time("filter", FILTER_CLEAN_M2, FILTER_CLEAN_HOURS),
     ),
     RobEyeMaintenanceDueDescription(
         key="drop_sensor_clean", translation_key="drop_sensor_clean_due",

@@ -300,13 +300,16 @@ MAIN_BRUSH_REPLACE_HOURS = 140
 SIDE_BRUSH_REPLACE_HOURS = 60
 MOP_PAD_REPLACE_HOURS = 60          # AICU wet models only
 
-# Cleaning intervals (area m²)
-MAIN_BRUSH_CLEAN_M2 = 10.0
-SIDE_BRUSH_CLEAN_M2 = 10.0
-DUSTBIN_CLEAN_M2 = 15.0
-DUSTBIN_CLEAN_HOURS = 2.0           # whichever comes first
-FILTER_CLEAN_M2 = 30.0
-DROP_SENSOR_CLEAN_M2 = 50.0
+# Cleaning intervals (area m² or hours — whichever comes first)
+MAIN_BRUSH_CLEAN_M2 = 100.0
+MAIN_BRUSH_CLEAN_HOURS = 3.0
+SIDE_BRUSH_CLEAN_M2 = 100.0
+SIDE_BRUSH_CLEAN_HOURS = 3.0
+DUSTBIN_CLEAN_M2 = 100.0
+DUSTBIN_CLEAN_HOURS = 3.0
+FILTER_CLEAN_M2 = 100.0
+FILTER_CLEAN_HOURS = 3.0
+DROP_SENSOR_CLEAN_M2 = 200.0
 
 # Warn when a replacement counter reaches N % of its limit.
 MAINTENANCE_WARN_PCT = 80

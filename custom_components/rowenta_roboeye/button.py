@@ -262,7 +262,7 @@ MAINTENANCE_RESET_BUTTONS: tuple[RobEyeMaintenanceResetDescription, ...] = (
     ),
     RobEyeMaintenanceResetDescription(
         key="mop_pad_replace", translation_key="reset_mop_pad_replaced",
-        entity_suffix="reset_mop_pad_replaced", icon="mdi:mop", wet_only=True,
+        entity_suffix="reset_mop_pad_replaced", icon="mdi:water", wet_only=True,
     ),
     RobEyeMaintenanceResetDescription(
         key="main_brush_clean", translation_key="reset_main_brush_cleaned",
