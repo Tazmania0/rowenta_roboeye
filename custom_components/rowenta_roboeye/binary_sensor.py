@@ -189,7 +189,7 @@ MAINTENANCE_DUE_SENSORS: tuple[RobEyeMaintenanceDueDescription, ...] = (
     ),
     RobEyeMaintenanceDueDescription(
         key="mop_pad_replace", translation_key="mop_pad_due",
-        entity_suffix="mop_pad_due", icon="mdi:mop",
+        entity_suffix="mop_pad_due", icon="mdi:water",
         is_due_fn=_due_replace("mop_pad", MOP_PAD_REPLACE_HOURS),
         wet_only=True,
     ),
