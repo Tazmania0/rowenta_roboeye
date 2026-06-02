@@ -43,10 +43,13 @@ DEFAULT_DATA: dict[str, object] = {
 
     # Cleaning baselines (area since last clean)
     "main_brush_clean_baseline_mm2": 0,
+    "main_brush_clean_baseline_s": 0,
     "side_brush_clean_baseline_mm2": 0,
+    "side_brush_clean_baseline_s": 0,
     "dustbin_clean_baseline_mm2": 0,
-    "dustbin_clean_baseline_s": 0,   # dustbin tracks BOTH area + time
+    "dustbin_clean_baseline_s": 0,
     "filter_clean_baseline_mm2": 0,
+    "filter_clean_baseline_s": 0,
     "drop_sensor_clean_baseline_mm2": 0,
 
     # Reset timestamps (component -> ISO string)
@@ -98,13 +101,10 @@ class MaintenanceStore:
             base = component[: -len("_replace")]
             self._data[f"{base}_replace_baseline_s"] = current_total_s
 
-        elif component == "dustbin_clean":
-            self._data["dustbin_clean_baseline_mm2"] = current_total_mm2
-            self._data["dustbin_clean_baseline_s"] = current_total_s
-
         elif component.endswith("_clean"):
             base = component[: -len("_clean")]
             self._data[f"{base}_clean_baseline_mm2"] = current_total_mm2
+            self._data[f"{base}_clean_baseline_s"] = current_total_s
 
         self._data.setdefault("last_reset", {})[component] = now_iso
         await self.async_save()
@@ -121,7 +121,7 @@ class MaintenanceStore:
         return max(0.0, (current_total_mm2 - baseline) / MAINT_AREA_UNITS_PER_M2)
 
     def runtime_since_clean_h(self, component: str, current_total_s: int) -> float:
-        """Hours of runtime since the last cleaning action (dustbin only)."""
+        """Hours of runtime since the last cleaning action for ``component``."""
         baseline = self._data.get(f"{component}_clean_baseline_s", 0)
         return max(0.0, (current_total_s - baseline) / MAINT_TIME_UNITS_PER_HOUR)
 
