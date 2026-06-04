@@ -42,7 +42,13 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .const import AREA_STATES_SKIP, CLEANING_MODE_ALL, DOMAIN, SCHEDULE_DAYS, room_selection_entity_id, safe_int
+from .const import (
+    AREA_STATES_SKIP, CLEANING_MODE_ALL, DOMAIN, SCHEDULE_DAYS,
+    MAIN_BRUSH_REPLACE_HOURS, SIDE_BRUSH_REPLACE_HOURS, MOP_PAD_REPLACE_HOURS,
+    MAIN_BRUSH_CLEAN_M2, SIDE_BRUSH_CLEAN_M2, DUSTBIN_CLEAN_M2,
+    FILTER_CLEAN_M2, DROP_SENSOR_CLEAN_M2,
+    room_selection_entity_id, safe_int,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -536,34 +542,6 @@ def _build_config(
         "cards": [
             {
                 "type": "entities",
-                "title": "🔄 Replacement (runtime)",
-                "entities": [
-                    {"entity": f"sensor.{_d}_main_brush_runtime", "name": "Main Brush Runtime"},
-                    {"entity": f"button.{_d}_reset_main_brush_replaced", "name": "Mark Main Brush Replaced"},
-                    {"entity": f"sensor.{_d}_side_brush_runtime", "name": "Side Brush Runtime"},
-                    {"entity": f"button.{_d}_reset_side_brush_replaced", "name": "Mark Side Brush Replaced"},
-                    {"entity": f"sensor.{_d}_mop_pad_runtime", "name": "Mop Pad Runtime"},
-                    {"entity": f"button.{_d}_reset_mop_pad_replaced", "name": "Mark Mop Pad Replaced"},
-                ],
-            },
-            {
-                "type": "entities",
-                "title": "🧹 Cleaning (area since last)",
-                "entities": [
-                    {"entity": f"sensor.{_d}_main_brush_area_since_clean", "name": "Main Brush"},
-                    {"entity": f"button.{_d}_reset_main_brush_cleaned", "name": "Mark Main Brush Cleaned"},
-                    {"entity": f"sensor.{_d}_side_brush_area_since_clean", "name": "Side Brush"},
-                    {"entity": f"button.{_d}_reset_side_brush_cleaned", "name": "Mark Side Brush Cleaned"},
-                    {"entity": f"sensor.{_d}_dustbin_area_since_empty", "name": "Dustbin"},
-                    {"entity": f"button.{_d}_reset_dustbin_emptied", "name": "Mark Dustbin Emptied"},
-                    {"entity": f"sensor.{_d}_filter_area_since_clean", "name": "Filter"},
-                    {"entity": f"button.{_d}_reset_filter_cleaned", "name": "Mark Filter Cleaned"},
-                    {"entity": f"sensor.{_d}_drop_sensor_area_since_clean", "name": "Drop Sensors"},
-                    {"entity": f"button.{_d}_reset_drop_sensors_cleaned", "name": "Mark Drop Sensors Cleaned"},
-                ],
-            },
-            {
-                "type": "entities",
                 "title": "⚠️ Alerts",
                 "entities": [
                     {"entity": f"binary_sensor.{_d}_main_brush_due", "name": "Main Brush Replacement Due"},
@@ -574,6 +552,34 @@ def _build_config(
                     {"entity": f"binary_sensor.{_d}_dustbin_empty_due", "name": "Dustbin Emptying Due"},
                     {"entity": f"binary_sensor.{_d}_filter_clean_due", "name": "Filter Cleaning Due"},
                     {"entity": f"binary_sensor.{_d}_drop_sensor_clean_due", "name": "Drop Sensor Cleaning Due"},
+                ],
+            },
+            {
+                "type": "entities",
+                "title": "🧹 Cleaning (area since last)",
+                "entities": [
+                    {"entity": f"sensor.{_d}_main_brush_area_since_clean", "name": f"Main Brush (/{int(MAIN_BRUSH_CLEAN_M2)} m²)"},
+                    {"entity": f"button.{_d}_reset_main_brush_cleaned", "name": "Mark Main Brush Cleaned"},
+                    {"entity": f"sensor.{_d}_side_brush_area_since_clean", "name": f"Side Brush (/{int(SIDE_BRUSH_CLEAN_M2)} m²)"},
+                    {"entity": f"button.{_d}_reset_side_brush_cleaned", "name": "Mark Side Brush Cleaned"},
+                    {"entity": f"sensor.{_d}_dustbin_area_since_empty", "name": f"Dustbin (/{int(DUSTBIN_CLEAN_M2)} m²)"},
+                    {"entity": f"button.{_d}_reset_dustbin_emptied", "name": "Mark Dustbin Emptied"},
+                    {"entity": f"sensor.{_d}_filter_area_since_clean", "name": f"Filter (/{int(FILTER_CLEAN_M2)} m²)"},
+                    {"entity": f"button.{_d}_reset_filter_cleaned", "name": "Mark Filter Cleaned"},
+                    {"entity": f"sensor.{_d}_drop_sensor_area_since_clean", "name": f"Drop Sensors (/{int(DROP_SENSOR_CLEAN_M2)} m²)"},
+                    {"entity": f"button.{_d}_reset_drop_sensors_cleaned", "name": "Mark Drop Sensors Cleaned"},
+                ],
+            },
+            {
+                "type": "entities",
+                "title": "🔄 Replacement (runtime)",
+                "entities": [
+                    {"entity": f"sensor.{_d}_main_brush_runtime", "name": f"Main Brush Runtime (/{MAIN_BRUSH_REPLACE_HOURS} h)"},
+                    {"entity": f"button.{_d}_reset_main_brush_replaced", "name": "Mark Main Brush Replaced"},
+                    {"entity": f"sensor.{_d}_side_brush_runtime", "name": f"Side Brush Runtime (/{SIDE_BRUSH_REPLACE_HOURS} h)"},
+                    {"entity": f"button.{_d}_reset_side_brush_replaced", "name": "Mark Side Brush Replaced"},
+                    {"entity": f"sensor.{_d}_mop_pad_runtime", "name": f"Mop Pad Runtime (/{MOP_PAD_REPLACE_HOURS} h)"},
+                    {"entity": f"button.{_d}_reset_mop_pad_replaced", "name": "Mark Mop Pad Replaced"},
                 ],
             },
         ],
@@ -599,7 +605,7 @@ def _build_config(
                 }
             ],
         }
-    views = [view_control, view_rooms, view_stats, view_maintenance, view_map]
+    views = [view_control, view_rooms, view_map, view_maintenance, view_stats]
 
     return {
         "title": title,

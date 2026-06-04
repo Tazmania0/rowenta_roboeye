@@ -70,13 +70,13 @@ def test_negative_delta_clamped_to_zero():
 def test_dustbin_triggers_on_area():
     """Dustbin alert fires when the area threshold is reached."""
     store = _store(dustbin_clean_baseline_mm2=0, dustbin_clean_baseline_s=0)
-    assert store.area_since_clean_m2("dustbin", 16 * A) >= DUSTBIN_CLEAN_M2
+    assert store.area_since_clean_m2("dustbin", 101 * A) >= DUSTBIN_CLEAN_M2
 
 
 def test_dustbin_triggers_on_time():
     """Dustbin alert fires on time even when area is below threshold."""
     store = _store(dustbin_clean_baseline_mm2=0, dustbin_clean_baseline_s=0)
-    assert store.runtime_since_clean_h("dustbin", int(2.5 * H)) >= DUSTBIN_CLEAN_HOURS
+    assert store.runtime_since_clean_h("dustbin", int(3.5 * H)) >= DUSTBIN_CLEAN_HOURS
     assert store.area_since_clean_m2("dustbin", 5 * A) < DUSTBIN_CLEAN_M2
 
 

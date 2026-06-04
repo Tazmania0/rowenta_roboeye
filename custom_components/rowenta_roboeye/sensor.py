@@ -1054,7 +1054,7 @@ MAINTENANCE_SENSORS: tuple[RobEyeMaintenanceSensorDescription, ...] = (
         key="mop_pad_replace",
         translation_key="mop_pad_runtime",
         entity_suffix="mop_pad_runtime",
-        unit=UnitOfTime.HOURS, icon="mdi:mop",
+        unit=UnitOfTime.HOURS, icon="mdi:water",
         limit=MOP_PAD_REPLACE_HOURS,
         value_fn=_runtime_replace("mop_pad"),
         wet_only=True,
