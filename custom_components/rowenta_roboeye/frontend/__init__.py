@@ -114,12 +114,18 @@ class JSModuleRegistration:
             _LOGGER.debug("RobEye frontend: lovelace not in hass.data, retry in 5s")
             self._schedule_retry(self._async_retry_register_resources)
             return
-        # Only works in storage mode
-        if getattr(self.lovelace, "mode", None) != "storage":
+        # HA < 2026.x: hass.data["lovelace"] is a LovelaceStorage object with .mode
+        # HA 2026.x+:  hass.data["lovelace"] is a LovelaceData dataclass with .resource_mode
+        mode = (
+            getattr(self.lovelace, "mode", None)
+            or getattr(self.lovelace, "resource_mode", None)
+        )
+        # Only works in storage mode (or when mode cannot be determined — assume storage)
+        if mode not in (None, "storage"):
             _LOGGER.debug(
                 "RobEye frontend: Lovelace is in %s mode — "
                 "add resource manually: %s/rowenta-map-card.js",
-                getattr(self.lovelace, "mode", "unknown"), _URL_BASE,
+                mode, _URL_BASE,
             )
             return
         await self._async_wait_for_resources()
@@ -142,6 +148,17 @@ class JSModuleRegistration:
                 _LOGGER.debug("RobEye frontend: resources not available yet, retry in 5s")
                 self._schedule_retry(_try)
                 return
+            # HA 2026.x+ uses lazy-loaded ResourceStorageCollection.  If the
+            # collection reports itself as not yet loaded AND exposes async_load(),
+            # call it now so async_items() / async_create_item() see the persisted
+            # data instead of an empty uninitialized set.
+            if not getattr(resources, "loaded", True) and hasattr(resources, "async_load"):
+                try:
+                    await resources.async_load()
+                except Exception as load_err:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "RobEye frontend: resources.async_load() failed: %s", load_err
+                    )
             if not getattr(resources, "loaded", True):
                 _LOGGER.debug("RobEye frontend: resources not loaded yet, retry in 5s")
                 self._schedule_retry(_try)
