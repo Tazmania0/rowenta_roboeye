@@ -1990,7 +1990,11 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             area_time_ms[area_id] = int(t)
 
-        total_ms = 0
+        # Track active job and pending jobs separately so overrunning the active
+        # job's estimate never eats into the pending jobs' time.
+        active_ms = 0
+        pending_ms = 0
+        first_clean_found = False
         found = False
 
         for _priority, _seq, coro_func, args, kwargs in items:
@@ -1999,15 +2003,21 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
             found = True
             area_ids_str = str(kwargs.get("area_ids", ""))
+            job_ms = 0
             if not area_ids_str:
                 # clean_all with no explicit area_ids — sum all areas
-                total_ms += sum(area_time_ms.values())
-                continue
-            for area_id_s in area_ids_str.split(","):
-                try:
-                    total_ms += area_time_ms.get(int(area_id_s.strip()), 0)
-                except ValueError:
-                    continue
+                job_ms = sum(area_time_ms.values())
+            else:
+                for area_id_s in area_ids_str.split(","):
+                    try:
+                        job_ms += area_time_ms.get(int(area_id_s.strip()), 0)
+                    except ValueError:
+                        continue
+            if not first_clean_found:
+                active_ms = job_ms
+                first_clean_found = True
+            else:
+                pending_ms += job_ms
 
         # Fallback: robot is cleaning but session was not started from the HA queue
         # (e.g. native app or schedule).  Read area_ids from /get/status.
@@ -2018,7 +2028,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if isinstance(raw_ids, list):
                     for raw_id in raw_ids:
                         try:
-                            total_ms += area_time_ms.get(int(raw_id), 0)
+                            active_ms += area_time_ms.get(int(raw_id), 0)
                             found = True
                         except (ValueError, TypeError):
                             continue
@@ -2026,15 +2036,16 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not found:
             return None
 
-        total_s = int(total_ms / 1000)
+        active_s = int(active_ms / 1000)
+        pending_s = int(pending_ms / 1000)
 
-        # Subtract time already spent in the current cleaning session so the
-        # sensor counts down rather than showing a static forecast.
+        # Subtract elapsed time only from the active job — not from pending jobs.
+        # This prevents an overrunning active job from zeroing out the pending total.
         if self._clean_session_start_time is not None:
             elapsed_s = int(_time.monotonic() - self._clean_session_start_time)
-            total_s = max(0, total_s - elapsed_s)
+            active_s = max(0, active_s - elapsed_s)
 
-        return total_s
+        return active_s + pending_s
 
     def _resolve_map_name(self, map_id: str) -> str:
         """Return display name for a map_id from available_maps."""

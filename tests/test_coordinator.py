@@ -1739,6 +1739,63 @@ async def test_queue_eta_different_rooms_per_job(coordinator):
 
 
 @pytest.mark.asyncio
+async def test_queue_eta_active_plus_pending_sums_all(coordinator):
+    """Active job in _active_command + pending jobs in queue → ETA sums all."""
+    import json as _json
+
+    coordinator.data = {DATA_STATUS: {"mode": "cleaning", "charging": "not_charging"}}
+    coordinator._areas_snapshot["3"] = AreaSnapshot.from_blob({"areas": [
+        {"id": 10, "area_meta_data": _json.dumps({"name": "living"}),
+         "statistics": {"average_cleaning_time": 900000}},   # 900 s
+        {"id": 11, "area_meta_data": _json.dumps({"name": "kitchen"}),
+         "statistics": {"average_cleaning_time": 600000}},   # 600 s
+    ]})
+
+    async def fake_clean_map(**kwargs): return {"cmd_id": 1}
+    fake_clean_map.__name__ = "clean_map"
+
+    # Job 1 dequeued and active; job 2 still in the queue
+    job1_kwargs = {"map_id": "3", "area_ids": "10"}
+    coordinator._active_command = (1, 1, fake_clean_map, (), job1_kwargs)
+    coordinator._inflight_clean_command = (fake_clean_map, job1_kwargs, 42)
+    coordinator._command_queue.put_nowait((1, 2, fake_clean_map, (), {"map_id": "3", "area_ids": "11"}))
+
+    eta = coordinator.queue_eta_seconds
+    # 900 (active job, room 10) + 600 (pending job, room 11) = 1500 s
+    assert eta == 1500
+
+
+@pytest.mark.asyncio
+async def test_queue_eta_overrun_preserves_pending(coordinator):
+    """When active job overruns its estimate, pending jobs' time is preserved."""
+    import json as _json
+    import time as _time_mod
+
+    coordinator.data = {DATA_STATUS: {"mode": "cleaning", "charging": "not_charging"}}
+    coordinator._areas_snapshot["3"] = AreaSnapshot.from_blob({"areas": [
+        {"id": 10, "area_meta_data": _json.dumps({"name": "living"}),
+         "statistics": {"average_cleaning_time": 900000}},   # 900 s
+        {"id": 11, "area_meta_data": _json.dumps({"name": "kitchen"}),
+         "statistics": {"average_cleaning_time": 600000}},   # 600 s
+    ]})
+
+    async def fake_clean_map(**kwargs): return {"cmd_id": 1}
+    fake_clean_map.__name__ = "clean_map"
+
+    job1_kwargs = {"map_id": "3", "area_ids": "10"}
+    coordinator._active_command = (1, 1, fake_clean_map, (), job1_kwargs)
+    coordinator._inflight_clean_command = (fake_clean_map, job1_kwargs, 42)
+    coordinator._command_queue.put_nowait((1, 2, fake_clean_map, (), {"map_id": "3", "area_ids": "11"}))
+
+    # Simulate active job overrunning: elapsed > active job estimate (900 s)
+    coordinator._clean_session_start_time = _time_mod.monotonic() - 2500
+
+    eta = coordinator.queue_eta_seconds
+    # active job overran → 0; pending room 11 still contributes 600 s
+    assert eta == 600
+
+
+@pytest.mark.asyncio
 async def test_stale_data_areas_cleared_on_map_switch(coordinator, mock_client):
     """When the active map switches, coordinator.areas returns rooms only for the
     active map — areas from the old map are not accessible via coordinator.areas."""
