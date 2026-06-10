@@ -40,6 +40,7 @@ Discovered endpoints (from ApolloLogs / network capture):
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from typing import Any
 
 import aiohttp
@@ -90,6 +91,23 @@ from .const import (
 )
 
 
+def format_url_host(host: str) -> str:
+    """Return host formatted for use in a URL.
+
+    Bare IPv6 literals (e.g. from zeroconf discovery on IPv6-only networks)
+    must be bracketed to form a valid URL; everything else passes through
+    unchanged.
+    """
+    if host.startswith("["):
+        return host
+    try:
+        if isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address):
+            return f"[{host}]"
+    except ValueError:
+        pass
+    return host
+
+
 class CannotConnect(Exception):
     """Raised when the API is unreachable, times out, or returns an HTTP error."""
 
@@ -110,7 +128,7 @@ class RobEyeApiClient:
     # ── Internal ──────────────────────────────────────────────────────
 
     def _url(self, path: str) -> str:
-        return f"http://{self._host}:{self._port}{path}"
+        return f"http://{format_url_host(self._host)}:{self._port}{path}"
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """Perform a GET request and return parsed JSON.
