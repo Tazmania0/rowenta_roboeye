@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
-from custom_components.rowenta_roboeye.api import CannotConnect, RobEyeApiClient
+from custom_components.rowenta_roboeye.api import (
+    CannotConnect,
+    RobEyeApiClient,
+    format_url_host,
+)
 from custom_components.rowenta_roboeye.const import STRATEGY_DEFAULT
 
 
@@ -53,6 +57,25 @@ def _patch_session(response: AsyncMock):
 
 def test_url_format(client):
     assert client._url("/get/status") == "http://192.168.1.100:8080/get/status"
+
+
+def test_url_format_ipv6_bracketed():
+    client = RobEyeApiClient(host="fd00::1234")
+    assert client._url("/get/status") == "http://[fd00::1234]:8080/get/status"
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("192.168.1.100", "192.168.1.100"),       # IPv4 unchanged
+        ("robot.local", "robot.local"),            # hostname unchanged
+        ("fd00::1234", "[fd00::1234]"),            # bare IPv6 gets brackets
+        ("fe80::1%eth0", "[fe80::1%eth0]"),        # zone-id IPv6 gets brackets
+        ("[fd00::1234]", "[fd00::1234]"),          # already bracketed unchanged
+    ],
+)
+def test_format_url_host(host, expected):
+    assert format_url_host(host) == expected
 
 
 # ── GET endpoints — success paths ────────────────────────────────────

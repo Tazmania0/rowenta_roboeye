@@ -12,7 +12,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
-from .api import CannotConnect, RobEyeApiClient
+from .api import CannotConnect, RobEyeApiClient, format_url_host
 from .const import CONF_HOSTNAME, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DEFAULT_PORT, DOMAIN, LOGGER
 
 
@@ -148,7 +148,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         self.context.update(
             {
                 "title_placeholders": {"host": self._host},
-                "configuration_url": f"http://{self._host}:{DEFAULT_PORT}",
+                "configuration_url": f"http://{format_url_host(self._host)}:{DEFAULT_PORT}",
             }
         )
 

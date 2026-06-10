@@ -12,6 +12,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .api import format_url_host
 from .const import DOMAIN, LOGGER
 from .coordinator import RobEyeCoordinator
 
@@ -443,5 +444,5 @@ class RobEyeEntity(CoordinatorEntity[RobEyeCoordinator]):
             model="Xplorer 120",
             serial_number=serial,
             sw_version=sw_version,
-            configuration_url=f"http://{host}:8080" if host else None,
+            configuration_url=f"http://{format_url_host(host)}:8080" if host else None,
         )
