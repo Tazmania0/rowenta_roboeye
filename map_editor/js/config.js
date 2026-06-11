@@ -86,12 +86,15 @@ export const STRATEGY_MODES = [
   { value: 'deep',   label: 'Deep Clean' },
 ];
 
+// Fan-speed values follow the confirmed firmware mapping used by the HA
+// integration (see custom_components FAN_SPEED_MAP / api.py modify_area):
+//   1=Normal, 2=Eco, 3=High, 4=Silent, 0=per-room default.
 export const FAN_SPEEDS = [
   { value: '0', label: 'Default (per-room)' },
+  { value: '1', label: 'Normal'             },
   { value: '2', label: 'Eco'                },
-  { value: '3', label: 'Normal'             },
-  { value: '1', label: 'Silent'             },
-  { value: '4', label: 'Super Silent'       },
+  { value: '3', label: 'High'               },
+  { value: '4', label: 'Silent'             },
 ];
 
 export const EXPLORE_TIMEOUT    = 10 * 60 * 1000;

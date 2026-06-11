@@ -13,8 +13,9 @@
 // v2.8.0: skip redundant re-renders (only rebuild when inputs change);
 //         escape interpolated title/entity/error text; disable control bar
 //         with a hint when the vacuum entity can't be resolved.
+// v2.8.1: escape robot-supplied room.id before interpolating into SVG attrs.
 
-const VERSION = "2.8.0";
+const VERSION = "2.8.1";
 
 // ── Geometry helpers ────────────────────────────────────────────────────
 
@@ -455,7 +456,7 @@ class RowentaMapCard extends HTMLElement {
         // Redundant auto-segment: very faint, dashed border, no fill
         const dashLen = (sw * 4).toFixed(1);
         const gapLen  = (sw * 2.5).toFixed(1);
-        roomFills += `<g class="room-hit" data-area-id="${room.id}" style="cursor:pointer">
+        roomFills += `<g class="room-hit" data-area-id="${this._esc(String(room.id))}" style="cursor:pointer">
           <polygon points="${pts2str(p)}"
             fill="${sel ? "rgba(33,150,243,0.35)" : "none"}"
             stroke="${sel ? "#2196F3" : room.color}"
@@ -469,7 +470,7 @@ class RowentaMapCard extends HTMLElement {
         const fop    = sel ? "1"                      : String(roomOpacity);
         const stroke = sel ? "#2196F3"                : room.color;
         const ssw    = sel ? (sw * 2).toFixed(1)      : sw.toFixed(1);
-        roomFills += `<g class="room-hit" data-area-id="${room.id}" style="cursor:pointer">
+        roomFills += `<g class="room-hit" data-area-id="${this._esc(String(room.id))}" style="cursor:pointer">
           <polygon points="${pts2str(p)}"
             fill="${fill}" fill-opacity="${fop}"
             stroke="${stroke}" stroke-width="${ssw}" stroke-linejoin="round"

@@ -37,14 +37,12 @@ from .const import (
     DATA_AREAS_SAVED_MAP,
     DATA_CLEANING_GRID,
     DATA_EVENT_LOG,
-    DATA_EXPLORATION,
     DATA_FEATURE_MAP,
     DATA_LIVE_MAP,
     DATA_LIVE_PARAMETERS,
     DATA_MAP_STATUS,
     DATA_MAPS,
     DATA_PERMANENT_STATISTICS,
-    DATA_RELOCALIZATION,
     DATA_ROB_POSE,
     DATA_ROBOT_FLAGS,
     DATA_SCHEDULE,
@@ -461,6 +459,7 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         first_population = not self._known_map_ids
         self._known_map_ids = new_map_ids
 
+        active_map_fell_back = False
         if removed:
             for mid in removed:
                 self._areas_snapshot.pop(mid, None)
@@ -471,6 +470,19 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._active_map_id, fallback,
                 )
                 self._active_map_id = fallback
+                active_map_fell_back = True
+
+        if active_map_fell_back:
+            # The active map changed underneath us (not via async_set_active_map),
+            # so per-map entity availability and the active-map select are stale.
+            # Flip availability now and fire SIGNAL_ACTIVE_MAP_CHANGED so the
+            # dashboard and select reflect the fallback map.
+            self.async_update_listeners()
+            async_dispatcher_send(
+                self.hass,
+                f"{SIGNAL_ACTIVE_MAP_CHANGED}_{self.config_entry.entry_id}",
+                self._active_map_id,
+            )
 
         if not first_population and (added or removed):
             LOGGER.info(
@@ -607,6 +619,16 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             is_active = mode in (MODE_CLEANING, MODE_GO_HOME)
             if not is_active:
                 self._inflight_clean_command = None
+
+            # ── During cleaning: live parameters (current area/time) ──
+            # Drives the current_area_cleaned / current_cleaning_time sensors.
+            # Only meaningful while a session is running; left untouched (last
+            # value preserved) otherwise.
+            if mode == MODE_CLEANING:
+                try:
+                    data[DATA_LIVE_PARAMETERS] = await self.client.get_live_parameters()
+                except CannotConnect:
+                    LOGGER.debug("get_live_parameters unavailable, skipping")
 
             # ── Dynamically adjust polling rate ───────────────────────
             target_interval = UPDATE_INTERVAL_CLEANING if is_active else UPDATE_INTERVAL_IDLE
@@ -885,15 +907,26 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._last_statistics is None or (
                 now - self._last_statistics
             ) >= timedelta(seconds=SCAN_INTERVAL_STATISTICS):
-                data[DATA_STATISTICS] = await self.client.get_statistics()
+                _stats_fetched = False
+                try:
+                    data[DATA_STATISTICS] = await self.client.get_statistics()
+                    _stats_fetched = True
+                except CannotConnect:
+                    # A single dropped statistics request must not fail the whole
+                    # update (which would flip every entity unavailable).  Skip it
+                    # and retry next cycle, leaving the last good value in place.
+                    LOGGER.debug("get_statistics unavailable, skipping")
                 try:
                     data[DATA_PERMANENT_STATISTICS] = (
                         await self.client.get_permanent_statistics()
                     )
                 except CannotConnect:
                     LOGGER.debug("get_permanent_statistics unavailable, skipping")
-                self._last_statistics = now
-                if DATA_STATISTICS in data:
+                # Only advance the timer when statistics actually refreshed, so a
+                # transient failure retries next tick rather than waiting the full
+                # SCAN_INTERVAL_STATISTICS window.
+                if _stats_fetched:
+                    self._last_statistics = now
                     await self._check_maintenance_notifications(
                         data[DATA_STATISTICS]
                     )
@@ -1037,6 +1070,14 @@ class RobEyeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             store = MaintenanceStore(self.hass, self.device_id)
             await store.async_load()
+            # Brand-new store on an already-used robot: seed baselines from the
+            # current lifetime totals so consumables don't read as fully spent on
+            # day one.  Only seed when we actually have totals to anchor to.
+            if store.is_new:
+                ts = self.perm_total_cleaning_time
+                mm2 = self.perm_total_area_cleaned
+                if ts or mm2:
+                    await store.async_seed_baselines(ts, mm2)
             self.maintenance = store
             LOGGER.debug("Maintenance store loaded for device %s", self.device_id)
         except Exception:  # noqa: BLE001
@@ -2355,93 +2396,10 @@ _HEADING_SCALE = 65536 / 360  # raw heading units per degree
 
 
 # ── Position extraction helpers ───────────────────────────────────────
-
-def _extract_relocalization_position(reloc: dict) -> dict | None:
-    """Extract robot position from /debug/relocalization response.
-
-    Used during cleaning of the saved map (map_id=3).
-    Returns multiple 'continuous' entries — use the LAST one (highest rtc_time).
-    rob_pose = [x_units, y_units, heading_raw]; 1 unit = 2 mm.
-    """
-    entries = reloc.get("localization_algo_input", [])
-    entry = next(
-        (e for e in reversed(entries)
-         if e.get("localization_type") == "continuous"),
-        None,
-    )
-    if not entry or "rob_pose" not in entry:
-        return None
-    rob_pose = entry["rob_pose"]
-    if not isinstance(rob_pose, list) or len(rob_pose) < 2:
-        return None
-    x, y = rob_pose[0], rob_pose[1]
-    h = rob_pose[2] if len(rob_pose) > 2 else 0
-    return {
-        "x":           x,
-        "y":           y,
-        "heading_deg": round(h / _HEADING_SCALE, 1),
-        "source":      "relocalization",
-        "is_live":     True,
-    }
-
-
-def _extract_localization_position(loc: dict) -> dict | None:
-    """Extract robot position from /debug/localization response.
-
-    Used when robot is idle (mode='ready'/'charging').
-    Prefers 'global' entry over 'startpoint'.
-    Data may be hours old — shown as dimmed 'last known' position.
-    """
-    entries = loc.get("localization_algo_input", [])
-    entry = next(
-        (e for e in entries if e.get("localization_type") == "global"),
-        None,
-    ) or next(
-        (e for e in entries if e.get("localization_type") == "startpoint"),
-        None,
-    )
-    if not entry or "rob_pose" not in entry:
-        return None
-    rob_pose = entry["rob_pose"]
-    if not isinstance(rob_pose, list) or len(rob_pose) < 2:
-        return None
-    x, y = rob_pose[0], rob_pose[1]
-    h = rob_pose[2] if len(rob_pose) > 2 else 0
-    return {
-        "x":           x,
-        "y":           y,
-        "heading_deg": round(h / _HEADING_SCALE, 1),
-        "source":      "localization",
-        "is_live":     False,  # stale — shown dimmed in card
-    }
-
-
-def _extract_exploration_position(exploration: dict) -> dict | None:
-    """Extract robot position from /debug/exploration response.
-
-    Used during new-map exploration sessions (operation_map_id != saved map_id).
-    Uses entry with highest 'ts' (most recent navigation decision).
-    Coordinates are in the LIVE MAP's own coordinate system (not map 3).
-    """
-    points = exploration.get("exploration_points", [])
-    if not points:
-        return None
-    last = max(points, key=lambda p: p.get("ts", 0))
-    rob_pose = last.get("rob_pose")
-    if not rob_pose or len(rob_pose) < 2:
-        return None
-    x, y = rob_pose[0], rob_pose[1]
-    h = rob_pose[2] if len(rob_pose) > 2 else 0
-    return {
-        "x":           x,
-        "y":           y,
-        "heading_deg": round(h / _HEADING_SCALE, 1),
-        "source":      "exploration",
-        "is_live":     True,
-        "ts":          last.get("ts"),
-        "event_type":  last.get("type", ""),
-    }
-
+# Live position comes exclusively from /get/rob_pose (works in all robot
+# states).  The older /debug/{relocalization,localization,exploration}
+# extractors were removed — that endpoint family is no longer used for runtime
+# tracking (see CLAUDE.md "Working with Robot Position").
 
 def _extract_rob_pose(rob_pose: dict) -> dict | None:
     """Extract robot position from /get/rob_pose response.

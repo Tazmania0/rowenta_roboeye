@@ -65,9 +65,15 @@ class MaintenanceStore:
         key = f"rowenta_roboeye.maintenance.{str(robot_unique_id).replace('-', '_')}"
         self._store = Store(hass, STORAGE_VERSION, key)
         self._data: dict = {}
+        # True when async_load() found no persisted data — i.e. a brand-new
+        # install with no prior baselines.  Lets the coordinator seed baselines
+        # from current lifetime totals so an already-used robot doesn't report
+        # its entire history as "consumed since last reset".
+        self.is_new: bool = False
 
     async def async_load(self) -> None:
         loaded = await self._store.async_load()
+        self.is_new = not loaded
         # Deep copy so nested mutable defaults (e.g. ``last_reset``) are never
         # shared with the module-level DEFAULT_DATA — async_reset() mutates them
         # in place, which would otherwise leak across robots/stores.
@@ -75,6 +81,26 @@ class MaintenanceStore:
         # Ensure all default keys exist (migration safety for older stores).
         for k, v in DEFAULT_DATA.items():
             self._data.setdefault(k, copy.deepcopy(v))
+
+    async def async_seed_baselines(
+        self, current_total_s: int, current_total_mm2: int
+    ) -> None:
+        """Set every baseline to the current lifetime totals.
+
+        Called once for a brand-new store so a robot that already has runtime /
+        area on the clock starts every maintenance counter at zero "since reset"
+        instead of immediately reporting (and alerting) as overdue.
+        """
+        for key in DEFAULT_DATA:
+            if key.endswith("_baseline_s"):
+                self._data[key] = current_total_s
+            elif key.endswith("_baseline_mm2"):
+                self._data[key] = current_total_mm2
+        await self.async_save()
+        LOGGER.info(
+            "Maintenance baselines seeded from current totals (s=%s, mm2=%s)",
+            current_total_s, current_total_mm2,
+        )
 
     async def async_save(self) -> None:
         await self._store.async_save(self._data)

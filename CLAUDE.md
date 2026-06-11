@@ -27,10 +27,11 @@ rowenta_roboeye/
 │   ├── coordinator.py       # DataUpdateCoordinator — multi-endpoint polling hub
 │   ├── dashboard.py         # Auto-generates Lovelace dashboard; RobEyeDashboardManager
 │   ├── entity.py            # Shared base entity + entity-registry housekeeping helpers
+│   ├── maintenance_store.py # Persistent maintenance counters (delta vs /get/statistics totals)
 │   ├── vacuum.py            # StateVacuumEntity — main control entity; registers clean_room + remove_queue_entry services
-│   ├── sensor.py            # Static + per-room sensors + live_map, schedule, command-queue, selected-room-count sensors
-│   ├── binary_sensor.py     # side_brush_left_stuck, side_brush_right_stuck, dustbin present
-│   ├── button.py            # Clean All, Stop, Return Home, Clean Selected, per-room clean buttons
+│   ├── sensor.py            # Static + per-room sensors + live_map, schedule, command-queue, selected-room-count, maintenance sensors
+│   ├── binary_sensor.py     # side_brush_left_stuck, side_brush_right_stuck, dustbin present, maintenance "due" sensors
+│   ├── button.py            # Clean All, Stop, Return Home, Clean Selected, per-room clean, maintenance reset buttons
 │   ├── select.py            # Global + per-room fan speed, strategy, active-map selectors
 │   ├── switch.py            # Global/per-room deep clean, per-room selection, per-task schedule switches
 │   ├── manifest.json        # Integration metadata, HA version floor, dependencies
@@ -55,6 +56,7 @@ rowenta_roboeye/
 │   ├── test_dashboard_entity_guard.py  # Dashboard entity-readiness guard tests
 │   ├── test_editor_server.py           # Map-editor proxy server IP-validation tests
 │   ├── test_init.py                    # async_setup/unload + init wiring helper tests
+│   ├── test_maintenance.py             # Maintenance counter store + due/reset entity tests
 │   ├── test_map_switch_atomic.py       # Snapshot-model map-switch + areas-cache tests
 │   ├── test_notifications_and_events.py# Event-log processing + brush/dustbin notification tests
 │   ├── test_select.py       # Select entity tests

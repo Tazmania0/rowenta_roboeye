@@ -11,6 +11,12 @@ import { updateEtaChip } from './eta.js';
 
 const emptyState = document.getElementById('empty-state');
 
+// Monotonic load token: every loadMap() call claims a new generation.  Async
+// results from a superseded call (user clicked a different map while the first
+// was still fetching) are discarded so state.areas/bbox never desync from
+// state.activeMapId — which would otherwise send wrong-map area IDs to the robot.
+let _loadGeneration = 0;
+
 // Reduce-based min/max — Math.min(...arr) spreads every element as an argument
 // and throws RangeError ("Maximum call stack size exceeded") on very large
 // coordinate arrays (dense outlines). reduce avoids the spread entirely.
@@ -105,6 +111,8 @@ export async function loadMap(mapId) {
     return;
   }
 
+  const myGeneration = ++_loadGeneration;
+
   state.activeMapId = mapId;
   state.selectedAreaId = null;
   state.selectedAreaIds = new Set();
@@ -126,6 +134,13 @@ export async function loadMap(mapId) {
       api(`/get/feature_map?map_id=${mapId}`),
     ]);
     await loadLastSessionGrid(mapId);
+
+    // A newer loadMap() superseded this one while we were awaiting — discard
+    // these stale results rather than overwriting the newer map's state.
+    if (myGeneration !== _loadGeneration) {
+      console.log('[rowenta-editor] stale map load ignored for map_id:', mapId);
+      return;
+    }
 
     console.log('[rowenta-editor] /get/areas keys:', Object.keys(areasRes));
     console.log('[rowenta-editor] /get/tile_map keys:', Object.keys(tileRes));

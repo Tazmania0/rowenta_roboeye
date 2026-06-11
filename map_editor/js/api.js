@@ -4,15 +4,23 @@
 import { USE_PROXY, ROBOT_PORT } from './config.js';
 import * as config from './config.js';
 
-// When running via proxy server, we can set the robot IP dynamically
+// When running via proxy server, we can set the robot IP dynamically.
+// Surfaces the proxy's validation error (e.g. 400 "must be a private LAN
+// address") instead of swallowing it, so the caller can show the real reason
+// rather than a misleading downstream "HTTP 502" from the first /get request.
 export async function setProxyRobotIP(ip) {
-  try {
-    await fetch('/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ robot_ip: ip }),
-    });
-  } catch(e) { /* best-effort */ }
+  const resp = await fetch('/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ robot_ip: ip }),
+  });
+  if (!resp.ok) {
+    let detail = '';
+    try {
+      detail = (await resp.json()).error || '';
+    } catch { /* non-JSON body */ }
+    throw new Error(detail || `Proxy rejected robot IP (HTTP ${resp.status})`);
+  }
 }
 
 export function api(path) {

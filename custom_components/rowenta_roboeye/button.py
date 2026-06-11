@@ -602,6 +602,13 @@ class RobEyeCleanSelectedButton(RobEyeBaseButton):
 
         # Resolve fan speed — use most intensive across selected rooms
         _speed_order = {"silent": 0, "eco": 1, "normal": 2, "high": 3}
+        # Strategy intensity order (low→high): Default (auto) < Normal < Walls & Corners.
+        # Matches RobEyeCleanAllButton so both paths escalate identically.
+        _strategy_order = {
+            STRATEGY_DEFAULT: 0,
+            STRATEGY_NORMAL: 1,
+            STRATEGY_WALLS_CORNERS: 2,
+        }
         best_raw = self.coordinator.ha_fan_speed or str(
             self.coordinator.status.get("cleaning_parameter_set", "2")
         )
@@ -625,13 +632,14 @@ class RobEyeCleanSelectedButton(RobEyeBaseButton):
                 ) > _speed_order.get(FAN_SPEED_MAP.get(best_raw, ""), -1):
                     best_raw = candidate
 
-            # Per-room strategy (only if deep not already locked in)
+            # Per-room strategy (only if deep not already locked in): escalate to
+            # the most intensive strategy requested by any selected room.
             if strategy != STRATEGY_DEEP:
                 strat_sel_id = f"select.{device_id}_{_m}room_{area_id}_strategy"
                 strat_state = hass.states.get(strat_sel_id)
                 if strat_state is not None and strat_state.state in STRATEGY_REVERSE_MAP:
                     room_strat = STRATEGY_REVERSE_MAP[strat_state.state]
-                    if room_strat != STRATEGY_DEFAULT and strategy == STRATEGY_DEFAULT:
+                    if _strategy_order.get(room_strat, 0) > _strategy_order.get(strategy, 0):
                         strategy = room_strat
 
         area_ids_str = ",".join(selected_ids)
