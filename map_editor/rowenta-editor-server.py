@@ -93,6 +93,28 @@ def _validate_robot_ip(raw):
     return str(addr)
 
 
+# Content types the proxy is willing to echo from the robot.  The robot's API
+# only ever returns JSON or plain text; anything else (notably text/html) must
+# not be served on the proxy's own origin, where a compromised device could
+# otherwise deliver executable script.  CR/LF are stripped to block header
+# injection via a malicious Content-Type value.
+_SAFE_PROXY_CONTENT_TYPES = ("application/json", "text/plain")
+
+
+def _safe_proxy_content_type(raw):
+    base = (
+        str(raw or "")
+        .split(";", 1)[0]
+        .replace("\r", "")
+        .replace("\n", "")
+        .strip()
+        .lower()
+    )
+    if base in _SAFE_PROXY_CONTENT_TYPES:
+        return base + "; charset=utf-8"
+    return "text/plain; charset=utf-8"
+
+
 def _host_label(header_value):
     """Extract the bare hostname from a Host/Origin header value (drop port, brackets)."""
     h = (header_value or "").strip().lower()
@@ -272,7 +294,10 @@ class Handler(BaseHTTPRequestHandler):
             req = urllib.request.Request(url)
             with _PROXY_OPENER.open(req, timeout=15) as resp:
                 body  = resp.read()
-                ctype = resp.headers.get('Content-Type', 'application/json')
+                # Never echo the robot's Content-Type verbatim — constrain it to a
+                # safe, non-executable allowlist (CRLF stripped) so a compromised
+                # device can't serve HTML/script on the proxy origin.
+                ctype = _safe_proxy_content_type(resp.headers.get('Content-Type'))
                 self._respond(resp.status, ctype, body)
         except urllib.error.HTTPError as e:
             self._respond(e.code, 'application/json', e.read() or b'{}')
@@ -290,6 +315,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Length', len(body))
             self.send_header('Cache-Control', 'no-store, max-age=0')
             self.send_header('Pragma', 'no-cache')
+            # Stop the browser from MIME-sniffing a proxied body into HTML/script.
+            self.send_header('X-Content-Type-Options', 'nosniff')
             # No Access-Control-Allow-Origin: the UI is served same-origin via this
             # proxy, so CORS is unnecessary; a wildcard would let any web page read
             # robot data and drive the proxy cross-origin.

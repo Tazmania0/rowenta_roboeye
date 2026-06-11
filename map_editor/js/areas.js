@@ -186,6 +186,7 @@ export async function saveArea() {
         room_type: roomType,
         cleaning_parameter_set: fanSpeed,
         strategy_mode: strategy,
+        floor_type: floorType,
       }),
       changesMetadata: true,
       localPatch: {
@@ -194,6 +195,7 @@ export async function saveArea() {
         room_type: roomType,
         cleaning_parameter_set: fanSpeed,
         strategy_mode: strategy,
+        floor_type: floorType,
       },
     },
     {
@@ -432,9 +434,12 @@ export function _renderAreaStats(area) {
   const avgMins     = stats.average_cleaning_time > 0
     ? (stats.average_cleaning_time / 60000).toFixed(1) + ' min' : '—';
   const lc = stats.last_cleaned;
-  const lastCleaned = (!lc || lc.year === 2001 || lc.year == null) ? 'Never'
-    : `${lc.year}-${String(lc.month ?? 1).padStart(2, '0')}-`
-    + String(lc.day ?? 1).padStart(2, '0');
+  // Coerce date parts to integers before interpolating into innerHTML — these
+  // come from the robot and must not be able to carry markup into the panel.
+  const lcYear = lc ? Number(lc.year) : NaN;
+  const lastCleaned = (!lc || lcYear === 2001 || !Number.isFinite(lcYear)) ? 'Never'
+    : `${lcYear}-${String(Number(lc.month) || 1).padStart(2, '0')}-`
+    + String(Number(lc.day) || 1).padStart(2, '0');
   el.style.display = '';
   el.innerHTML = `<div class="panel-title">Statistics</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:11px">

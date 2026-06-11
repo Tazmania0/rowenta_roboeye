@@ -123,8 +123,16 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       return;
     }
     config.setRobotIP(ip);
-    // Push IP to the running proxy server so it knows where to forward
-    await setProxyRobotIP(ip);
+    // Push IP to the running proxy server so it knows where to forward.
+    // Surface a rejected IP here rather than letting it masquerade as a
+    // later "cannot reach robot" error.
+    try {
+      await setProxyRobotIP(ip);
+    } catch (e) {
+      setStatus('Connection failed', 'err');
+      showToast(e.message || 'Proxy rejected robot IP', 'error');
+      return;
+    }
     setStatus('Connecting via proxy…', 'busy');
   } else {
     if (!ip) { showToast('Enter robot IP address', 'error'); return; }
