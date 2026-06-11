@@ -67,7 +67,8 @@ async def async_setup_entry(
     known_entities_by_map: dict[str, dict] = {}
     # Tracks last-known area names per map to detect renames: map_id -> {area_id -> name}.
     known_area_names_by_map: dict[str, dict[str, str]] = {}
-    known_task_ids: set[int] = set()
+    # Tracks live schedule switches by task_id so deleted tasks can be removed.
+    schedule_entities: dict[int, "RobEyeScheduleSwitch"] = {}
 
     def _parse_switch_area_name(area: dict) -> str:
         meta_raw = area.get("area_meta_data", "")
@@ -114,23 +115,25 @@ async def async_setup_entry(
             by_area[area_id] = entities_for_area
         return new_entities, by_area
 
-    def _schedule_switches(already_known: set[int]) -> tuple[list, set[int]]:
-        new_entities: list = []
-        new_ids: set[int] = set()
+    def _current_schedule_task_ids() -> set[int]:
+        ids: set[int] = set()
         for item in coordinator.schedule.get("schedule", []):
-            if not isinstance(item, dict):
-                continue
-            raw_task_id = item.get("task_id")
-            if raw_task_id is None:
+            if not isinstance(item, dict) or item.get("task_id") is None:
                 continue
             # Firmware fields are not guaranteed numeric; degrade gracefully
             # instead of raising and aborting the whole platform setup.
-            task_id = safe_int(raw_task_id, -1)
-            if task_id < 0 or task_id in already_known:
-                continue
-            new_entities.append(RobEyeScheduleSwitch(coordinator, task_id))
-            new_ids.add(task_id)
-        return new_entities, new_ids
+            task_id = safe_int(item.get("task_id"), -1)
+            if task_id >= 0:
+                ids.add(task_id)
+        return ids
+
+    def _schedule_switches(already_known: set[int]) -> dict[int, "RobEyeScheduleSwitch"]:
+        """Return new schedule switches (task_id → entity) for unknown tasks."""
+        new: dict[int, RobEyeScheduleSwitch] = {}
+        for task_id in _current_schedule_task_ids():
+            if task_id not in already_known:
+                new[task_id] = RobEyeScheduleSwitch(coordinator, task_id)
+        return new
 
     # Migration: re-enable entities disabled by the old disable/enable model.
     async_enable_all_room_entities(hass, config_entry, "switch")
@@ -170,9 +173,8 @@ async def async_setup_entry(
     }
     async_remove_duplicate_room_entities(hass, config_entry, "switch", room_uids)
 
-    schedule_switches, new_task_ids = _schedule_switches(known_task_ids)
-    entities.extend(schedule_switches)
-    known_task_ids.update(new_task_ids)
+    schedule_entities.update(_schedule_switches(set(schedule_entities)))
+    entities.extend(schedule_entities.values())
 
     async_add_entities(entities)
 
@@ -234,10 +236,25 @@ async def async_setup_entry(
 
     @callback
     def _on_coordinator_updated() -> None:
-        new_entities, new_task_ids = _schedule_switches(known_task_ids)
+        # Remove switches for schedule tasks that no longer exist on the robot
+        # (deleted in the native app) so they don't linger as stale orphans.
+        current_ids = _current_schedule_task_ids()
+        if current_ids or coordinator.schedule.get("schedule") is not None:
+            from homeassistant.helpers import entity_registry as er
+            _ent_reg = er.async_get(hass)
+            for task_id in list(schedule_entities):
+                if task_id not in current_ids:
+                    entity = schedule_entities.pop(task_id)
+                    LOGGER.debug("switch: removing deleted schedule task_id=%s", task_id)
+                    if entity.registry_entry and _ent_reg.async_get(entity.entity_id):
+                        _ent_reg.async_remove(entity.entity_id)
+                    else:
+                        hass.async_create_task(entity.async_remove())
+
+        new_entities = _schedule_switches(set(schedule_entities))
         if new_entities:
-            async_add_entities(new_entities)
-            known_task_ids.update(new_task_ids)
+            schedule_entities.update(new_entities)
+            async_add_entities(list(new_entities.values()))
 
     @callback
     def _on_maps_updated(payload) -> None:

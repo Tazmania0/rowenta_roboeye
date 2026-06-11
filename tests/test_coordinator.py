@@ -140,6 +140,9 @@ async def test_rob_pose_failure_is_non_fatal(coordinator, mock_client):
 @pytest.mark.asyncio
 async def test_live_parameters_failure_is_non_fatal(coordinator, mock_client):
     coordinator.data = {}
+    # live_parameters is only polled while cleaning — drive that path so the
+    # failure is actually exercised.
+    mock_client.get_status.return_value = {**MOCK_STATUS, "mode": "cleaning"}
     mock_client.get_live_parameters.side_effect = CannotConnect("not available")
     # Should not raise — live_parameters is best-effort
     await coordinator._async_update_data()

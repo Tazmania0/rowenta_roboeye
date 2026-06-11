@@ -681,10 +681,21 @@ class RobEyeRoomStrategySelect(RobEyeEntity, SelectEntity, RestoreEntity):
                     if cps is not None:
                         current_cps = str(cps)
                     break
+        # The per-room deep-clean switch takes precedence over this select.
+        # If it is ON, keep the robot's stored strategy_mode as "deep" so this
+        # write doesn't silently disable deep clean (which the 600 s areas sync
+        # would then mirror back, flipping the switch OFF).  The granular non-deep
+        # choice stays in self._selected for when deep is later turned off.
+        deep_eid = (
+            f"switch.{self.coordinator.device_id}"
+            f"_map{self._map_id}_room_{self._area_id}_deep_clean"
+        )
+        deep_state = self.coordinator.hass.states.get(deep_eid)
+        strategy_mode = "deep" if (deep_state is not None and deep_state.state == "on") else "normal"
         await self.coordinator.async_send_command(
             self.coordinator.client.modify_area,
             map_id=self._map_id,
             area_id=self._area_id,
             cleaning_parameter_set=current_cps,
-            strategy_mode="normal",
+            strategy_mode=strategy_mode,
         )

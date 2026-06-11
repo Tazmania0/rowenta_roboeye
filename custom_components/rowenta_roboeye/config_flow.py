@@ -305,7 +305,14 @@ class RobEyeOptionsFlow(OptionsFlow):
             except Exception:  # noqa: BLE001
                 errors["base"] = "unknown"
             else:
-                return self.async_create_entry(
+                # Write to entry.data (NOT entry.options): everything downstream —
+                # async_setup_entry and the reload guard in _async_update_listener —
+                # reads CONF_HOST from entry.data.  async_create_entry on an options
+                # flow stores into entry.options, which those paths never read, so
+                # the IP/name change would silently no-op.  Update data directly and
+                # let the registered update listener reload when the host changes.
+                self.hass.config_entries.async_update_entry(
+                    self._config_entry,
                     title=f"{name} ({host})",
                     data={
                         CONF_HOST: host,
@@ -319,6 +326,7 @@ class RobEyeOptionsFlow(OptionsFlow):
                         CONF_LAST_ACTIVE_MAP: self._config_entry.data.get(CONF_LAST_ACTIVE_MAP),
                     },
                 )
+                return self.async_create_entry(title="", data={})
 
         return self.async_show_form(
             step_id="init",

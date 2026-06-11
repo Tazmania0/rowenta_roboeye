@@ -157,6 +157,31 @@ async def test_fresh_stores_do_not_share_last_reset():
 
 
 @pytest.mark.asyncio
+async def test_fresh_store_is_marked_new_and_seeds_baselines():
+    """A brand-new store reports is_new and can anchor baselines to totals."""
+    store = MaintenanceStore(MagicMock(), "robot-new")
+    await store.async_load()
+    assert store.is_new is True
+    # Robot already has 500h runtime / 300 m² when first added.
+    await store.async_seed_baselines(current_total_s=500 * H, current_total_mm2=300 * A)
+    # Nothing should read as consumed since the just-seeded baseline.
+    assert store.runtime_since_replace_h("main_brush", 500 * H) == 0.0
+    assert store.area_since_clean_m2("dustbin", 300 * A) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_existing_store_not_marked_new():
+    """A store with persisted data must not be treated as new (no re-seed)."""
+    store1 = MaintenanceStore(MagicMock(), "robot-keep")
+    await store1.async_load()
+    await store1.async_reset("main_brush_replace", current_total_s=10, current_total_mm2=0)
+
+    store2 = MaintenanceStore(MagicMock(), "robot-keep")
+    await store2.async_load()
+    assert store2.is_new is False
+
+
+@pytest.mark.asyncio
 async def test_load_seeds_missing_default_keys():
     """Older stores missing new keys get defaults backfilled on load."""
     from homeassistant.helpers.storage import Store

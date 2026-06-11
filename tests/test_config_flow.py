@@ -325,6 +325,7 @@ def _make_options_flow(host="192.168.1.100", serial="sn_persisted"):
 @pytest.mark.asyncio
 async def test_options_flow_happy_path():
     flow = _make_options_flow(serial="sn_persisted")
+    flow.hass.config_entries.async_update_entry = MagicMock()
 
     with patch(
         "custom_components.rowenta_roboeye.config_flow.RobEyeApiClient"
@@ -332,14 +333,18 @@ async def test_options_flow_happy_path():
         MockClient.return_value.test_connection = AsyncMock(return_value=True)
         result = await flow.async_step_init({"host": "192.168.1.101"})
 
+    # The new host must be written to entry.data (not entry.options) so that
+    # async_setup_entry and the reload guard actually see it.
     assert result["type"] == "create_entry"
-    assert result["data"]["host"] == "192.168.1.101"
+    flow.hass.config_entries.async_update_entry.assert_called_once()
+    written = flow.hass.config_entries.async_update_entry.call_args.kwargs["data"]
+    assert written["host"] == "192.168.1.101"
     # Serial must be preserved so entity unique_ids don't change after IP update
-    assert result["data"]["serial"] == "sn_persisted"
+    assert written["serial"] == "sn_persisted"
     # map_id and last_active_map are now preserved through options saves
     # so the active map survives host/name changes without reverting to default
-    assert result["data"].get("map_id") == "3"       # DEFAULT_MAP_ID fallback when not set
-    assert result["data"].get("last_active_map") is None  # not yet set in this test entry
+    assert written.get("map_id") == "3"       # DEFAULT_MAP_ID fallback when not set
+    assert written.get("last_active_map") is None  # not yet set in this test entry
 
 
 @pytest.mark.asyncio
