@@ -72,6 +72,8 @@ For multi-floor homes, use the **Active Map** selector to switch floors after ph
 
 After setup the integration automatically creates a ready-made Lovelace dashboard visible in the HA sidebar under **Dashboards**. No manual steps required.
 
+<a href="docs/screenshots/main_dashboard.png"><img src="docs/screenshots/main_dashboard.png" alt="Home Assistant dashboard with vacuum controls, cleaning mode, status, schedule, and current floor" width="680"></a>
+
 The dashboard includes:
 
 - Vacuum state card with battery
@@ -83,6 +85,10 @@ The dashboard includes:
 - Schedule toggles (enable / disable each saved schedule)
 - Per-room and lifetime statistics
 - Device info (serial, firmware, Wi-Fi)
+
+**Multi-room cleaning:** select rooms, adjust each room's settings, and start a combined clean.
+
+<a href="docs/screenshots/multi_room_clean.png"><img src="docs/screenshots/multi_room_clean.png" alt="Multi-room cleaning view with room selection and per-room settings" width="680"></a>
 
 ---
 
@@ -102,6 +108,8 @@ The card JS file is registered as a Lovelace resource **automatically during int
 - Four control buttons: Start/Pause · Stop · Go Home · Clean Selected Rooms
 - Purely reactive to WebSocket push — zero `setInterval`
 
+<a href="docs/screenshots/live_map_control.png"><img src="docs/screenshots/live_map_control.png" alt="Live map card showing room selection, robot position, and cleaning controls" width="680"></a>
+
 **Card configuration:**
 
 ```yaml
@@ -114,6 +122,10 @@ entity: vacuum.rowenta_xplorer120
 ## Map Editor
 
 The repo includes a standalone **in-browser map editor** (`map_editor/`) for drawing and editing room boundaries directly against the robot's live map. It runs as a lightweight Python proxy server — no dependencies beyond the Python standard library.
+
+<a href="docs/screenshots/map_editor.png"><img src="docs/screenshots/map_editor.png" alt="Standalone Map Editor showing floor maps, room boundaries, no-go and spot zones, and robot controls" width="680"></a>
+
+Select the preview to open the full-size Map Editor screenshot.
 
 **Tools:**
 
@@ -266,6 +278,10 @@ Toggled via `GET /set/modify_scheduled_task?task_id=N&enabled=0\|1`. Schedule sw
 | `sensor.{device_id}_total_distance_driven` | Total distance (m) |
 | `sensor.{device_id}_total_cleaning_time` | Total time (h) |
 
+<a href="docs/screenshots/statistics.png"><img src="docs/screenshots/statistics.png" alt="Lifetime statistics dashboard with device information sensors disabled" width="680"></a>
+
+Device information appears in this view when its diagnostic sensors are enabled.
+
 ---
 
 ### Per-Room Sensors (one set per named room, per map)
@@ -385,6 +401,14 @@ Top-level user-initiated events (`hierarchy=1`, `source_type=user`) are also wri
 | 2011 | Robot set back down |
 | 2030 | Dustbin removed |
 | 2031 | Dustbin inserted |
+
+---
+
+## Maintenance
+
+The dashboard shows cleaning and replacement reminders, usage since the last maintenance action, and buttons to reset each counter after servicing the robot.
+
+<a href="docs/screenshots/maintenance.png"><img src="docs/screenshots/maintenance.png" alt="Maintenance dashboard with alerts, cleaning counters, and replacement runtime" width="680"></a>
 
 ---
 
