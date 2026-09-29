@@ -4,7 +4,7 @@
 [![HA Version][ha-badge]](https://www.home-assistant.io)
 [![License: MIT][license-badge]](LICENSE)
 
-A native Home Assistant custom integration for **Rowenta / Tefal RobEye** robot vacuums using the local **RobEye HTTP API** (port 8080, Robart SDK). No cloud, no YAML, no token hunting.
+A native Home Assistant custom integration for **Rowenta / Tefal RobEye** robot vacuums using the local **RobEye HTTP API** (port 8080 by default, Robart SDK). No cloud, no YAML, no token hunting.
 
 > **Prior art:** Architecture is modelled on the [Romy](https://www.home-assistant.io/integrations/romy/) integration (also Robart-based) and the [Dreame](https://github.com/Tasshack/dreame-vacuum) integration pattern. The map card draws inspiration from [Xiaomi Vacuum Map Card](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card).
 
@@ -17,9 +17,12 @@ A native Home Assistant custom integration for **Rowenta / Tefal RobEye** robot 
 | Rowenta X-Plorer Serie 120 | D-shape | RobEye / Robart | ✅ Tested |
 | Rowenta X-Plorer S220 | D-shape | RobEye / Robart | ✅ Compatible |
 | Rowenta X-Plorer S240 | D-shape | RobEye / Robart | ✅ Compatible |
+| Rowenta X-Plorer S240+ AI | D-shape | RobEye HTTP API not confirmed | ❌ Not supported |
 | Tefal X-Plorer Serie 120 | D-shape | RobEye / Robart | ✅ Compatible |
 
 > **Out of scope:** Rowenta Serie 50–80 / S85 and above use the **Tuya** protocol and are not supported.
+
+The S240+ AI's documented TCP 6668 port handles network configuration and UDP 7000 handles discovery. These ports alone do not establish a RobEye HTTP API. Selecting port 6668 in this integration can work only if the robot serves RobEye HTTP endpoints such as `/get/status` there. See [Rowenta's S240+ FAQ](https://www.rowenta.com/instructions-for-use/csp/2211401207).
 
 ---
 
@@ -46,13 +49,14 @@ Copy `custom_components/rowenta_roboeye/` into `config/custom_components/`, rest
 | Field | Notes |
 |-------|-------|
 | Host | Local IP of your vacuum (e.g. `192.168.1.50`) — assign a DHCP reservation so it never changes |
+| HTTP port | Port serving the RobEye API; defaults to `8080` |
 | Name | Optional friendly nickname for the device (e.g. *Merry*, *Daisy*, *Rosie*) |
 
 Maps and rooms are **auto-discovered** from the robot after a successful connection — no map IDs to look up.
 
-> **Auto-discovery:** If your LAN supports mDNS multicast, HA detects the vacuum via `_robeye._tcp.local.` and shows a notification — no IP entry needed. The mDNS hostname is used as the unique ID, so the integration survives DHCP IP changes automatically.
+> **Auto-discovery:** If your LAN supports mDNS multicast, HA detects the vacuum via `_robeye._tcp.local.` and shows a notification — no IP entry needed. Discovery uses the advertised TCP port when valid, or `8080` otherwise. The mDNS hostname is used as the unique ID, so the integration survives DHCP IP changes automatically.
 
-> **Options flow:** After setup, you can update the IP address or name any time via **Settings → Devices & Services → Rowenta RobEye → Configure** — no need to remove and re-add the integration.
+> **Options flow:** After setup, you can update the IP address, HTTP port, or name any time via **Settings → Devices & Services → Rowenta RobEye → Configure** — no need to remove and re-add the integration. Existing entries without a saved port continue using `8080`.
 
 ---
 
@@ -127,16 +131,21 @@ The repo includes a standalone **in-browser map editor** (`map_editor/`) for dra
 **Running:**
 
 For the desktop launcher, double-click `map_editor/launch-rowenta-editor.py`.
-It opens a small app where you can enter the robot IP, start the proxy, open
+It opens a small app where you can enter the robot IP and HTTP port, start the proxy, open
 the editor, and stop the server when you are done.
 
 ```bash
 # Terminal — serves at http://localhost:8765
 python3 map_editor/launch-rowenta-editor.py 192.168.1.50
 
-# Custom port
+# Custom local editor port (the browser opens at localhost:9000)
 python3 map_editor/launch-rowenta-editor.py 192.168.1.50 --port 9000
+
+# Custom robot HTTP API port (the editor still opens at localhost:8765)
+python3 map_editor/launch-rowenta-editor.py 192.168.1.50 --robot-port 9080
 ```
+
+You can also change the robot HTTP port in the editor's connection bar. It defaults to `8080` and must serve the RobEye HTTP API; the S240+ TCP 6668 network configuration port is not known to serve that API.
 
 The launcher works on Windows, macOS, and Linux and delegates to
 `rowenta-editor-server.py`. You can also omit the IP and enter it in the

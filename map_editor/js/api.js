@@ -1,25 +1,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // API CLIENT
 // ─────────────────────────────────────────────────────────────────────────────
-import { USE_PROXY, ROBOT_PORT } from './config.js';
+import { USE_PROXY } from './config.js';
 import * as config from './config.js';
 
-// When running via proxy server, we can set the robot IP dynamically.
+// When running via proxy server, we can set the robot endpoint dynamically.
 // Surfaces the proxy's validation error (e.g. 400 "must be a private LAN
 // address") instead of swallowing it, so the caller can show the real reason
 // rather than a misleading downstream "HTTP 502" from the first /get request.
-export async function setProxyRobotIP(ip) {
+export async function setProxyRobotEndpoint(ip, port) {
   const resp = await fetch('/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ robot_ip: ip }),
+    body: JSON.stringify({ robot_ip: ip, robot_port: port }),
   });
   if (!resp.ok) {
     let detail = '';
     try {
       detail = (await resp.json()).error || '';
     } catch { /* non-JSON body */ }
-    throw new Error(detail || `Proxy rejected robot IP (HTTP ${resp.status})`);
+    throw new Error(detail || `Proxy rejected robot endpoint (HTTP ${resp.status})`);
   }
 }
 
@@ -28,14 +28,14 @@ export function api(path) {
   if (USE_PROXY) {
     url = path;                                    // relative → proxy handles it
   } else {
-    url = `http://${config.robotIP}:${ROBOT_PORT}${path}`; // direct → robot IP
+    url = `http://${config.robotIP}:${config.robotPort}${path}`; // direct → robot endpoint
   }
   return fetch(url)
     .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
 }
 
 export async function apiText(path) {
-  const url = USE_PROXY ? path : `http://${config.robotIP}:${ROBOT_PORT}${path}`;
+  const url = USE_PROXY ? path : `http://${config.robotIP}:${config.robotPort}${path}`;
   const resp = await fetch(url);
   const body = await resp.text();
   if (!resp.ok) {

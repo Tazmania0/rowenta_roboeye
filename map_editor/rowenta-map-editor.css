@@ -100,7 +100,7 @@
     background: currentColor;
   }
 
-  #ip-input {
+  #ip-input, #robot-port-input {
     background: var(--panel);
     border: 1px solid var(--border);
     color: var(--text);
@@ -110,7 +110,8 @@
     font-size: 12px;
     width: 160px;
   }
-  #ip-input:focus { outline: none; border-color: var(--accent); }
+  #robot-port-input { width: 75px; }
+  #ip-input:focus, #robot-port-input:focus { outline: none; border-color: var(--accent); }
 
   .btn {
     display: inline-flex; align-items: center; gap: 6px;

@@ -10,7 +10,7 @@ import { highlightArea, renderMap } from './render.js';
 import { updateCleanSelectionButton } from './areas.js';
 import { loadLastSessionGrid, loadMap } from './load.js';
 import { updateEtaChip } from './eta.js';
-import { USE_PROXY, ROBOT_PORT } from './config.js';
+import { USE_PROXY } from './config.js';
 import * as config from './config.js';
 
 const mapSvg   = document.getElementById('map-svg');
@@ -205,7 +205,7 @@ export async function executeGoTo(svgX, svgY) {
     `/set/target_point?map_id=${state.activeMapId}&x=${p.x.toFixed(1)}&y=${p.y.toFixed(1)}`,
   ];
   for (const path of candidates) {
-    const url  = USE_PROXY ? path : `http://${config.robotIP}:${ROBOT_PORT}${path}`;
+    const url  = USE_PROXY ? path : `http://${config.robotIP}:${config.robotPort}${path}`;
     try {
       const resp = await fetch(url); const body = await resp.text();
       console.log(`[goto] ${path.split('?')[1].substring(0, 40)} → ${resp.status} ${body}`);

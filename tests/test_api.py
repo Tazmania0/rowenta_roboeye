@@ -59,6 +59,11 @@ def test_url_format(client):
     assert client._url("/get/status") == "http://192.168.1.100:8080/get/status"
 
 
+def test_url_format_custom_port():
+    client = RobEyeApiClient(host="192.168.1.100", port=9080)
+    assert client._url("/get/status") == "http://192.168.1.100:9080/get/status"
+
+
 def test_url_format_ipv6_bracketed():
     client = RobEyeApiClient(host="fd00::1234")
     assert client._url("/get/status") == "http://[fd00::1234]:8080/get/status"
