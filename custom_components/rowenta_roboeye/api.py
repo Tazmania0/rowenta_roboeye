@@ -1,4 +1,4 @@
-"""Async HTTP client for the Rowenta RobEye local REST API (port 8080).
+"""Async HTTP client for the Rowenta RobEye local REST API (port 8080 by default).
 
 All network I/O is isolated here.  Entities and the coordinator never
 call HTTP directly — they go through this client only.

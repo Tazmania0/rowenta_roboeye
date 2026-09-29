@@ -3,7 +3,7 @@
 Rowenta Map Editor — Proxy Server
 ==================================
 Usage (standalone):
-  python3 rowenta-editor-server.py [robot-ip] [--port 8765]
+  python3 rowenta-editor-server.py [robot-ip] [--port 8765] [--robot-port 8080]
 
 Usage (HA add-on):  launched automatically by run.sh
 
@@ -13,7 +13,7 @@ No third-party packages — stdlib only (Python 3.6+).
 Modes:
   • PROXY_MODE  (localhost)  — full proxy, IP set by arg or UI
   • INGRESS_MODE (HA add-on) — same, but strips the HA ingress path prefix
-                               and robot IP can be updated live via /config POST
+                               and robot endpoint can be updated live via /config POST
 """
 
 import sys
@@ -39,7 +39,7 @@ HTML_FILE    = Path(__file__).parent / "rowenta-map-editor.html"
 STATIC_DIR   = Path(__file__).parent
 
 # Shared mutable config — safe because GIL + single write path
-_config = {"robot_ip": "", "port": DEFAULT_PORT}
+_config = {"robot_ip": "", "robot_port": ROBOT_PORT}
 
 # Loopback host names accepted in the Host header (anti DNS-rebinding) and as
 # the Origin host (anti cross-site request) while the server is bound locally.
@@ -91,6 +91,17 @@ def _validate_robot_ip(raw):
     ):
         return None
     return str(addr)
+
+
+def _validate_robot_port(raw):
+    """Return a valid TCP port, or None for malformed and out-of-range input."""
+    if type(raw) is int:
+        port = raw
+    elif isinstance(raw, str) and raw.isascii() and raw.isdecimal():
+        port = int(raw)
+    else:
+        return None
+    return port if 1 <= port <= 65535 else None
 
 
 # Content types the proxy is willing to echo from the robot.  The robot's API
@@ -191,6 +202,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/config':
             body = json.dumps({
                 "robot_ip": _config["robot_ip"],
+                "robot_port": _config["robot_port"],
                 "proxy_mode": True,
             }).encode()
             self._respond(200, 'application/json', body)
@@ -213,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path   = self._clean_path(parsed.path)
 
-        # Allow updating robot IP dynamically from the UI
+        # Allow updating the robot endpoint dynamically from the UI
         if path == '/config':
             try:
                 length = int(self.headers.get('Content-Length', 0))
@@ -229,6 +241,9 @@ class Handler(BaseHTTPRequestHandler):
             body   = self.rfile.read(length)
             try:
                 data = json.loads(body)
+                if not isinstance(data, dict):
+                    raise ValueError('Config must be a JSON object.')
+                updates = {}
                 if 'robot_ip' in data:
                     candidate = _validate_robot_ip(data['robot_ip'])
                     if candidate is None:
@@ -236,8 +251,18 @@ class Handler(BaseHTTPRequestHandler):
                             {"error": "Invalid robot IP — must be a private LAN address."}
                         ).encode())
                         return
-                    _config['robot_ip'] = candidate
-                    print(f"  config  robot_ip updated -> {_config['robot_ip']}", flush=True)
+                    updates['robot_ip'] = candidate
+                if 'robot_port' in data:
+                    port = _validate_robot_port(data['robot_port'])
+                    if port is None:
+                        self._respond(400, 'application/json', json.dumps(
+                            {"error": "Invalid robot port — enter an integer from 1 to 65535."}
+                        ).encode())
+                        return
+                    updates['robot_port'] = port
+                _config.update(updates)
+                if updates:
+                    print(f"  config  robot endpoint updated -> {_config['robot_ip']}:{_config['robot_port']}", flush=True)
                 self._respond(200, 'application/json',
                               json.dumps({"ok": True}).encode())
             except Exception as e:
@@ -286,7 +311,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # Bracket IPv6 literals so the URL is well-formed (http://[fd00::1]:8080/…).
         host = f"[{ip}]" if ":" in ip else ip
-        url = f"http://{host}:{ROBOT_PORT}{path}"
+        url = f"http://{host}:{_config['robot_port']}{path}"
         if query:
             url += '?' + query
 
@@ -335,12 +360,17 @@ def main():
     parser.add_argument('robot_ip', nargs='?', default=None,
                         help='Robot IP, e.g. 192.168.1.50')
     parser.add_argument('--port', '-p', type=int, default=DEFAULT_PORT)
+    parser.add_argument('--robot-port', type=int, default=ROBOT_PORT,
+                        help='Robot HTTP API port (default 8080)')
     parser.add_argument('--host', default='127.0.0.1',
                         help='Bind address (default 127.0.0.1). Use 0.0.0.0 only '
                              'when running behind a trusted front-end such as the '
                              'Home Assistant add-on ingress.')
     parser.add_argument('--no-browser', action='store_true')
     args = parser.parse_args()
+    if _validate_robot_port(args.robot_port) is None:
+        parser.error('--robot-port must be an integer from 1 to 65535')
+    _config['robot_port'] = args.robot_port
 
     if args.robot_ip:
         validated = _validate_robot_ip(args.robot_ip)
@@ -370,7 +400,7 @@ def main():
     print("  +----------------------------------------------+")
     print(f"  Open:   {url}")
     if _config['robot_ip']:
-        print(f"  Robot:  {_config['robot_ip']}:{ROBOT_PORT}")
+        print(f"  Robot:  {_config['robot_ip']}:{_config['robot_port']}")
     else:
         print("  Robot:  enter IP in the browser UI")
     print("  Stop:   Ctrl+C")

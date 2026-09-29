@@ -66,7 +66,7 @@ rowenta_roboeye/
 │   ├── test_switch.py       # Switch entity tests
 │   └── test_vacuum.py       # Vacuum entity tests
 ├── map_editor/              # Standalone browser map editor (see "Map Editor" section)
-│   ├── rowenta-editor-server.py     # Stdlib HTTP proxy: serves editor + proxies /get,/set to robot:8080
+│   ├── rowenta-editor-server.py     # Stdlib HTTP proxy: serves editor + proxies /get,/set to robot HTTP port (default 8080)
 │   ├── launch-rowenta-editor.py     # Tkinter (or CLI) launcher that spawns the proxy server
 │   ├── rowenta-map-editor.html      # Editor single-page app shell
 │   ├── rowenta-map-editor.css       # Editor styles
@@ -517,7 +517,7 @@ Do not manually create tags or releases — let CI handle it.
 A **standalone, browser-based floor-map editor** for the same robots. It is fully
 independent of the Home Assistant integration — it shares no Python code with
 `custom_components/` and can run with HA stopped. It talks to the robot's RobEye
-API (port 8080) directly, through its own Python proxy. Use it to split/merge
+API (port 8080 by default) directly, through its own Python proxy. Use it to split/merge
 rooms, draw no-go ("blocking") and spot areas, reposition zones, rename rooms,
 explore/build new maps, and save maps back to the device.
 
@@ -528,7 +528,7 @@ explore/build new maps, and save maps back to the device.
 
 | Path | Role |
 |------|------|
-| `rowenta-editor-server.py` | Stdlib-only HTTP server (`ThreadingHTTPServer`). Serves the editor HTML/CSS/JS and **proxies** `/get/*` and `/set/*` to `{robot_ip}:8080`. Hardened: private-LAN-only robot IP, DNS-rebinding + cross-origin guards when bound locally, no-redirect opener (SSRF hardening), `Cache-Control: no-store`. |
+| `rowenta-editor-server.py` | Stdlib-only HTTP server (`ThreadingHTTPServer`). Serves the editor HTML/CSS/JS and **proxies** `/get/*` and `/set/*` to the configured robot IP and HTTP port (default 8080). Hardened: private-LAN-only robot IP, DNS-rebinding + cross-origin guards when bound locally, no-redirect opener (SSRF hardening), `Cache-Control: no-store`. |
 | `launch-rowenta-editor.py` | Clickable Tkinter launcher (falls back to CLI when Tk is unavailable). Spawns the server as a subprocess, streams its logs, opens the browser. |
 | `rowenta-map-editor.html` / `.css` | Single-page-app shell and styles. |
 | `js/*.js` | ES-module frontend (no build step, no npm). See module map below. |
@@ -538,11 +538,11 @@ explore/build new maps, and save maps back to the device.
 
 - **Dependencies**: Python 3.6+ standard library only (`http.server`, `urllib`,
   `json`, `ipaddress`, `threading`, `webbrowser`, `mimetypes`, `pathlib`). No third-party packages.
-- **Ports**: editor/proxy on `DEFAULT_PORT = 8765`; robot on `ROBOT_PORT = 8080`.
+- **Ports**: editor/proxy on `DEFAULT_PORT = 8765`; robot HTTP API defaults to `ROBOT_PORT = 8080` and can be changed in the launcher, CLI (`--robot-port`), or editor UI.
 - **Modes**: `PROXY_MODE` (default — binds loopback, `_enforce_local = True`) and
   `INGRESS_MODE` (Home Assistant add-on — binds `0.0.0.0` behind trusted HA ingress and
   strips the ingress path prefix). The add-on `run.sh` packaging is **not in this repo**.
-- **Routes**: `GET /` → editor HTML; `GET|POST /config` → read/update the target robot IP
+- **Routes**: `GET /` → editor HTML; `GET|POST /config` → read/update the target robot IP and HTTP port
   (`{robot_ip, proxy_mode}`); `GET /get/*` and `GET /set/*` → proxied to the robot;
   static `*.css`/`*.js` from `STATIC_DIR` (with path-traversal guard); `OPTIONS` → 204.
 - **`_validate_robot_ip()`** accepts only private unicast LAN addresses; rejects public,

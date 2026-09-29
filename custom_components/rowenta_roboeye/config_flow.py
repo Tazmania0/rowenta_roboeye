@@ -13,7 +13,15 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .api import CannotConnect, RobEyeApiClient, format_url_host
-from .const import CONF_HOSTNAME, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DEFAULT_PORT, DOMAIN, LOGGER
+from .const import CONF_HOSTNAME, CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_PORT, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DEFAULT_PORT, DOMAIN, LOGGER
+
+
+PORT_SCHEMA = vol.All(vol.Coerce(int), vol.Range(min=1, max=65535))
+
+
+def _valid_discovery_port(port: Any) -> int:
+    """Use the advertised TCP port when it is valid, otherwise the default."""
+    return port if type(port) is int and 1 <= port <= 65535 else DEFAULT_PORT
 
 
 class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -26,6 +34,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         self._host: str = ""
         self._hostname: str = ""
         self._serial: str = ""
+        self._port: int = DEFAULT_PORT
 
     # ------------------------------------------------------------------
     # Step 1a — Manual IP entry (fallback when mDNS unavailable)
@@ -40,37 +49,43 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             host: str = user_input[CONF_HOST].strip()
             name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
-
             try:
-                await self._test_connection(host)
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001
-                LOGGER.exception("Unexpected error during connection test")
-                errors["base"] = "unknown"
-            else:
-                serial = await self._fetch_serial(host)
+                port = PORT_SCHEMA(user_input.get(CONF_PORT, DEFAULT_PORT))
+            except vol.Invalid:
+                errors[CONF_PORT] = "invalid_port"
+
+            if not errors:
+                try:
+                    await self._test_connection(host, port)
+                except CannotConnect:
+                    errors["base"] = "cannot_connect"
+                except Exception:  # noqa: BLE001
+                    LOGGER.exception("Unexpected error during connection test")
+                    errors["base"] = "unknown"
+            if not errors:
+                serial = await self._fetch_serial(host, port)
                 # Dedupe against an existing entry that predates serial-based
                 # unique_ids (its unique_id is still the IP or hostname).
-                if (legacy := self._legacy_entry_abort(serial, [host], CONF_HOST, host)):
+                if (legacy := self._legacy_entry_abort(serial, [host], CONF_HOST, host, port)):
                     return legacy
                 # Serial-less robot: its unique_id will be the IP, which never
                 # matches a zeroconf entry's hostname-based id, so dedupe on the
                 # stored host instead to avoid a duplicate entry.  The IP itself
                 # is left to _abort_if_unique_id_configured below.
                 if not serial and (
-                    dup := self._abort_if_host_configured(host, skip_uids={host})
+                    dup := self._abort_if_host_configured(host, skip_uids={host}, port=port)
                 ):
                     return dup
                 # Prefer the device serial as unique_id so the same robot can't
                 # be added twice (and dedupes against a zeroconf-discovered
                 # entry).  Fall back to the IP only when the serial is unknown.
                 await self.async_set_unique_id(serial or host)
-                self._abort_if_unique_id_configured(updates={CONF_HOST: host})
+                self._abort_if_unique_id_configured(updates={CONF_HOST: host, CONF_PORT: port})
                 return self.async_create_entry(
                     title=f"{name} ({host})",
                     data={
                         CONF_HOST: host,
+                        CONF_PORT: port,
                         CONF_HOSTNAME: host,
                         CONF_NAME: name,
                         CONF_SERIAL: serial,
@@ -82,6 +97,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_HOST): cv.string,
+                    vol.Optional(CONF_PORT, default=DEFAULT_PORT): PORT_SCHEMA,
                     vol.Optional(CONF_NAME, default=DEFAULT_DEVICE_NAME): cv.string,
                 }
             ),
@@ -100,6 +116,12 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
 
         self._host = discovery_info.host
         self._hostname = discovery_info.hostname or ""
+        advertised_port = getattr(discovery_info, "port", None)
+        self._port = _valid_discovery_port(advertised_port)
+        port_update = self._port if type(advertised_port) is int and self._port == advertised_port else None
+        endpoint_updates = {CONF_HOST: self._host}
+        if port_update is not None:
+            endpoint_updates[CONF_PORT] = port_update
 
         LOGGER.debug("Zeroconf host: %s  hostname: %s", self._host, self._hostname)
 
@@ -112,43 +134,42 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         # repeated discovery flows before we incur a network round-trip below.
         provisional_uid = (self._hostname or self._host).rstrip(".").lower()
         await self.async_set_unique_id(provisional_uid)
-        self._abort_if_unique_id_configured(
-            updates={CONF_HOST: self._host}  # silently update IP if hostname matches
-        )
+        self._abort_if_unique_id_configured(updates=endpoint_updates)
 
         # Verify the REST API is reachable at the discovered IP
         try:
-            await self._test_connection(self._host)
+            await self._test_connection(self._host, self._port)
         except CannotConnect:
             return self.async_abort(reason="cannot_connect")
 
         # Prefer the device serial as the final unique_id so a manual entry and a
         # zeroconf discovery for the same robot dedupe against each other.  Keep
         # the hostname-based id when the serial can't be read.
-        self._serial = await self._fetch_serial(self._host)
+        self._serial = await self._fetch_serial(self._host, self._port)
         if self._serial and self._serial != provisional_uid:
             # Dedupe against a legacy entry whose unique_id is still the IP /
             # hostname (the provisional hostname check above only catches a
             # legacy zeroconf entry, not a manually-added one keyed by IP).
             if (legacy := self._legacy_entry_abort(
-                self._serial, [self._host, provisional_uid], CONF_HOST, self._host
+                self._serial, [self._host, provisional_uid], CONF_HOST, self._host,
+                port_update,
             )):
                 return legacy
             await self.async_set_unique_id(self._serial)
-            self._abort_if_unique_id_configured(updates={CONF_HOST: self._host})
+            self._abort_if_unique_id_configured(updates=endpoint_updates)
         elif not self._serial:
             # Serial-less robot: the hostname-based provisional id (already
             # checked above) won't match a manually-added entry keyed by IP, so
             # dedupe on the stored host too.
             if (dup := self._abort_if_host_configured(
-                self._host, self._hostname, skip_uids={provisional_uid}
+                self._host, self._hostname, skip_uids={provisional_uid}, port=port_update
             )):
                 return dup
 
         self.context.update(
             {
-                "title_placeholders": {"host": self._host},
-                "configuration_url": f"http://{format_url_host(self._host)}:{DEFAULT_PORT}",
+                "title_placeholders": {"host": self._host, "port": str(self._port)},
+                "configuration_url": f"http://{format_url_host(self._host)}:{self._port}",
             }
         )
 
@@ -161,7 +182,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self.async_show_form(
                 step_id="zeroconf_confirm",
-                description_placeholders={"host": self._host},
+                description_placeholders={"host": self._host, "port": str(self._port)},
                 data_schema=vol.Schema(
                     {
                         vol.Optional(CONF_NAME, default=DEFAULT_DEVICE_NAME): cv.string,
@@ -174,6 +195,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
             title=f"{name} ({self._host})",
             data={
                 CONF_HOST: self._host,
+                CONF_PORT: self._port,
                 CONF_HOSTNAME: self._hostname or self._host,
                 CONF_NAME: name,
                 CONF_SERIAL: self._serial,
@@ -181,7 +203,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     # ------------------------------------------------------------------
-    # Options flow — lets user update IP, map_id, and name without re-adding
+    # Options flow — lets user update IP, port, and name without re-adding
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -195,7 +217,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
     # ------------------------------------------------------------------
 
     @callback
-    def _legacy_entry_abort(self, serial, legacy_uids, host_key, host):
+    def _legacy_entry_abort(self, serial, legacy_uids, host_key, host, port=None):
         """Dedupe against a pre-serial entry keyed by IP/hostname.
 
         Older installs created their config entry with unique_id = IP (manual)
@@ -217,13 +239,16 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
                 self.hass.config_entries.async_update_entry(
                     entry,
                     unique_id=serial,
-                    data={**entry.data, host_key: host},
+                    data={
+                        **entry.data, host_key: host,
+                        **({CONF_PORT: port} if port is not None else {}),
+                    },
                 )
                 return self.async_abort(reason="already_configured")
         return None
 
     @callback
-    def _abort_if_host_configured(self, host, hostname="", skip_uids=None):
+    def _abort_if_host_configured(self, host, hostname="", skip_uids=None, port=None):
         """Abort if an existing entry already targets this host/hostname.
 
         Fallback dedupe for serial-less robots, whose unique_id is the IP
@@ -251,20 +276,23 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
             } - {""}
             if candidates & stored:
                 self.hass.config_entries.async_update_entry(
-                    entry, data={**entry.data, CONF_HOST: host}
+                    entry, data={
+                        **entry.data, CONF_HOST: host,
+                        **({CONF_PORT: port} if port is not None else {}),
+                    }
                 )
                 return self.async_abort(reason="already_configured")
         return None
 
-    async def _test_connection(self, host: str) -> None:
+    async def _test_connection(self, host: str, port: int = DEFAULT_PORT) -> None:
         """Verify connectivity; raises CannotConnect on failure."""
-        client = RobEyeApiClient(host=host)
+        client = RobEyeApiClient(host=host, port=port)
         await client.test_connection()
 
-    async def _fetch_serial(self, host: str) -> str:
+    async def _fetch_serial(self, host: str, port: int = DEFAULT_PORT) -> str:
         """Return normalised serial number from robot, empty string on any failure."""
         try:
-            client = RobEyeApiClient(host=host)
+            client = RobEyeApiClient(host=host, port=port)
             data = await client.get_robot_id()
             raw = (
                 data.get("unique_id")
@@ -279,7 +307,7 @@ class RobEyeConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class RobEyeOptionsFlow(OptionsFlow):
-    """Allow updating IP address and name without removing the integration."""
+    """Allow updating the endpoint and name without removing the integration."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialise options flow."""
@@ -292,30 +320,37 @@ class RobEyeOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
 
         current_host = self._config_entry.data.get(CONF_HOST, "")
+        current_port = self._config_entry.data.get(CONF_PORT, DEFAULT_PORT)
         current_name = self._config_entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
 
         if user_input is not None:
             host: str = user_input[CONF_HOST].strip()
             name: str = user_input.get(CONF_NAME, DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
             try:
-                client = RobEyeApiClient(host=host)
-                await client.test_connection()
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001
-                errors["base"] = "unknown"
-            else:
+                port = PORT_SCHEMA(user_input.get(CONF_PORT, current_port))
+            except vol.Invalid:
+                errors[CONF_PORT] = "invalid_port"
+            if not errors:
+                try:
+                    client = RobEyeApiClient(host=host, port=port)
+                    await client.test_connection()
+                except CannotConnect:
+                    errors["base"] = "cannot_connect"
+                except Exception:  # noqa: BLE001
+                    errors["base"] = "unknown"
+            if not errors:
                 # Write to entry.data (NOT entry.options): everything downstream —
                 # async_setup_entry and the reload guard in _async_update_listener —
-                # reads CONF_HOST from entry.data.  async_create_entry on an options
+                # reads host and port from entry.data.  async_create_entry on an options
                 # flow stores into entry.options, which those paths never read, so
-                # the IP/name change would silently no-op.  Update data directly and
-                # let the registered update listener reload when the host changes.
+                # endpoint/name changes would silently no-op. Update data directly and
+                # let the registered update listener reload when the endpoint changes.
                 self.hass.config_entries.async_update_entry(
                     self._config_entry,
                     title=f"{name} ({host})",
                     data={
                         CONF_HOST: host,
+                        CONF_PORT: port,
                         CONF_HOSTNAME: self._config_entry.data.get(CONF_HOSTNAME, host),
                         CONF_NAME: name,
                         # Preserve stable identifiers so entity unique_ids never change
@@ -333,6 +368,7 @@ class RobEyeOptionsFlow(OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_HOST, default=current_host): cv.string,
+                    vol.Optional(CONF_PORT, default=current_port): PORT_SCHEMA,
                     vol.Optional(CONF_NAME, default=current_name): cv.string,
                 }
             ),

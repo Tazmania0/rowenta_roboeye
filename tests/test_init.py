@@ -13,7 +13,8 @@ from custom_components.rowenta_roboeye import (
     async_setup_entry,
     async_unload_entry,
 )
-from custom_components.rowenta_roboeye.const import DOMAIN, safe_int
+from custom_components.rowenta_roboeye.const import DEFAULT_PORT, DOMAIN, safe_int
+from custom_components.rowenta_roboeye.entity import RobEyeEntity
 from homeassistant.const import CONF_HOST
 from custom_components.rowenta_roboeye.frontend import (
     _read_module_version,
@@ -61,6 +62,7 @@ async def test_update_listener_skips_reload_when_host_unchanged():
     hass.config_entries.async_reload = AsyncMock()
     coord = MagicMock()
     coord.client._host = "192.168.1.50"
+    coord.client._port = DEFAULT_PORT
     entry = MagicMock()
     entry.entry_id = "e1"
     entry.data = {CONF_HOST: "192.168.1.50"}
@@ -76,9 +78,26 @@ async def test_update_listener_reloads_when_host_changes():
     hass.config_entries.async_reload = AsyncMock()
     coord = MagicMock()
     coord.client._host = "192.168.1.50"
+    coord.client._port = DEFAULT_PORT
     entry = MagicMock()
     entry.entry_id = "e1"
     entry.data = {CONF_HOST: "192.168.1.99"}   # changed
+    hass.data = {DOMAIN: {"e1": coord}}
+
+    await _async_update_listener(hass, entry)
+    hass.config_entries.async_reload.assert_awaited_once_with("e1")
+
+
+@pytest.mark.asyncio
+async def test_update_listener_reloads_when_port_changes():
+    hass = MagicMock()
+    hass.config_entries.async_reload = AsyncMock()
+    coord = MagicMock()
+    coord.client._host = "192.168.1.50"
+    coord.client._port = DEFAULT_PORT
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.data = {CONF_HOST: "192.168.1.50", "port": 9080}
     hass.data = {DOMAIN: {"e1": coord}}
 
     await _async_update_listener(hass, entry)
@@ -155,7 +174,8 @@ def test_version_from_url_handles_missing_query():
 
 
 @pytest.mark.asyncio
-async def test_setup_checks_maintenance_notifications_after_store_load():
+@pytest.mark.parametrize("configured_port, expected_port", [(None, 8080), (9080, 9080)])
+async def test_setup_checks_maintenance_notifications_after_store_load(configured_port, expected_port):
     """Setup re-checks maintenance due state after the persistent store loads."""
     import custom_components.rowenta_roboeye as init_mod
 
@@ -175,6 +195,8 @@ async def test_setup_checks_maintenance_notifications_after_store_load():
     entry = MagicMock()
     entry.entry_id = "entry_1"
     entry.data = {CONF_HOST: "192.168.1.100", "map_id": "3"}
+    if configured_port is not None:
+        entry.data["port"] = configured_port
     entry.async_on_unload = MagicMock()
     entry.add_update_listener = MagicMock(return_value=MagicMock())
 
@@ -193,11 +215,27 @@ async def test_setup_checks_maintenance_notifications_after_store_load():
     coord.available_maps = []
     coord.schedule = {}
 
-    with patch.object(init_mod, "RobEyeCoordinator", return_value=coord):
+    with patch.object(init_mod, "RobEyeCoordinator", return_value=coord), \
+         patch.object(init_mod, "RobEyeApiClient") as client:
         assert await async_setup_entry(hass, entry) is True
 
+    client.assert_called_once_with(host="192.168.1.100", port=expected_port)
     coord.async_init_maintenance.assert_awaited_once()
     coord._check_maintenance_notifications.assert_awaited_once_with()
+
+
+@pytest.mark.parametrize("configured_port, expected_port", [(None, 8080), (9080, 9080)])
+def test_device_configuration_url_uses_saved_port(configured_port, expected_port):
+    entity = RobEyeEntity.__new__(RobEyeEntity)
+    coordinator = MagicMock()
+    coordinator.robot_info = {}
+    coordinator.device_id = "ser120"
+    coordinator.config_entry.data = {CONF_HOST: "fd00::1234"}
+    if configured_port is not None:
+        coordinator.config_entry.data["port"] = configured_port
+    entity.coordinator = coordinator
+
+    assert entity.device_info["configuration_url"] == f"http://[fd00::1234]:{expected_port}"
 
 
 def _make_hass(unload_ok: bool):

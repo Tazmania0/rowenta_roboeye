@@ -43,6 +43,7 @@ CONF_MAP_ID = "map_id"
 CONF_LAST_ACTIVE_MAP = "last_active_map"  # last map chosen via select entity; persisted silently
 CONF_HOSTNAME = "hostname"
 CONF_NAME = "name"
+CONF_PORT = "port"
 CONF_SERIAL = "serial"  # device serial number; fetched at config-flow time, never changes
 DEFAULT_DEVICE_NAME = "Rowenta Xplorer 120"
 

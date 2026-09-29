@@ -14,7 +14,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .api import RobEyeApiClient
-from .const import CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DOMAIN, LOGGER, PLATFORMS, SIGNAL_ACTIVE_MAP_CHANGED, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION
+from .const import CONF_LAST_ACTIVE_MAP, CONF_MAP_ID, CONF_NAME, CONF_PORT, CONF_SERIAL, DEFAULT_DEVICE_NAME, DEFAULT_MAP_ID, DEFAULT_PORT, DOMAIN, LOGGER, PLATFORMS, SIGNAL_ACTIVE_MAP_CHANGED, SIGNAL_AREAS_UPDATED, SIGNAL_MAPS_UPDATED, VERSION
 from .coordinator import RobEyeCoordinator
 from .dashboard import RobEyeDashboardManager, async_create_dashboard
 from .frontend import JSModuleRegistration
@@ -82,7 +82,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     )
     friendly_name: str = config_entry.data.get(CONF_NAME, DEFAULT_DEVICE_NAME)
 
-    client = RobEyeApiClient(host=host)
+    client = RobEyeApiClient(host=host, port=config_entry.data.get(CONF_PORT, DEFAULT_PORT))
 
     coordinator = RobEyeCoordinator(
         hass=hass,
@@ -468,7 +468,7 @@ async def _async_update_listener(
 ) -> None:
     """Handle config entry update.
 
-    Reloads the integration when host changes (new API endpoint needed).
+    Reloads the integration when host or port changes (new API endpoint needed).
     Silently skips reload for data-only writes that do not affect connectivity —
     specifically CONF_LAST_ACTIVE_MAP updates written by the map Select entity
     and serial/device-id caching written by async_setup_entry.  Those writes
@@ -476,9 +476,12 @@ async def _async_update_listener(
     """
     coordinator = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
     if coordinator is not None:
-        if coordinator.client._host == config_entry.data.get(CONF_HOST):
+        if (
+            coordinator.client._host == config_entry.data.get(CONF_HOST)
+            and coordinator.client._port == config_entry.data.get(CONF_PORT, DEFAULT_PORT)
+        ):
             LOGGER.debug(
-                "_async_update_listener: host unchanged — skipping reload for %s",
+                "_async_update_listener: endpoint unchanged — skipping reload for %s",
                 config_entry.entry_id,
             )
             return
