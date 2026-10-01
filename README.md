@@ -4,22 +4,26 @@
 [![HA Version][ha-badge]](https://www.home-assistant.io)
 [![License: MIT][license-badge]](LICENSE)
 
-A native Home Assistant custom integration for **Rowenta / Tefal RobEye** robot vacuums using the local **RobEye HTTP API** (port 8080, Robart SDK). No cloud, no YAML, no token hunting.
+A native Home Assistant custom integration for **Rowenta / Tefal RobEye** robot vacuums using the local **RobEye HTTP API** on port 8080 (Robart SDK). No cloud, no YAML, no token hunting.
 
 > **Prior art:** Architecture is modelled on the [Romy](https://www.home-assistant.io/integrations/romy/) integration (also Robart-based) and the [Dreame](https://github.com/Tasshack/dreame-vacuum) integration pattern. The map card draws inspiration from [Xiaomi Vacuum Map Card](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card).
 
 ---
 
-## Compatible Models
+## Model Compatibility
 
-| Model | Shape | Protocol | Status |
-|-------|-------|----------|--------|
-| Rowenta X-Plorer Serie 120 | D-shape | RobEye / Robart | ✅ Tested |
-| Rowenta X-Plorer S220 | D-shape | RobEye / Robart | ✅ Compatible |
-| Rowenta X-Plorer S240 | D-shape | RobEye / Robart | ✅ Compatible |
-| Tefal X-Plorer Serie 120 | D-shape | RobEye / Robart | ✅ Compatible |
+| Model | Status |
+|-------|--------|
+| Rowenta X-Plorer Serie 120 | Tested with the local RobEye HTTP API |
+| Rowenta X-Plorer Serie 80 | [RobEye interface on port 8080 reported by an owner](https://community.home-assistant.io/t/rowenta-vacuum-cleaner-ht-component/244131/6); this integration has not been tested |
+| Rowenta X-Plorer Serie 130 | [RobEye `/get/areas` and cleaning commands on port 8080 reported by an owner](https://community.home-assistant.io/t/rowenta-vacuum-cleaner-ht-component/244131/17); this integration has not been tested |
+| Tefal X-Plorer Serie 120 | Not independently verified; check for the local RobEye HTTP API |
 
-> **Out of scope:** Rowenta Serie 50–80 / S85 and above use the **Tuya** protocol and are not supported.
+The Rowenta Robots 9.5.1-RC1 APK includes capability files for **S220, S220+, S240, and S240+** under `assets/appliance_capabilities/tuya/`. Each identifies its `iotTarget` as `tuya`. These models are **not confirmed compatible** with this RobEye HTTP integration; sharing the Rowenta app does not establish that they expose the RobEye API. The APK also lists several other models as Tuya devices, so model numbers alone are not a reliable compatibility guide.
+
+**Smart Force Cyclonic Connect** is another model to investigate: [Groupe SEB describes it as developed with Robart](https://www.groupeseb.com/sites/default/files/SEB%20LA%2042%20web.pdf), and an [owner reported port 10009 open](https://community.home-assistant.io/t/rowenta-vacuum-cleaner-ht-component/244131/12). Its RobEye HTTP endpoints and compatibility with this integration are unverified.
+
+To check a device, open `http://<robot-ip>:8080/get/status` on your local network. A RobEye JSON status response indicates the API this integration expects. A different port helps only if the device serves that same HTTP API there; TCP port 6668 by itself does not establish compatibility.
 
 ---
 
