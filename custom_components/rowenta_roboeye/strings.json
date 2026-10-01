@@ -2,11 +2,12 @@
   "config": {
     "abort": {
       "already_configured": "Device is already configured.",
-      "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address.",
+      "cannot_connect": "Cannot connect to the vacuum using the selected host and HTTP port.",
       "no_hostname": "Discovery did not provide a usable hostname or address."
     },
     "error": {
-      "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address.",
+      "cannot_connect": "Cannot connect to the vacuum using the selected host and HTTP port.",
+      "invalid_port": "Enter a TCP port from 1 to 65535.",
       "unknown": "Unexpected error occurred."
     },
     "flow_title": "{host}",
@@ -16,15 +17,17 @@
         "description": "Enter the local IP address of your vacuum. The map will be fetched automatically from the device.",
         "data": {
           "host": "Host",
+          "port": "HTTP port",
           "name": "Name"
         },
         "data_description": {
           "host": "Local IP address of the vacuum (e.g. 192.168.1.50).",
+          "port": "Port serving the RobEye HTTP API (default 8080).",
           "name": "A friendly nickname for this vacuum (e.g. Merry, Daisy, Rosie)."
         }
       },
       "zeroconf_confirm": {
-        "description": "Do you want to add Rowenta Xplorer 120 at {host} to Home Assistant?",
+        "description": "Do you want to add Rowenta Xplorer 120 at {host}:{port} to Home Assistant?",
         "data": {
           "name": "Name"
         },
@@ -50,15 +53,18 @@
         "title": "Update Rowenta Xplorer 120 Settings",
         "data": {
           "host": "Host",
+          "port": "HTTP port",
           "name": "Name"
         },
         "data_description": {
+          "port": "Port serving the RobEye HTTP API (default 8080).",
           "name": "A friendly nickname for this vacuum (e.g. Merry, Daisy, Rosie)."
         }
       }
     },
     "error": {
-      "cannot_connect": "Cannot connect to the vacuum on port 8080. Check the IP address.",
+      "cannot_connect": "Cannot connect to the vacuum using the selected host and HTTP port.",
+      "invalid_port": "Enter a TCP port from 1 to 65535.",
       "unknown": "Unexpected error occurred."
     }
   },

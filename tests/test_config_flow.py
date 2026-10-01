@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.rowenta_roboeye.api import CannotConnect
-from custom_components.rowenta_roboeye.config_flow import RobEyeConfigFlow, RobEyeOptionsFlow
-from custom_components.rowenta_roboeye.const import DEFAULT_MAP_ID
+from custom_components.rowenta_roboeye.config_flow import PORT_SCHEMA, RobEyeConfigFlow, RobEyeOptionsFlow
+from custom_components.rowenta_roboeye.const import DEFAULT_MAP_ID, DEFAULT_PORT
 
 
 def _make_flow():
@@ -16,6 +16,7 @@ def _make_flow():
     flow._host = ""
     flow._hostname = ""
     flow._serial = ""
+    flow._port = DEFAULT_PORT
     flow.context = {}
     flow.async_set_unique_id = AsyncMock()
     flow._abort_if_unique_id_configured = MagicMock()
@@ -45,10 +46,42 @@ async def test_user_step_success():
 
     assert result["type"] == "create_entry"
     assert result["data"]["host"] == "192.168.1.50"
+    assert result["data"]["port"] == DEFAULT_PORT
     assert result["data"]["serial"] == "sn_abc123"
     assert "map_id" not in result["data"]
     # unique_id prefers the device serial so the robot can't be added twice.
     flow.async_set_unique_id.assert_awaited_once_with("sn_abc123")
+
+
+@pytest.mark.asyncio
+async def test_user_step_uses_custom_port_for_connection_and_serial():
+    flow = _make_flow()
+    connection = AsyncMock()
+    serial = AsyncMock(return_value="sn_abc123")
+    with patch.object(flow, "_test_connection", new=connection), \
+         patch.object(flow, "_fetch_serial", new=serial):
+        result = await flow.async_step_user({"host": "192.168.1.50", "port": 9080})
+    connection.assert_awaited_once_with("192.168.1.50", 9080)
+    serial.assert_awaited_once_with("192.168.1.50", 9080)
+    assert result["data"]["port"] == 9080
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("port", [0, 65536, "abc", -1])
+async def test_user_step_rejects_invalid_port_before_connecting(port):
+    flow = _make_flow()
+    connection = AsyncMock()
+    with patch.object(flow, "_test_connection", new=connection):
+        result = await flow.async_step_user({"host": "192.168.1.50", "port": port})
+    assert result["errors"]["port"] == "invalid_port"
+    connection.assert_not_awaited()
+
+
+def test_port_schema_accepts_only_tcp_port_range():
+    assert PORT_SCHEMA("9080") == 9080
+    for port in (0, 65536, "abc"):
+        with pytest.raises(Exception):
+            PORT_SCHEMA(port)
 
 
 @pytest.mark.asyncio
@@ -94,6 +127,7 @@ async def test_user_step_dedupes_legacy_ip_entry():
     # Legacy entry migrated to the serial unique_id.
     kwargs = flow.hass.config_entries.async_update_entry.call_args.kwargs
     assert kwargs["unique_id"] == "sn_abc123"
+    assert kwargs["data"]["port"] == DEFAULT_PORT
     # No brand-new entry created on top of the existing one.
     flow.async_set_unique_id.assert_not_called()
 
@@ -138,6 +172,7 @@ async def test_user_step_dedupes_serial_less_zeroconf_entry_by_host():
     flow.async_set_unique_id.assert_not_called()
     kwargs = flow.hass.config_entries.async_update_entry.call_args.kwargs
     assert kwargs["data"]["host"] == "192.168.1.50"
+    assert kwargs["data"]["port"] == DEFAULT_PORT
 
 
 @pytest.mark.asyncio
@@ -176,10 +211,11 @@ async def test_user_step_shows_form_when_no_input():
 
 # ── mDNS / Zeroconf discovery ─────────────────────────────────────────
 
-def _mock_zeroconf_info(host="192.168.1.100", hostname="xplorer120.local."):
+def _mock_zeroconf_info(host="192.168.1.100", hostname="xplorer120.local.", port=None):
     info = MagicMock()
     info.host = host
     info.hostname = hostname
+    info.port = port
     return info
 
 
@@ -196,6 +232,53 @@ async def test_zeroconf_happy_path():
     assert result["step_id"] == "zeroconf_confirm"
     # Serial fetched during discovery is stashed for the confirm step.
     assert flow._serial == "sn_zc"
+
+
+@pytest.mark.asyncio
+async def test_zeroconf_uses_advertised_port_and_shows_it():
+    flow = _make_flow()
+    connection = AsyncMock()
+    serial = AsyncMock(return_value="sn_zc")
+    with patch.object(flow, "_test_connection", new=connection), \
+         patch.object(flow, "_fetch_serial", new=serial):
+        await flow.async_step_zeroconf(_mock_zeroconf_info(port=9080))
+    connection.assert_awaited_once_with("192.168.1.100", 9080)
+    serial.assert_awaited_once_with("192.168.1.100", 9080)
+    assert flow.context["configuration_url"] == "http://192.168.1.100:9080"
+    result = await flow.async_step_zeroconf_confirm({})
+    assert result["data"]["port"] == 9080
+
+
+@pytest.mark.asyncio
+async def test_zeroconf_updates_existing_entry_port_when_advertised():
+    flow = _make_flow()
+    flow._abort_if_unique_id_configured = MagicMock(side_effect=Exception("already_configured"))
+    with pytest.raises(Exception, match="already_configured"):
+        await flow.async_step_zeroconf(_mock_zeroconf_info(port=9080))
+    assert flow._abort_if_unique_id_configured.call_args.kwargs["updates"] == {
+        "host": "192.168.1.100", "port": 9080,
+    }
+
+
+@pytest.mark.asyncio
+async def test_zeroconf_invalid_port_keeps_existing_entry_port():
+    flow = _make_flow()
+    flow._abort_if_unique_id_configured = MagicMock(side_effect=Exception("already_configured"))
+    with pytest.raises(Exception, match="already_configured"):
+        await flow.async_step_zeroconf(_mock_zeroconf_info(port=None))
+    assert flow._abort_if_unique_id_configured.call_args.kwargs["updates"] == {
+        "host": "192.168.1.100",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("port", [None, 0, 65536, "9080", True])
+async def test_zeroconf_invalid_port_falls_back_to_8080(port):
+    flow = _make_flow()
+    with patch.object(flow, "_test_connection", new=AsyncMock()), \
+         patch.object(flow, "_fetch_serial", new=AsyncMock(return_value="")):
+        await flow.async_step_zeroconf(_mock_zeroconf_info(port=port))
+    assert flow._port == DEFAULT_PORT
 
 
 @pytest.mark.asyncio
@@ -241,6 +324,7 @@ async def test_zeroconf_confirm_creates_entry():
 
     assert result["type"] == "create_entry"
     assert result["data"]["host"] == "192.168.1.100"
+    assert result["data"]["port"] == DEFAULT_PORT
     assert result["data"]["hostname"] == "xplorer120.local."
     assert result["data"]["serial"] == "sn_xyz"
     assert "map_id" not in result["data"]
@@ -339,12 +423,34 @@ async def test_options_flow_happy_path():
     flow.hass.config_entries.async_update_entry.assert_called_once()
     written = flow.hass.config_entries.async_update_entry.call_args.kwargs["data"]
     assert written["host"] == "192.168.1.101"
+    assert written["port"] == DEFAULT_PORT
     # Serial must be preserved so entity unique_ids don't change after IP update
     assert written["serial"] == "sn_persisted"
     # map_id and last_active_map are now preserved through options saves
     # so the active map survives host/name changes without reverting to default
     assert written.get("map_id") == "3"       # DEFAULT_MAP_ID fallback when not set
     assert written.get("last_active_map") is None  # not yet set in this test entry
+
+
+@pytest.mark.asyncio
+async def test_options_flow_changes_port_and_tests_selected_endpoint():
+    flow = _make_options_flow()
+    flow.hass.config_entries.async_update_entry = MagicMock()
+    with patch("custom_components.rowenta_roboeye.config_flow.RobEyeApiClient") as client:
+        client.return_value.test_connection = AsyncMock()
+        await flow.async_step_init({"host": "192.168.1.100", "port": 9080})
+    client.assert_called_once_with(host="192.168.1.100", port=9080)
+    written = flow.hass.config_entries.async_update_entry.call_args.kwargs["data"]
+    assert written["port"] == 9080
+
+
+@pytest.mark.asyncio
+async def test_options_flow_rejects_invalid_port_before_connecting():
+    flow = _make_options_flow()
+    with patch("custom_components.rowenta_roboeye.config_flow.RobEyeApiClient") as client:
+        result = await flow.async_step_init({"host": "192.168.1.100", "port": 65536})
+    assert result["errors"]["port"] == "invalid_port"
+    client.assert_not_called()
 
 
 @pytest.mark.asyncio

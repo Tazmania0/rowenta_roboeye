@@ -10,8 +10,8 @@ import java.net.URL
 /**
  * Local HTTP server that:
  *  1. Serves the map editor HTML/CSS/JS from Android assets.
- *  2. Proxies /get/... and /set/... requests to the Rowenta robot (port 8080).
- *  3. Exposes /config GET/POST so the UI can read and update the robot IP at runtime.
+ *  2. Proxies /get/... and /set/... requests to the Rowenta robot (port 8080 by default).
+ *  3. Exposes /config GET/POST so the UI can update the robot endpoint at runtime.
  *
  * Mirrors the logic of rowenta-editor-server.py so the existing web editor JS works
  * unchanged inside the WebView.
@@ -23,6 +23,9 @@ class MapEditorServer(
 
     @Volatile
     var robotIp: String = ""
+
+    @Volatile
+    var robotPort: Int = ROBOT_PORT
 
     companion object {
         const val SERVER_PORT = 8765
@@ -83,6 +86,7 @@ class MapEditorServer(
     private fun serveConfig(): Response {
         val json = JSONObject().apply {
             put("robot_ip", robotIp)
+            put("robot_port", robotPort)
             put("proxy_mode", true)
         }.toString()
         return newFixedLengthResponse(Response.Status.OK, "application/json", json)
@@ -94,9 +98,26 @@ class MapEditorServer(
             session.parseBody(bodyMap)
             val raw = bodyMap["postData"] ?: ""
             val obj = JSONObject(raw)
-            if (obj.has("robot_ip")) {
-                robotIp = obj.getString("robot_ip").trim()
+            val newIp = if (obj.has("robot_ip")) obj.getString("robot_ip").trim() else robotIp
+            var newPort = robotPort
+            if (obj.has("robot_port")) {
+                val value = obj.get("robot_port")
+                val parsed = when (value) {
+                    is Int -> value
+                    is String -> value.toIntOrNull()
+                    else -> null
+                }
+                if (parsed == null || parsed !in 1..65535) {
+                    return newFixedLengthResponse(
+                        Response.Status.BAD_REQUEST,
+                        "application/json",
+                        """{"error":"Invalid robot port — enter an integer from 1 to 65535."}""",
+                    )
+                }
+                newPort = parsed
             }
+            robotIp = newIp
+            robotPort = newPort
             newFixedLengthResponse(
                 Response.Status.OK,
                 "application/json",
@@ -125,7 +146,7 @@ class MapEditorServer(
             append("http://")
             append(ip)
             append(":")
-            append(ROBOT_PORT)
+            append(robotPort)
             append(path)
             if (query.isNotEmpty()) {
                 append("?")

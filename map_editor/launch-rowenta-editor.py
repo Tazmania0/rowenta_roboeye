@@ -25,6 +25,7 @@ except ImportError:
 
 SERVER_SCRIPT = Path(__file__).with_name("rowenta-editor-server.py")
 DEFAULT_PORT = 8765
+DEFAULT_ROBOT_PORT = 8080
 
 
 class EditorLauncher(tk.Tk if tk else object):
@@ -37,6 +38,7 @@ class EditorLauncher(tk.Tk if tk else object):
 
         self.robot_ip = tk.StringVar()
         self.port = tk.StringVar(value=str(DEFAULT_PORT))
+        self.robot_port = tk.StringVar(value=str(DEFAULT_ROBOT_PORT))
         self.status = tk.StringVar(value="Ready")
 
         self._build_ui()
@@ -54,26 +56,31 @@ class EditorLauncher(tk.Tk if tk else object):
             row=0, column=1, columnspan=2, sticky="ew", **pad
         )
 
-        ttk.Label(frame, text="Port").grid(row=1, column=0, sticky="w", **pad)
+        ttk.Label(frame, text="Editor port").grid(row=1, column=0, sticky="w", **pad)
         ttk.Entry(frame, textvariable=self.port, width=10).grid(
             row=1, column=1, sticky="w", **pad
         )
 
+        ttk.Label(frame, text="Robot HTTP port").grid(row=2, column=0, sticky="w", **pad)
+        ttk.Entry(frame, textvariable=self.robot_port, width=10).grid(
+            row=2, column=1, sticky="w", **pad
+        )
+
         self.start_button = ttk.Button(frame, text="Start Editor", command=self._start)
-        self.start_button.grid(row=2, column=0, sticky="ew", **pad)
+        self.start_button.grid(row=3, column=0, sticky="ew", **pad)
 
         self.open_button = ttk.Button(frame, text="Open Browser", command=self._open)
-        self.open_button.grid(row=2, column=1, sticky="ew", **pad)
+        self.open_button.grid(row=3, column=1, sticky="ew", **pad)
 
         self.stop_button = ttk.Button(frame, text="Stop", command=self._stop)
-        self.stop_button.grid(row=2, column=2, sticky="ew", **pad)
+        self.stop_button.grid(row=3, column=2, sticky="ew", **pad)
 
         ttk.Label(frame, textvariable=self.status).grid(
-            row=3, column=0, columnspan=3, sticky="w", **pad
+            row=4, column=0, columnspan=3, sticky="w", **pad
         )
 
         self.log = tk.Text(frame, width=68, height=12, state="disabled", wrap="word")
-        self.log.grid(row=4, column=0, columnspan=3, sticky="ew", **pad)
+        self.log.grid(row=5, column=0, columnspan=3, sticky="ew", **pad)
 
         frame.columnconfigure(1, weight=1)
         self._set_running(False)
@@ -96,17 +103,28 @@ class EditorLauncher(tk.Tk if tk else object):
         if robot_ip:
             command.append(robot_ip)
 
-        command.extend(["--port", str(self._validated_port()), "--no-browser"])
+        command.extend([
+            "--port", str(self._validated_port()),
+            "--robot-port", str(self._validated_robot_port()),
+            "--no-browser",
+        ])
         return command
 
     def _validated_port(self):
+        return self._parse_port(self.port.get(), "Editor port")
+
+    def _validated_robot_port(self):
+        return self._parse_port(self.robot_port.get(), "Robot HTTP port")
+
+    @staticmethod
+    def _parse_port(raw, label):
         try:
-            port = int(self.port.get().strip())
+            port = int(raw.strip())
         except ValueError:
-            raise ValueError("Port must be a number.")
+            raise ValueError("{0} must be a number.".format(label))
 
         if port < 1 or port > 65535:
-            raise ValueError("Port must be between 1 and 65535.")
+            raise ValueError("{0} must be between 1 and 65535.".format(label))
 
         return port
 
@@ -229,6 +247,12 @@ def _parse_args(argv):
         action="store_true",
         help="Start the proxy without opening a browser tab.",
     )
+    parser.add_argument(
+        "--robot-port",
+        type=int,
+        default=DEFAULT_ROBOT_PORT,
+        help="Robot HTTP API port (default: {0}).".format(DEFAULT_ROBOT_PORT),
+    )
     return parser.parse_args(argv)
 
 
@@ -238,7 +262,7 @@ def _run_cli(argv):
     command = [sys.executable, str(SERVER_SCRIPT)]
     if args.robot_ip:
         command.append(args.robot_ip)
-    command.extend(["--port", str(args.port)])
+    command.extend(["--port", str(args.port), "--robot-port", str(args.robot_port)])
     if args.no_browser:
         command.append("--no-browser")
 

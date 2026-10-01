@@ -5,7 +5,7 @@
 //  2. PROXY   — Python server on localhost:8765 (standalone browser use)
 //  3. INGRESS — HA add-on behind HA ingress (HTTPS → proxy → robot)
 // ─────────────────────────────────────────────────────────────────────────────
-export const ROBOT_PORT = 8080;
+export const DEFAULT_ROBOT_PORT = 8080;
 
 // Detect mode from hostname
 const _host = window.location.hostname;
@@ -14,10 +14,18 @@ export const INGRESS_MODE = (!PROXY_MODE && window.location.pathname.includes('i
 export const USE_PROXY    = PROXY_MODE || INGRESS_MODE;   // use relative URLs
 
 export let robotIP = localStorage.getItem('rowenta_ip') || '';
+const savedRobotPort = Number(localStorage.getItem('rowenta_robot_port'));
+export let robotPort = Number.isInteger(savedRobotPort) && savedRobotPort >= 1 && savedRobotPort <= 65535
+  ? savedRobotPort : DEFAULT_ROBOT_PORT;
 
 export function setRobotIP(ip) {
   robotIP = ip;
   localStorage.setItem('rowenta_ip', ip);
+}
+
+export function setRobotPort(port) {
+  robotPort = port;
+  localStorage.setItem('rowenta_robot_port', String(port));
 }
 
 export const ROOM_TYPES = [

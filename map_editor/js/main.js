@@ -2,9 +2,9 @@
 // MAIN ENTRY POINT
 // ─────────────────────────────────────────────────────────────────────────────
 import { state } from './state.js';
-import { USE_PROXY, ROBOT_PORT, ROOM_TYPE_OPTIONS } from './config.js';
+import { USE_PROXY, ROOM_TYPE_OPTIONS } from './config.js';
 import * as config from './config.js';
-import { setProxyRobotIP } from './api.js';
+import { setProxyRobotEndpoint } from './api.js';
 import { showToast, showSpinner, setStatus, showInstruction } from './modal.js';
 import { setAreaClickCallback, renderMapChips, renderAreaList } from './render.js';
 import { setHandleMergeClick, onAreaClick, saveArea, toggleBlock, updateSplitListUI, executeDeleteArea, executeCleanArea } from './areas.js';
@@ -20,6 +20,7 @@ import { startGoTo, executeProposedNoGo } from './robot.js';
 import { updateEtaChip } from './eta.js';
 
 const ipInput = document.getElementById('ip-input');
+const portInput = document.getElementById('robot-port-input');
 
 // Wire the circular dependency between render and areas
 setAreaClickCallback(onAreaClick);
@@ -116,27 +117,35 @@ document.getElementById('btn-block-area').addEventListener('click', startBlockZo
 // ─────────────────────────────────────────────────────────────────────────────
 document.getElementById('btn-connect').addEventListener('click', async () => {
   const ip = ipInput.value.trim();
+  const portText = portInput.value.trim();
+  const port = Number(portText);
+  if (!/^[0-9]+$/.test(portText) || !Number.isInteger(port) || port < 1 || port > 65535) {
+    showToast('Enter a robot HTTP port from 1 to 65535', 'error');
+    return;
+  }
 
   if (USE_PROXY) {
     if (!ip || ip === 'via proxy server') {
       showToast('Enter robot IP first', 'error');
       return;
     }
-    config.setRobotIP(ip);
-    // Push IP to the running proxy server so it knows where to forward.
-    // Surface a rejected IP here rather than letting it masquerade as a
+    // Push the endpoint to the running proxy server so it knows where to forward.
+    // Surface a rejected endpoint here rather than letting it masquerade as a
     // later "cannot reach robot" error.
     try {
-      await setProxyRobotIP(ip);
+      await setProxyRobotEndpoint(ip, port);
     } catch (e) {
       setStatus('Connection failed', 'err');
-      showToast(e.message || 'Proxy rejected robot IP', 'error');
+      showToast(e.message || 'Proxy rejected robot endpoint', 'error');
       return;
     }
+    config.setRobotIP(ip);
+    config.setRobotPort(port);
     setStatus('Connecting via proxy…', 'busy');
   } else {
     if (!ip) { showToast('Enter robot IP address', 'error'); return; }
     config.setRobotIP(ip);
+    config.setRobotPort(port);
     setStatus('Connecting…', 'busy');
   }
 
@@ -154,16 +163,25 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
 async function init() {
   // Wire all SVG/window events
   initEvents(onAreaClick);
+  portInput.value = config.robotPort;
 
   if (USE_PROXY) {
     // Show PROXY badge
     const badge = document.getElementById('mode-badge');
     if (badge) badge.style.display = '';
 
-    // Fetch what IP the server already knows (passed as CLI arg or last set)
+    // Fetch the endpoint the server already knows (passed as CLI args or last set)
+    let serverHasRobot = false;
     try {
       const cfg = await fetch('/config').then(r => r.json());
+      // A configured server endpoint takes precedence; otherwise keep the
+      // browser's last robot port until the next Connect action.
+      if (cfg.robot_port && (cfg.robot_ip || cfg.robot_port !== config.DEFAULT_ROBOT_PORT)) {
+        config.setRobotPort(cfg.robot_port);
+        portInput.value = config.robotPort;
+      }
       if (cfg.robot_ip) {
+        serverHasRobot = true;
         config.setRobotIP(cfg.robot_ip);
         ipInput.value = config.robotIP;
         ipInput.disabled = false;   // allow changing it
@@ -176,7 +194,7 @@ async function init() {
     }
 
     // Auto-connect if we already have an IP
-    if (config.robotIP) {
+    if (serverHasRobot) {
       setStatus('Connecting via proxy…', 'busy');
       try { await loadMaps(); }
       catch(e) { setStatus('Connection failed', 'err'); showToast(e.message, 'error'); }
